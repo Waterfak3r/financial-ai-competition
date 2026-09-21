@@ -6,7 +6,7 @@
 
 ## 协作入口
 
-开始开发前阅读 [AGENTS.md](AGENTS.md)。架构与模块职责见 [架构说明](docs/architecture.md)，数据与产物管理见 [数据管理说明](docs/data-policy.md)。比赛原文位于 [比赛通知.txt](比赛通知.txt)。
+开始开发前阅读 [AGENTS.md](AGENTS.md)。项目开发由 gpt-6-astra 负责策划、拆解、验收与审查，由 grok-4.6 负责具体实施，通过 Herdr 协作；细则见 [AGENTS.md](AGENTS.md)。架构与模块职责见 [架构说明](docs/architecture.md)，数据与产物管理见 [数据管理说明](docs/data-policy.md)。比赛原文位于 [比赛通知.txt](比赛通知.txt)。
 
 方案材料位于 `submission/proposal/`：[原始大纲](submission/proposal/多智能体协同财务欺诈识别方案总结大纲.docx)保持原样；[修订大纲](submission/proposal/多智能体协同财务欺诈识别方案总结大纲_修订版.docx)保留 13 部分结构，明确第一版技术范围、独立核验、基础财报分析与评测方案。其中规则阈值和验收安排属于拟实施方案，尚无实验结果。
 
