@@ -1,0 +1,56 @@
+# Local environment files; example configurations may be tracked.
+.env
+.env.*
+!.env.example
+
+# Python environments, caches and build output.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+
+# Frontend dependencies and tool output.
+node_modules/
+.vite/
+*.tsbuildinfo
+coverage/
+playwright-report/
+test-results/
+
+# Editor and operating-system files.
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.log
+
+# Temporary contents at any depth; retain scaffold placeholders.
+**/tmp/*
+!**/tmp/.gitkeep
+
+# Original documents and derived working data remain local by default.
+/data/raw/*
+!/data/raw/.gitkeep
+/data/processed/*
+!/data/processed/.gitkeep
+
+# Reproducible runtime output is archived locally, outside versioned source.
+/artifacts/runs/*
+!/artifacts/runs/.gitkeep
+/artifacts/reports/*
+!/artifacts/reports/.gitkeep
+/artifacts/evaluations/*
+!/artifacts/evaluations/.gitkeep
+
+# data/samples/, evaluation/, docs/ and submission/ are intentionally trackable.
