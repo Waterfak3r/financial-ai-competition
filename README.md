@@ -6,7 +6,9 @@
 
 ## 协作入口
 
-开始开发前阅读 [AGENTS.md](AGENTS.md)。项目开发由 gpt-6-astra 负责策划、拆解、验收与审查，由 grok-4.6 负责具体实施，通过 Herdr 协作；细则见 [AGENTS.md](AGENTS.md)。架构与模块职责见 [架构说明](docs/architecture.md)，数据与产物管理见 [数据管理说明](docs/data-policy.md)。比赛原文位于 [比赛通知.txt](比赛通知.txt)。
+开始开发前阅读 [AGENTS.md](AGENTS.md)。项目开发由 gpt-6-astra 持续负责实现策略和方向、拆解、验收与汇报，由 grok-4.7 负责具体实施，通过 Herdr 协作。主控按任务复杂度和精细度决定 reasoning effort，并在派发时明确；派发前核对实际模型为 grok-4.7。较大任务在 Grok 完成后由主控审阅是否符合既定方向及验收要求。
+
+每次协作经主控审阅后，主控使用 gpt-6-luna 子代理把事实性协作记录追加到 [coop.md](coop.md)。该分工用于项目开发协作，后端分析财报所用云端模型仍待选定。细则见 [AGENTS.md](AGENTS.md)。架构与模块职责见 [架构说明](docs/architecture.md)，数据与产物管理见 [数据管理说明](docs/data-policy.md)。比赛原文位于 [比赛通知.txt](比赛通知.txt)。
 
 方案材料位于 `submission/proposal/`：[原始大纲](submission/proposal/多智能体协同财务欺诈识别方案总结大纲.docx)保持原样；[修订大纲](submission/proposal/多智能体协同财务欺诈识别方案总结大纲_修订版.docx)保留 13 部分结构，明确第一版仅采用 LangGraph 编排、技术范围、独立核验、基础财报分析与评测方案。其中规则阈值和验收安排属于拟实施方案，尚无实验结果。
 
@@ -31,6 +33,7 @@
 .
 ├── AGENTS.md          # AI 协作与文件管理规则
 ├── README.md          # 项目入口与当前状态
+├── coop.md            # 主控审阅后追加的事实性协作记录
 ├── 比赛通知.txt        # 原始比赛资料
 ├── .gitignore         # 本地文件与生成产物的忽略规则
 ├── .env.example       # 模型连接配置项
