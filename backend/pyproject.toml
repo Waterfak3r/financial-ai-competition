@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "finagent"
+version = "0.1.0"
+description = "上市公司财报文本型 PDF 的逐页解析与原文定位。不含 FastAPI、LangGraph、字段抽取或舞弊分析。"
+requires-python = ">=3.11"
+dependencies = [
+    "pymupdf>=1.24",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["../tests/unit"]
