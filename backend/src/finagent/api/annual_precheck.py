@@ -15,8 +15,13 @@ from finagent.finance.annual_change import ANNUAL_CHANGE_FORMULA, calculate_annu
 from finagent.ingestion.errors import PdfInputError
 from finagent.ingestion.extract_annual_facts import extract_annual_financial_facts
 from finagent.schemas.text_pdf import ParsedTextPdf
+from finagent.verification.source_amount import verify_source_amounts
 
-PRECHECK_NOTE = "本预检只做本地字段提取和同比计算，未调用模型，也未做独立原文核验。它不是舞弊结论。"
+PRECHECK_NOTE = (
+    "本预检在哈希一致后，从原始 PDF 的引用页和坐标重新读取文字，复核原始金额是否位于这些区域内，"
+    "并用独立 Decimal 计算复核 raw_value 乘 unit_multiplier 是否等于 normalized_value。"
+    "尚未独立确认年度列、表头口径或完整财报事实。未调用模型。它不是舞弊结论。"
+)
 _SNAPSHOT_MODULES = (
     "finagent.api.annual_precheck",
     "finagent.api.app",
@@ -25,6 +30,7 @@ _SNAPSHOT_MODULES = (
     "finagent.finance.annual_change",
     "finagent.schemas.financial_fact",
     "finagent.schemas.text_pdf",
+    "finagent.verification.source_amount",
 )
 
 
@@ -80,7 +86,13 @@ def create_annual_precheck(
         raise HashMismatchError(source_pdf_sha256, parsed.source_sha256)
     extracted = extract_annual_financial_facts(parsed, company_id, report_year)
     calculated = calculate_annual_changes(extracted, report_year)
-    status = "completed" if not extracted.issues and not calculated.issues else "completed_with_issues"
+    verification = verify_source_amounts(source_file, extracted.facts)
+    if verification["failed_count"]:
+        status = "verification_failed"
+    elif not extracted.issues and not calculated.issues and verification["status"] == "passed":
+        status = "completed"
+    else:
+        status = "completed_with_issues"
     run_id, run_dir = _allocate_run_dir(roots.runs_root, company_id, report_year)
     record = {
         "run_id": run_id,
@@ -102,6 +114,7 @@ def create_annual_precheck(
         "code": _code_snapshot(roots.project_root),
         "note": PRECHECK_NOTE,
         "formula": ANNUAL_CHANGE_FORMULA,
+        "verification": verification,
         "facts": extracted.to_dict(),
         "calculation": calculated.to_dict(),
         "issues": {

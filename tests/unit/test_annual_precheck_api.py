@@ -78,6 +78,11 @@ def test_post_and_get_keep_local_facts_without_model_or_verification(tmp_path: P
     body = created.json()
     assert body["model_called"] is False
     assert body["independently_verified"] is False
+    assert body["verification"]["kind"] == "pdf_clip_amount_and_normalization"
+    assert body["verification"]["status"] == "abstained"
+    assert body["status"] == "completed_with_issues"
+    assert body["model_called"] is False
+    assert body["independently_verified"] is False
     assert "未调用模型" in body["note"]
     assert "已确认舞弊" not in created.text
     assert "已独立核验" not in created.text
@@ -96,6 +101,9 @@ def test_post_and_get_keep_local_facts_without_model_or_verification(tmp_path: P
     fetched = client.get(f"/v1/annual-prechecks/{run_id}")
     assert fetched.status_code == 200
     assert fetched.json()["run_id"] == run_id
+    assert fetched.json()["verification"]["status"] == "abstained"
+    assert fetched.json()["model_called"] is False
+    assert fetched.json()["independently_verified"] is False
     assert fetched.json()["facts"]["facts"][0]["indicator_name"] == "营业收入"
     stored = (tmp_path / "artifacts" / "runs" / run_id / "precheck.json").read_bytes()
     second = _post(client)

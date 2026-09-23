@@ -57,3 +57,12 @@
 - 审阅与修正：主控审阅后要求 Grok 纠正文档中的账号范围和 localhost 表述、加入代码快照，并修正 README 的依赖状态与测试安装命令；上述事项已修改。
 - 验证：主控独立运行 `python -m pytest tests/unit -q`，结果为 `53 passed`，有 1 条 Starlette/httpx 弃用警告。`git diff --check` 退出码为 0，仅有换行提示。
 - 本次观察：主控针对文档范围、未来运行的代码快照和依赖/测试命令给出具体审阅要求，Grok 据此完成修正。记录仅陈述本次可核对的协作事实，不外推其他任务能力。
+
+## 2026-09-23：原始 PDF 引用金额复核
+
+- 任务与执行：主控经 Herdr 复用 UI 显示 Grok 4.7 (high) 的 `pdf_ingestion` 执行端，本次指定 reasoning effort 为 high。任务是在本地年度预检中加入原始 PDF 引用坐标金额复核和独立 Decimal 单位换算复核。
+- 交付：Grok 新增 `backend/src/finagent/verification/source_amount.py`、`backend/src/finagent/verification/__init__.py` 与 `tests/unit/test_source_amount_verification.py`，修改预检实现及接口测试，并更新 `README.md`、`docs/architecture.md`、`docs/data-policy.md`；移除 `verification/.gitkeep`。实现只读原始 PDF 指定页坐标，不将解析 JSON 或 `FactHit.text` 当作原文证据；核验逐事实归档，可核对完整文字和匹配片段；无事实或无效坐标时弃权。
+- 审阅与修正：主控指出数字子串、带千分位金额、负号与括号金额、同一行空格、空事实、无效引用块及证据截断等边界问题；Grok 修正实现并补充测试。中途运行 `artifacts/runs/annual-precheck-603288-2024-20260923-164414` 是正式保留的失败运行（8 failed），当时金额边界跨换行导致追溯误判；后续修正后由主控复核。
+- 验证：最新正式运行 `artifacts/runs/annual-precheck-603288-2024-20260923-165111` 记录 8 facts、4 changes，verification 为 8 passed、0 failed、0 abstained；原始文件哈希一致，验证源码哈希与当前文件一致，`model_called=false`、`independently_verified=false`。主控独立运行 `python -m pytest tests/unit -q`，结果为 62 passed、1 条 Starlette/httpx 弃用警告；`git diff --check` 退出码为 0，仅有换行提示。没有安装依赖，也没有云端模型调用。
+- 局限：本次尚未独立确认年度列、表头口径或完整财报事实；Agent/LangGraph 仍未实现。
+- 本次观察：主控列出可复现的金额格式、空输入、坐标有效性及证据完整性边界后，Grok 据此修正并补测。核验结论需结合正式运行记录中的计数、哈希和调用标记审阅；本记录不把通过引用金额复核扩大表述为年度口径或完整事实已验证。
