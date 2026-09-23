@@ -19,8 +19,9 @@
 | 解析产物 | data/processed/603288/2024/cninfo-1222994233/text_pdf.json 与 processing.md |
 | 解析验收 | artifacts/runs/pdf-parse-603288-2024annual-20260923-102530/ |
 | 事实与同比 | artifacts/runs/annual-facts-603288-2024-20260923-112307/。较早的 annual-facts-603288-2024-20260923-111838 仍保留 |
+| 本地年度预检 | artifacts/runs/annual-precheck-603288-2024-20260923-160938/ |
 
-该 PDF 有 208 页，解析后 208 页均有可提取文字。原始 PDF、处理后 JSON 和运行摘要默认不纳入版本管理。以下内容仍是数据进入项目时的管理约定。
+该 PDF 有 208 页，解析后 208 页均有可提取文字。正式预检 `annual-precheck-603288-2024-20260923-160938` 的状态为 completed：8 条事实、4 组同比、提取和计算问题均为 0。原始 PDF 的 SHA256 与解析结果中的 `source_sha256` 同为 `5a97b13534438f5e85249752ef492fbd9e23af73e67845e47bad1ab7d92e20ee`。该次 `precheck.json` 早于代码快照补丁，没有 `code` 字段，保持原样。此后新建的预检运行才记录代码快照。这次预检 `model_called` 与 `independently_verified` 均为 false，不是舞弊结论。原始 PDF、处理后 JSON 和运行摘要默认不纳入版本管理。以下内容仍是数据进入项目时的管理约定。
 
 ## 2. 分类存放
 

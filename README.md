@@ -2,7 +2,7 @@
 
 面向北京市大学生金融人工智能竞赛第 2 题“上市公司财务报告分析”，通过财报解析、大模型分析、独立财务计算与证据核验，形成可追溯的财务异常和舞弊风险分析结果。
 
-**当前阶段：目录骨架已建立。文本型 PDF 逐页解析、四项年度事实提取、确定性同比和 Chat Completions 文本连接器已可本地调用；公开年报的解析与字段计算已跑通。** 云端实测和智能体分析接口尚未实现。舞弊分析、独立原文核验和 Web 服务也未实现。当前没有可启动的 Web 服务，也还没有对云端模型做过实测。
+**当前阶段：目录骨架已建立。文本型 PDF 逐页解析、四项年度事实提取、确定性同比、Chat Completions 文本连接器和本地年度财务预检接口已可调用；公开年报的解析、字段计算和预检已跑通。** 云端实测和智能体分析接口尚未实现。舞弊分析、独立原文核验和前端也未实现。本地项目无用户注册、登录或账户管理，且不在当前项目范围。模型供应方的 API 密钥仍是另一项独立配置；预检不读取该密钥，也不调用模型。
 
 ## 协作入口
 
@@ -23,7 +23,7 @@
 | 模型 | 已有供应方中立的 Chat Completions 文本连接器。默认供应方和型号未选定，由环境变量配置 |
 | 编排 | 第一版采用 LangGraph，不叠加其他智能体协作框架 |
 | 计算与核验 | 本地 Python 执行财务公式、统计筛查和数值核验，保留原文依据 |
-| 当前依赖状态 | `backend/pyproject.toml` 声明本增量运行依赖 PyMuPDF。FastAPI、LangGraph 与前端依赖尚未引入，仓库也不代为安装 |
+| 当前依赖状态 | `backend/pyproject.toml` 已声明 PyMuPDF、FastAPI 和 Uvicorn。LangGraph 与前端依赖尚未引入，仓库也不代为安装 |
 
 第一版路线确定为“云端 API + 本地轻量 Web + 本地统计计算”，不要求本地 GPU，也不纳入模型本地部署或训练。原始财报、索引、计算和运行记录保存在本地，模型调用仅发送本任务所需且允许外发的片段。云端 API 需要网络；受控运行限制资料范围与外部连接，现场是否允许模型联网仍需依据组委会环境说明核实。历史回放与在线重新运行明确区分，断网回放不能替代实时处理验收。
 
@@ -103,19 +103,39 @@ tmp/ 按需创建，正式功能不能依赖其中的文件。已有 tmp/、任�
 
 空白页、只有图片或矢量图形的页、以及提取结果只有空白的页，状态为 `no_extractable_text`，文字块为空。本增量不执行 OCR，也不编造文字。页内同时有文字和图片时，只返回文字块，并注明图片未做 OCR。加密或损坏的 PDF 会报错，不会被当成空白页。
 
-在解析结果之上，还可以提取合并利润表营业收入、归属于母公司股东的净利润、合并现金流量表经营活动产生的现金流量净额，以及非经常性损益表的披露合计，并对同一指标的报告年和上一年做确定性同比。这不是通用财报抽取，也不是独立原文核验。云端侧目前只有同步 Chat Completions 文本连接器，尚未接到分析流程。舞弊或异常分析、检索、报告、FastAPI、LangGraph 编排和前端仍未实现。
+在解析结果之上，还可以提取合并利润表营业收入、归属于母公司股东的净利润、合并现金流量表经营活动产生的现金流量净额，以及非经常性损益表的披露合计，并对同一指标的报告年和上一年做确定性同比。这不是通用财报抽取，也不是独立原文核验。云端侧目前只有同步 Chat Completions 文本连接器，尚未接到分析流程。本地 FastAPI 只提供年度预检：`POST /v1/annual-prechecks` 同步完成，`GET /v1/annual-prechecks/{run_id}` 只返回该次运行。预检不是 Agent 风险判断。舞弊或异常分析、检索、报告、LangGraph 编排和前端仍未实现。
 
 ### 安装、调用与测试
 
-运行依赖是 PyMuPDF，声明在 `backend/pyproject.toml`。pytest 是可选测试依赖。在仓库根目录执行：
+运行依赖在 `backend/pyproject.toml` 中声明：PyMuPDF、FastAPI 和 Uvicorn。pytest 与 httpx 是可选测试依赖。仓库不代为安装。在仓库根目录执行：
 
 ```powershell
-python -m pip install -e .\backend
-python -m pip install pytest
+python -m pip install -e ".\backend[test]"
 python -m pytest tests/unit
 ```
 
-未做可编辑安装时，`tests/unit/conftest.py` 会把 `backend/src` 加入导入路径。当前环境已能导入 `pymupdf` 和 `pytest` 时，可直接在仓库根目录运行 `python -m pytest tests/unit`。
+`backend[test]` 带上引号，是因为 PowerShell 会把方括号当成通配符。这个测试额外依赖同时包含 pytest 和 httpx；只安装 pytest 时，`TestClient` 测试无法运行。
+
+未做可编辑安装时，`tests/unit/conftest.py` 会把 `backend/src` 加入导入路径。当前环境已能导入 `pymupdf`、`pytest`、`fastapi` 和 `httpx` 时，可直接在仓库根目录运行 `python -m pytest tests/unit`。
+
+本地项目无用户注册、登录或账户管理，且不在当前项目范围。模型供应方的 API 密钥仍单独配置给 Chat Completions 连接器；预检接口不读取该密钥，也不把财报发到云端。FastAPI 应用本身不强制监听地址。按下面的启动命令，默认绑定 `127.0.0.1`。
+
+```powershell
+$env:PYTHONPATH = "backend\src"
+python -m uvicorn finagent.api.app:app --host 127.0.0.1 --port 8000
+```
+
+```powershell
+$body = @{
+  parsed_path = "603288/2024/cninfo-1222994233/text_pdf.json"
+  source_pdf_path = "603288/2024/cninfo-1222994233/1222994233.PDF"
+  company_id = "603288"
+  report_year = 2024
+} | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/v1/annual-prechecks" -ContentType "application/json; charset=utf-8" -Body $body
+```
+
+`parsed_path` 相对 `data/processed`，`source_pdf_path` 相对 `data/raw`。解析后的绝对路径必须仍在对应目录内。原始 PDF 的 SHA256 必须与解析 JSON 的 `source_sha256` 一致，否则不写事实。
 
 ```python
 from pathlib import Path
@@ -149,6 +169,14 @@ python scripts/extract_annual_facts.py `
 | 用途 | 从文本型 PDF 提取文字块和页面坐标，并按块类型计数图片。不执行 OCR，不把图片字节放进解析结果 |
 | 许可 | 官方许可页 [pymupdf.io/licensing](https://pymupdf.io/licensing) 写明 AGPLv3 或商业许可。这里只记录该页表述 |
 
+本地预检和其测试还使用下面三个已安装的包。版本和许可证字段来自本环境 `importlib.metadata`，来源链接来自同一元数据中的项目地址。
+
+| 软件 | 本次测试版本 | 来源 | 元数据中的许可证 | 用途 |
+| --- | --- | --- | --- | --- |
+| FastAPI | 0.136.3 | [fastapi.tiangolo.com](https://fastapi.tiangolo.com/)，仓库 [fastapi/fastapi](https://github.com/fastapi/fastapi) | `License-Expression`: MIT | 本地年度预检 HTTP 接口 |
+| Uvicorn | 0.49.0 | [uvicorn.dev](https://uvicorn.dev/)，仓库 [Kludex/uvicorn](https://github.com/Kludex/uvicorn) | `License-Expression`: BSD-3-Clause | 按文档命令启动预检应用的 ASGI 服务器 |
+| httpx | 0.28.1 | [python-httpx.org](https://www.python-httpx.org)，仓库 [encode/httpx](https://github.com/encode/httpx) | `License`: BSD-3-Clause | `TestClient` 调用本地预检测试；预检本身不靠它访问云端 |
+
 ### 限制
 
 - 只解析可选中文字的文本型 PDF，不处理扫描件 OCR。
@@ -156,7 +184,7 @@ python scripts/extract_annual_facts.py `
 - 文字块坐标在未旋转页面上。页宽和页高来自旋转后的 `page.rect`，旋转 90 或 270 度时两者不能混用。
 - 只记录 PDF 页序号，不识别印刷页码。
 - 整份文件会读入内存。
-- 没有 HTTP 服务或智能体编排入口。
+- 本地预检是 HTTP 入口。按文档中的 Uvicorn 命令默认绑定 `127.0.0.1`；应用本身不强制 host。尚无智能体编排入口。
 
 ## 公开样例
 
@@ -181,7 +209,7 @@ python scripts/extract_annual_facts.py `
 
 定位检查均通过：第 81 页有“合并利润表”，第 76–86 页窗口内第 81 与 83 页有“营业收入”；第 85 页有“合并现金流量表”；第 7–9 页有“非经常性损益”。全篇没有 U+FFFD 或 `(cid:)`。第 81 页和第 85 页各有 1 个图片块，未做 OCR。这两页的文字块多数内部含换行，表格没有拆成单元格。
 
-正式运行是 `annual-facts-603288-2024-20260923-112307`。原始 PDF 哈希与 `source_sha256` 一致。2024 年金额是当年列，2023 年金额是这份 2024 年报的比较列；是否追溯调整尚未确认，`restatement_status` 为 `unknown`。营业收入没有“一、营业收入”主行，改用“其中：营业收入”。非经常性损益合计的口径是披露表格口径。单位为元。较早的 `annual-facts-603288-2024-20260923-111838` 仍保留。
+正式事实运行是 `annual-facts-603288-2024-20260923-112307`。已归档的本地预检运行是 `annual-precheck-603288-2024-20260923-160938`，同样得到 8 条事实和 4 组同比，原始 PDF 哈希与 `source_sha256` 一致，且未调用模型。该次 `precheck.json` 是旧结构，只有输入哈希，没有 `code` 字段，记录保持原样。此后新建的预检运行才会写入 `code`：有 Git 时记录 `git_head` 和 `git_dirty`，没有 Git 时把这两项标为空且 `git_available` 为 false，并始终记录关键业务源码的 SHA256。2024 年金额是当年列，2023 年金额是这份 2024 年报的比较列；是否追溯调整尚未确认，`restatement_status` 为 `unknown`。营业收入没有“一、营业收入”主行，改用“其中：营业收入”。非经常性损益合计的口径是披露表格口径。单位为元。较早的 `annual-facts-603288-2024-20260923-111838` 仍保留。
 
 | 指标 | 2024 | 2023 | 差额 | 约同比 |
 | --- | --- | --- | --- | --- |
@@ -209,7 +237,7 @@ python scripts/extract_annual_facts.py `
 1. 文本型 PDF 的逐页文字与坐标已实现，并已对上述公开年报做过定位验收。
 2. 四项年度事实和确定性同比已实现。独立原文核验、其他指标和完整财务分析仍未实现。
 3. 接入模型、任务编排和调用记录，生成带证据的风险分析结果。
-4. 实现后端接口与本地 Web 展示，贯通上传、执行、进度和结果浏览。
+4. 本地年度预检接口已实现。按文档启动命令默认绑定 127.0.0.1。前端页面和完整任务进度仍未实现。项目不包含用户注册、登录或账户管理。
 5. 建立对照评测，并整理可复现说明。
 
-当前可运行增量是文本型 PDF 解析、四项年度事实提取、确定性同比、Chat Completions 文本连接器，以及 `tests/unit` 中的对应测试。连接器尚未做云端实测，也未接到智能体接口。HTTP 路由、独立原文核验和舞弊分析仍未实现。
+当前可运行增量是文本型 PDF 解析、四项年度事实提取、确定性同比、Chat Completions 文本连接器、本地年度预检接口，以及 `tests/unit` 中的对应测试。连接器尚未做云端实测，也未接到智能体接口。LangGraph 仍是后续唯一的智能体编排框架，此次没有实现 Agent。独立原文核验、前端和舞弊分析仍未实现。

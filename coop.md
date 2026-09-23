@@ -48,3 +48,12 @@
 - 验证：主控独立运行 `python -m pytest tests/unit -q`，结果为 `50 passed in 3.11s`；`python -m compileall -q backend/src/finagent/core backend/src/finagent/llm` 退出码为 0；`git diff --check` 退出码为 0，仅有 LF/CRLF 提示。测试使用本机模拟 HTTP，未进行真实云端调用。
 - 局限：连接器尚未接入 Agent 分析接口；LangGraph 编排、独立核验和模型审计均未实现。
 - 本次观察：明确文件归属、共有请求字段，以及不进行真实网络调用和测试要求，有助于限定实现范围。README 状态、供应方地址时效和配置加载机制仍需主控对照实现及官方资料复核。本记录仅反映本次协作，不推断 Grok 一般能力。
+
+## 2026-09-23：本地年度财务预检接口
+
+- 任务与执行：主控经 Herdr 复用显示 Grok 4.7 (high) 的 `pdf_ingestion` 执行端，本次指定 reasoning effort 为 high。Grok 实现本地 FastAPI 年度财务预检 POST/GET 接口；应用无用户注册或登录功能。
+- 交付：实现安全相对路径检查、原始 PDF SHA256 与解析数据源哈希校验、唯一运行归档，以及供未来运行使用的代码快照；新增单元测试，更新 `backend/pyproject.toml` 和相关文档。未安装依赖。
+- 运行与边界：公开海天 2024 样例运行归档于 `artifacts/runs/annual-precheck-603288-2024-20260923-160938/`，记录 8 facts、4 changes、0 issues，原始哈希一致。该运行早于代码快照补丁，因此归档没有代码快照字段，文档已说明。未进行云端模型调用，独立原文核验、Agent 分析和 LangGraph 尚未完成。
+- 审阅与修正：主控审阅后要求 Grok 纠正文档中的账号范围和 localhost 表述、加入代码快照，并修正 README 的依赖状态与测试安装命令；上述事项已修改。
+- 验证：主控独立运行 `python -m pytest tests/unit -q`，结果为 `53 passed`，有 1 条 Starlette/httpx 弃用警告。`git diff --check` 退出码为 0，仅有换行提示。
+- 本次观察：主控针对文档范围、未来运行的代码快照和依赖/测试命令给出具体审阅要求，Grok 据此完成修正。记录仅陈述本次可核对的协作事实，不外推其他任务能力。

@@ -5,15 +5,18 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "finagent"
 version = "0.1.0"
-description = "文本型 PDF 逐页解析、四项年度事实提取和确定性同比。不含 FastAPI、LangGraph、通用财报抽取或舞弊分析。"
+description = "文本型 PDF 解析、四项年度事实、确定性同比和本地预检 API。不含 LangGraph、通用财报抽取或舞弊分析。"
 requires-python = ">=3.11"
 dependencies = [
     "pymupdf>=1.24",
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
 ]
 
 [project.optional-dependencies]
 test = [
     "pytest>=8",
+    "httpx>=0.27",
 ]
 
 [tool.setuptools.packages.find]
