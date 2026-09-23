@@ -39,3 +39,12 @@
 - 审阅修正：初版中营业收入行来源、无逗号金额解析、`source_sha256` 配对、比较列及追溯状态未知、同比率近似值说明和 README 可读性存在问题。主控指出后，Grok 修正实现或文档，主控复核代码、原文页面及产物。
 - 局限：当前覆盖四项年度事实和对应同比；输入范围是文本型 PDF；没有独立原文核验，也未生成舞弊结论。
 - 本次观察：明确指出具体事实来源和数值格式问题，并要求区分已知与未知口径、标明同比近似值，有助于修正提取结果和文档表述；有效验收同时核对代码、原文页面与正式运行产物。以上仅描述本次任务，不推断其他能力。
+
+## 2026-09-23：供应方中立的 Chat Completions 文本连接器
+
+- 任务与执行：主控通过 Herdr 复用 `pdf_ingestion` 执行端，UI 明确显示 Grok 4.7 (high)，本次 reasoning effort 为 high。Grok 实现了供应方中立的同步 OpenAI 兼容 Chat Completions 纯文本连接器；候选供应方为 Qwen、DeepSeek 和 OpenAI，未选定默认模型，也未安装新依赖，HTTP 调用使用标准库 `urllib`。
+- 交付：新增 `backend/src/finagent/core/model_settings.py`、`backend/src/finagent/llm/chat_completion.py` 及相应 `__init__` 文件和 `tests/unit/test_chat_completion.py`；更新 `.env.example`、`AGENTS.md`、`README.md`、`docs/architecture.md`，并移除 `core/llm` 的 `.gitkeep`。
+- 审阅与修正：主控指出 README 顶部状态过时、Qwen 北京和新加坡地址应采用当前官方推荐的工作空间专属域名，以及文档误示 `.env` 会自动生效。Grok 分别修正了状态、端点和配置加载说明。主控审阅后认为连接器符合本步范围，未发现其他必须修正的问题。
+- 验证：主控独立运行 `python -m pytest tests/unit -q`，结果为 `50 passed in 3.11s`；`python -m compileall -q backend/src/finagent/core backend/src/finagent/llm` 退出码为 0；`git diff --check` 退出码为 0，仅有 LF/CRLF 提示。测试使用本机模拟 HTTP，未进行真实云端调用。
+- 局限：连接器尚未接入 Agent 分析接口；LangGraph 编排、独立核验和模型审计均未实现。
+- 本次观察：明确文件归属、共有请求字段，以及不进行真实网络调用和测试要求，有助于限定实现范围。README 状态、供应方地址时效和配置加载机制仍需主控对照实现及官方资料复核。本记录仅反映本次协作，不推断 Grok 一般能力。

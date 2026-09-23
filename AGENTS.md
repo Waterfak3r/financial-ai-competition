@@ -5,7 +5,7 @@
 ## 1. 项目定位与当前阶段
 
 - 目标：面向上市公司财报，构建财务异常识别与舞弊风险核验智能体。
-- 技术方向：云端 API + 本地轻量 Web + 本地统计计算。React + TypeScript + Vite 前端、Python + FastAPI 后端在本地运行；LangGraph 作为第一版唯一的智能体编排框架，云端模型由后端调用，财务计算及数值核验在本地执行。供应方、型号及依赖版本尚未选定。
+- 技术方向：云端 API + 本地轻量 Web + 本地统计计算。React + TypeScript + Vite 前端、Python + FastAPI 后端在本地运行；LangGraph 作为第一版唯一的智能体编排框架，云端模型由后端调用，财务计算及数值核验在本地执行。模型连接器使用 OpenAI 兼容 Chat Completions 的共有子集，候选供应方包括 Qwen、DeepSeek 和 OpenAI；具体供应方与型号由环境变量配置，项目未选定默认值。FastAPI、LangGraph 依赖尚未引入，文本解析依赖 PyMuPDF。
 - 当前交付为目录骨架。具体已实现能力以 README.md 和实际代码为准，不把计划描述为已实现。
 - 输出财务异常、风险线索及其依据，明确区分事实、推论与观点；异常信号不能直接作为确认舞弊的结论。
 

@@ -2,7 +2,7 @@
 
 面向北京市大学生金融人工智能竞赛第 2 题“上市公司财务报告分析”，通过财报解析、大模型分析、独立财务计算与证据核验，形成可追溯的财务异常和舞弊风险分析结果。
 
-**当前阶段：目录骨架已建立。文本型 PDF 逐页解析、四项年度事实提取和确定性同比已可本地调用，并已用一份公开年报跑通；舞弊分析、独立原文核验、Web 服务和云端模型均未实现。** 当前没有可启动的 Web 服务或已配置的模型。
+**当前阶段：目录骨架已建立。文本型 PDF 逐页解析、四项年度事实提取、确定性同比和 Chat Completions 文本连接器已可本地调用；公开年报的解析与字段计算已跑通。** 云端实测和智能体分析接口尚未实现。舞弊分析、独立原文核验和 Web 服务也未实现。当前没有可启动的 Web 服务，也还没有对云端模型做过实测。
 
 ## 协作入口
 
@@ -20,7 +20,7 @@
 | 后端 | Python + FastAPI |
 | 展示方式 | 本地浏览器访问 Web 界面 |
 | 未来默认开发地址 | 前端 http://localhost:5173，后端 http://localhost:8000 |
-| 模型 | 后端调用云端 API，供应方与型号尚未选定 |
+| 模型 | 已有供应方中立的 Chat Completions 文本连接器。默认供应方和型号未选定，由环境变量配置 |
 | 编排 | 第一版采用 LangGraph，不叠加其他智能体协作框架 |
 | 计算与核验 | 本地 Python 执行财务公式、统计筛查和数值核验，保留原文依据 |
 | 当前依赖状态 | `backend/pyproject.toml` 声明本增量运行依赖 PyMuPDF。FastAPI、LangGraph 与前端依赖尚未引入，仓库也不代为安装 |
@@ -73,13 +73,27 @@ tmp/ 按需创建，正式功能不能依赖其中的文件。已有 tmp/、任�
 
 ## 配置示例
 
-.env.example 预留以下配置：
+`.env.example` 预留三个空值，程序不在示例文件里选定供应方、型号或密钥：
 
-- MODEL_BASE_URL：模型服务地址。
-- MODEL_API_KEY：模型访问密钥，本地配置使用，禁止提交或输出到日志。
-- MODEL_NAME：模型标识。
+- `MODEL_BASE_URL`：Chat Completions 服务根地址。连接器会在末尾追加 `/chat/completions`，根地址本身不要写这个路径。
+- `MODEL_API_KEY`：访问密钥。可以写在未提交的本地 `.env` 里私下保存。错误信息不会回显密钥或完整请求正文。
+- `MODEL_NAME`：请求体里的 `model`。
 
-三个值均为空，不代表已经接入任何服务。实际环境加载方式将在后端实现时补充。
+`load_model_settings()` 只读取进程环境变量 `os.environ`，没有 `.env` 自动加载器。把这三项写进本地 `.env` 并不会自动生效；调用前需由用户或后续启动器先载入进程环境。`complete_chat()` 只发送三家共同的字段 `model`、`messages` 和 `stream=false`，并接受 `system`、`user`、`assistant` 纯文本。默认超时 60 秒。这是 Chat Completions 的共有子集，不表示各家的工具调用、视觉、流式或其他扩展可以互换。
+
+端点示例来自官方文档，不是本项目已经选定的服务：
+
+| 供应方 | 根地址示例 | 文档 |
+| --- | --- | --- |
+| Qwen 华北 2（北京） | `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` | [阿里云兼容说明](https://help.aliyun.com/en/model-studio/compatibility-of-openai-with-dashscope) |
+| Qwen 新加坡 | `https://{WorkspaceId}.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` | 同上 |
+| Qwen 美国（弗吉尼亚） | `https://dashscope-us.aliyuncs.com/compatible-mode/v1` | 同上 |
+| DeepSeek | `https://api.deepseek.com` | [DeepSeek API 文档](https://api-docs.deepseek.com/zh-cn/) |
+| OpenAI | `https://api.openai.com/v1` | [OpenAI Chat API](https://developers.openai.com/api/reference/resources/chat) |
+
+北京和新加坡使用当前兼容文档推荐的工作空间专属域名。`{WorkspaceId}` 换成该地域的业务空间 ID，`MODEL_API_KEY` 必须属于同一地域。美国（弗吉尼亚）使用上表中的官方地址。
+
+连接器不会自动发送整份 PDF，也还没有接到智能体分析接口。测试使用本地模拟 HTTP，不访问上述云端地址。
 
 ## 已实现：文本型 PDF 逐页解析
 
@@ -89,7 +103,7 @@ tmp/ 按需创建，正式功能不能依赖其中的文件。已有 tmp/、任�
 
 空白页、只有图片或矢量图形的页、以及提取结果只有空白的页，状态为 `no_extractable_text`，文字块为空。本增量不执行 OCR，也不编造文字。页内同时有文字和图片时，只返回文字块，并注明图片未做 OCR。加密或损坏的 PDF 会报错，不会被当成空白页。
 
-在解析结果之上，还可以提取合并利润表营业收入、归属于母公司股东的净利润、合并现金流量表经营活动产生的现金流量净额，以及非经常性损益表的披露合计，并对同一指标的报告年和上一年做确定性同比。这不是通用财报抽取，也不是独立原文核验。舞弊或异常分析、检索、报告、FastAPI、LangGraph、云端模型和前端仍未实现。
+在解析结果之上，还可以提取合并利润表营业收入、归属于母公司股东的净利润、合并现金流量表经营活动产生的现金流量净额，以及非经常性损益表的披露合计，并对同一指标的报告年和上一年做确定性同比。这不是通用财报抽取，也不是独立原文核验。云端侧目前只有同步 Chat Completions 文本连接器，尚未接到分析流程。舞弊或异常分析、检索、报告、FastAPI、LangGraph 编排和前端仍未实现。
 
 ### 安装、调用与测试
 
@@ -198,4 +212,4 @@ python scripts/extract_annual_facts.py `
 4. 实现后端接口与本地 Web 展示，贯通上传、执行、进度和结果浏览。
 5. 建立对照评测，并整理可复现说明。
 
-当前可运行增量是文本型 PDF 解析、四项年度事实提取、确定性同比，以及 `tests/unit` 中的对应测试。HTTP 路由、独立原文核验和舞弊分析仍未实现。
+当前可运行增量是文本型 PDF 解析、四项年度事实提取、确定性同比、Chat Completions 文本连接器，以及 `tests/unit` 中的对应测试。连接器尚未做云端实测，也未接到智能体接口。HTTP 路由、独立原文核验和舞弊分析仍未实现。
