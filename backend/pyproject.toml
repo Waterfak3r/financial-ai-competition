@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "finagent"
 version = "0.1.0"
-description = "上市公司财报文本型 PDF 的逐页解析与原文定位。不含 FastAPI、LangGraph、字段抽取或舞弊分析。"
+description = "文本型 PDF 逐页解析、四项年度事实提取和确定性同比。不含 FastAPI、LangGraph、通用财报抽取或舞弊分析。"
 requires-python = ">=3.11"
 dependencies = [
     "pymupdf>=1.24",
