@@ -4,19 +4,19 @@
 
 文本型 PDF 的逐页解析与原文定位已经实现。`finagent.ingestion.parse_text_pdf` 读取文本型 PDF，保留文档标识、原始文件 SHA256、PDF 1-based 页序号、文字块和未旋转页面坐标。空白页与图片页不产生文字，也不执行 OCR。运行依赖为 PyMuPDF，声明在 `backend/pyproject.toml`。
 
-在 `ParsedTextPdf` 上，已能按表标题、年度表头、单位和币种提取四项年度事实，并由 `finance` 对同一指标的报告年与上一年计算差额和同比率。`scripts/extract_annual_facts.py` 读取已有 `text_pdf.json`，可选核对原始 PDF 的 SHA256，并把 `facts.json`、`calculation.json`、`summary.json` 写入新的运行目录。这不是通用财报抽取，也不是独立原文核验。
+在 `ParsedTextPdf` 上，已能按表标题、年度表头、单位和币种提取四项年度事实，并由 `finance` 对同一指标的报告年与上一年计算差额和同比率。`scripts/extract_annual_facts.py` 读取已有 `text_pdf.json`，可选核对原始 PDF 的 SHA256，并把 `facts.json`、`calculation.json`、`summary.json` 写入新的运行目录。这不是通用财报抽取。该命令不复核引用坐标内的原文金额；这项复核在年度预检中进行，且仍未覆盖年度列、表头口径和完整财报事实。
 
 云端模型目前只实现供应方中立的同步 Chat Completions 文本连接器，使用 `MODEL_BASE_URL`、`MODEL_API_KEY` 和 `MODEL_NAME`。请求只含 `model`、`messages` 和 `stream=false`。默认供应方和型号仍未选定，连接器也尚未接到智能体或财报分析接口。
 
 本地 FastAPI 已提供年度财务预检：`POST /v1/annual-prechecks` 与 `GET /v1/annual-prechecks/{run_id}`。应用本身不强制 host；按文档中的 Uvicorn 命令默认绑定 `127.0.0.1`。项目无用户注册、登录或账户管理，且不在当前项目范围。模型供应方的 API 密钥仍是独立配置，预检不读取它。预检在哈希一致后，从原始 PDF 的引用坐标重新读取金额，并独立复核单位换算。这尚未确认年度列、表头口径或完整财报事实，也不是 Agent 风险判断。新的预检归档包含 `code` 和 `verification`。`annual-precheck-603288-2024-20260923-160938` 没有这两项，保持原样。把同一行空格与负号、括号、千分位一并计入金额边界的正式运行是 `annual-precheck-603288-2024-20260923-165111`。`164542`、`163707`、`163126` 和 `160938` 仍保留。
 
-舞弊或异常分析、检索、完整核验、报告、LangGraph 编排和前端均未实现。引用坐标内的原文金额和单位换算复核已经实现，但不代替完整核验。下文仍描述这些尚未实现能力的职责边界。
+舞弊或异常分析、检索、完整核验、报告、LangGraph 编排、上传和报告导出仍未实现。本地年度预检页面已有源码。引用坐标内的原文金额和单位换算复核已经实现，但不代替完整核验。下文仍描述这些尚未实现能力的职责边界。
 
 目标是完成财报导入、财务分析、独立计算、证据核验及报告生成，提供财务异常和舞弊风险线索。第一阶段围绕可解释、可计算的财报问题展开，具体公司、行业和模型在开发阶段选定。
 
 第一版方案详见 [修订大纲](../submission/proposal/多智能体协同财务欺诈识别方案总结大纲_修订版.docx)。优先覆盖口径可比的非金融上市公司文本型财报，先完成同比环比、非经常性损益、会计口径变化和利润现金流差异分析，再形成异常线索；特殊金融行业和复杂扫描件暂不纳入通用自动分析承诺。
 
-技术方向确定为“云端 API + 本地轻量 Web + 本地统计计算”：React + TypeScript + Vite 前端、Python + FastAPI 后端在本机运行；LangGraph 作为第一版唯一的智能体编排框架；后端通过 API 调用云端模型。文本连接器兼容 Qwen、DeepSeek、OpenAI 的 Chat Completions 共有子集，具体供应方和型号由环境变量决定，项目没有内置默认值。文本型 PDF 解析使用 PyMuPDF。财务公式、统计筛查与数值核验由本地 Python 执行，第一版不部署或训练本地模型，不要求 GPU。未来默认前端地址为 localhost:5173。本地预检用 `uvicorn finagent.api.app:app --host 127.0.0.1 --port 8000` 启动。前端仍没有启动入口。
+技术方向确定为“云端 API + 本地轻量 Web + 本地统计计算”：React + TypeScript + Vite 前端、Python + FastAPI 后端在本机运行；LangGraph 作为第一版唯一的智能体编排框架；后端通过 API 调用云端模型。文本连接器兼容 Qwen、DeepSeek、OpenAI 的 Chat Completions 共有子集，具体供应方和型号由环境变量决定，项目没有内置默认值。文本型 PDF 解析使用 PyMuPDF。财务公式、统计筛查与数值核验由本地 Python 执行，第一版不部署或训练本地模型，不要求 GPU。最终展示是本机 localhost Web。先用 `uvicorn finagent.api.app:app --host 127.0.0.1 --port 8000` 启动后端；再由用户在 `frontend/` 安装已声明的 npm 依赖并执行 `npm run dev`。Vite 绑定 `127.0.0.1:5173`，把 `/api` 代理到 `127.0.0.1:8000`。浏览器打开 http://127.0.0.1:5173 。本机已执行 `npm install` 并生成 `frontend/package-lock.json`，`npm run typecheck` 与 `npm run build` 已通过。开发服务上的浏览器验收覆盖首页、海天 2024 样例创建、按 `run_id` 回看和错误提示，创建记录为 `annual-precheck-603288-2024-20260923-192840`。克隆后仍需自行安装依赖。浏览器不持有模型密钥。
 
 原始文件、解析结果、检索索引和审计记录保存在本地。云端请求只携带允许外发且与任务有关的证据片段；第一版检索限定本次运行的材料清单，不开放任意互联网检索。模型端点、调用预算、超时和重试上限在实现时配置。现场云端 API 访问是否允许仍待组委会环境说明核实，历史回放不得作为实时处理能力的证明。
 
@@ -53,7 +53,7 @@ flowchart TD
 | 前端目录 | 职责 |
 | --- | --- |
 | frontend/public/ | 正式静态资源 |
-| frontend/src/pages/ | 财报上传、任务进度、结果和证据浏览页面 |
+| frontend/src/pages/ | 目前只有年度预检页面。上传、任务进度和报告导出尚未实现 |
 | frontend/src/components/ | 公共界面组件 |
 | frontend/src/api/ | 与后端的请求、响应及错误处理 |
 | frontend/src/types/ | 前端数据类型 |
@@ -76,7 +76,7 @@ flowchart TD
 | audit | 文件访问、工具调用、计算及生成过程记录，处理敏感凭据 |
 | core | 配置、路径、公共异常等基础能力 |
 
-依赖清单和构建配置分别归属 frontend/ 和 backend/。`backend/pyproject.toml` 已声明 PyMuPDF、FastAPI 和 Uvicorn，测试可选依赖包含 httpx。尚未生成依赖锁文件，也没有前端工程配置。LangGraph 仍是后续唯一智能体编排框架，当前依赖中没有它。
+依赖清单和构建配置分别归属 frontend/ 和 backend/。`backend/pyproject.toml` 已声明 PyMuPDF、FastAPI 和 Uvicorn，测试可选依赖包含 httpx。`frontend/package.json` 已声明页面依赖的精确版本，本机 `npm install` 已生成 `frontend/package-lock.json`。`node_modules` 不纳入 Git。LangGraph 仍是后续唯一智能体编排框架，当前依赖中没有它。
 
 ## 4. 其他目录的职责
 
@@ -106,7 +106,7 @@ flowchart TD
 
 已实现的业务类型包括文本型 PDF 解析结果和四项年度财务事实，分别在 `backend/src/finagent/schemas/text_pdf.py` 与 `financial_fact.py`。已有的 HTTP 路由只有本地年度预检。尚未新增数据库，也没有证据类型或 Agent 任务类型。
 
-未来接口覆盖文件导入、任务创建与状态、结果查看、证据定位和报告导出。前端通过接口获取结果；具体字段、错误码和任务执行机制在实现阶段确定并记录。
+年度预检的创建、按 run_id 读取和页面展示已经接上现有接口。文件导入、任务进度和报告导出仍未实现。
 
 财务事实至少需要表达原始出处、数值、单位、币种、报告期和报表口径；核验结果需要表达检查对象、依据与状态。确切类型定义集中在 schemas，避免各模块各自维护不一致的字段。
 
@@ -115,9 +115,9 @@ flowchart TD
 软件开发范围是可运行系统、数据、核验和复现说明。初赛计划书 PDF 和项目介绍视频 MP4 不在本开发任务内。`submission/` 仍保留比赛材料；比赛对计划书和视频的客观要求不变。本文不指定这些材料的完成人，已有比赛资料保持原样。
 
 1. 文本型 PDF 的逐页文字与坐标已实现，并已用公开年报样例做过定位验收。
-2. 四项年度事实和确定性同比已实现。独立原文核验仍未实现。
+2. 四项年度事实、确定性同比，以及引用坐标内的原文金额复核已实现。完整核验仍未实现。
 3. 模型与编排：验证调用记录、证据引用和不足信息的处理。
-4. 本地年度预检接口已实现。按文档启动命令默认绑定 127.0.0.1。前端和完整报告导出仍未实现。项目不包含用户注册、登录或账户管理。
+4. 本地年度预检接口和本机预检页面已在开发服务上验收。按文档先启动绑定 127.0.0.1 的后端，再安装前端依赖并启动 Vite。上传和报告导出仍未实现。项目不包含用户注册、登录或账户管理。
 5. 评测与复现说明：使用相同输入比较各方案，记录准确性、查准率、召回率、引用正确性和稳定性。
 
-文本型 PDF 解析、四项事实提取、年度同比、原文金额复核和预检 API 由 `tests/unit` 覆盖。提取与接口测试使用合成文字块或临时文件，不把真实财报写进测试。公开年报的运行产物放在 `artifacts/runs/`。完整核验和完整前端流程测试尚未编写。
+文本型 PDF 解析、四项事实提取、年度同比、原文金额复核和预检 API 由 `tests/unit` 覆盖。提取与接口测试使用合成文字块或临时文件，不把真实财报写进测试。公开年报的运行产物放在 `artifacts/runs/`。前端没有单独的自动化测试套件；2026-09-23 已在本机运行 `npm run typecheck`、`npm run build`，并用浏览器验收开发服务上的预检页面。完整核验仍未实现。

@@ -66,3 +66,19 @@
 - 验证：最新正式运行 `artifacts/runs/annual-precheck-603288-2024-20260923-165111` 记录 8 facts、4 changes，verification 为 8 passed、0 failed、0 abstained；原始文件哈希一致，验证源码哈希与当前文件一致，`model_called=false`、`independently_verified=false`。主控独立运行 `python -m pytest tests/unit -q`，结果为 62 passed、1 条 Starlette/httpx 弃用警告；`git diff --check` 退出码为 0，仅有换行提示。没有安装依赖，也没有云端模型调用。
 - 局限：本次尚未独立确认年度列、表头口径或完整财报事实；Agent/LangGraph 仍未实现。
 - 本次观察：主控列出可复现的金额格式、空输入、坐标有效性及证据完整性边界后，Grok 据此修正并补测。核验结论需结合正式运行记录中的计数、哈希和调用标记审阅；本记录不把通过引用金额复核扩大表述为年度口径或完整事实已验证。
+
+## 2026-09-23：本机年度预检 Web 页面
+
+- 任务与执行：用户明确最终以本机 localhost Web 展示。主控经 Herdr 复用实际 UI 显示 Grok 4.7 (high) 的 `pdf_ingestion` 执行端，本次指定 reasoning effort 为 high。
+- 交付：Grok 分阶段实现 `frontend/package.json`、`tsconfig.json`、`vite.config.ts`、`index.html`、`src/main.tsx`、`src/types/precheck.ts`、`src/api/prechecks.ts`、`src/pages/AnnualPrecheckPage.tsx` 和 `src/styles/app.css`，并更新 `AGENTS.md`、`README.md`、`docs/architecture.md`；移除 `src/api`、`types`、`pages`、`styles` 中对应的 `.gitkeep`。Vite 服务绑定 `127.0.0.1:5173`，将 `/api` 代理至 `127.0.0.1:8000` FastAPI。页面可填写已有本地数据路径创建预检，并按 `run_id` 回看事实、同比、引用页和复核结果。项目无账号功能，浏览器不持有模型密钥；Agent 分析尚未实现。
+- 审阅与修正：主控发现统一标元标签不适用于美元等币种、新请求失败时可能保留旧结果，以及 `submit` 闭包中的 `busy` 状态可能允许重复提交；Grok 按反馈修正。主控还对照旧、新归档的 JSON 结构审阅前端 parser。
+- 验证与状态：主控运行 `python -m pytest tests/unit -q`，结果为 `62 passed`、1 条 warning；`git diff --check` 退出码为 0。`frontend/node_modules` 不存在；未安装前端依赖、未执行前端构建或浏览器实测。
+- 本次观察：较宽任务初期耗时较长；将范围拆成文件归属明确的任务后完成交付。该观察仅描述本次协作，不推断一般能力。
+
+## 2026-09-23：本机年度预检 Web 页面验收补记
+
+- 状态说明：前一条记录反映当时前端依赖未安装、尚未构建和浏览器实测的状态；随后用户明确授权在 `frontend/` 执行 `npm install` 并完成验收。
+- 执行与交付：主控经 Herdr 复用 UI 显示 Grok 4.7 (high) 的 `pdf_ingestion` 执行端，本次 reasoning effort 为 high。Grok 按 `frontend/package.json` 安装依赖，生成 `frontend/package-lock.json`；新增 `frontend/public/favicon.svg` 并在页面中链接。浏览器验收材料归档于 `artifacts/runs/web-qa-20260923-200437/browser/`。误落根目录的 `.playwright-mcp` 内容移入上述归档，误生成的根 `package-lock.json` 已移除。
+- 验收结果：Grok 执行 `npm run typecheck` 和 `npm run build` 均通过。主控复核后再次执行 `npm run build`（`tsc --noEmit` 与 Vite 8.3.0 build）成功；HTTP 烟测首页和 `/favicon.svg` 均返回 200，API 代理读取样例运行成功。浏览器验收覆盖首页、海天 2024 样例 POST 创建、按 `run_id` GET 回看、缺失 `run_id` 的 404 错误和空路径校验。正式运行 `annual-precheck-603288-2024-20260923-192840` 状态为 completed，含 8 facts、4 changes；verification 为 8 passed、0 failed、0 abstained；`model_called=false`、`independently_verified=false`。favicon 初次缺失导致 404，添加后返回 200；重载日志仅见 React DevTools INFO。
+- 审阅与局限：主控核对实际改动和验证结果，并同步检查了 `AGENTS.md`、`README.md`、`docs/architecture.md` 的状态说明。后端此前单元测试为 62 passed、1 warning。本机页面仍无单独自动化测试套件；Agent/模型分析、上传、任务进度和报告导出尚未实现。
+- 本次观察：针对页面验收范围执行浏览器检查并保留浏览器材料和正式运行记录，之后主控再次核对构建及 HTTP 结果。本记录仅描述本次协作，不推断一般能力。

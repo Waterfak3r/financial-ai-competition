@@ -2,7 +2,7 @@
 
 面向北京市大学生金融人工智能竞赛第 2 题“上市公司财务报告分析”，通过财报解析、大模型分析、独立财务计算与证据核验，形成可追溯的财务异常和舞弊风险分析结果。
 
-**当前阶段：目录骨架已建立。文本型 PDF 逐页解析、四项年度事实提取、确定性同比、Chat Completions 文本连接器、本地年度财务预检和引用坐标内的原文金额复核已可调用；公开年报的解析、字段计算和预检已跑通。** 云端实测和智能体分析接口尚未实现。完整核验、舞弊分析、年度列与表头口径的独立确认，以及前端仍未实现。本地项目无用户注册、登录或账户管理，且不在当前项目范围。模型供应方的 API 密钥仍是另一项独立配置；预检不读取该密钥，也不调用模型。
+**当前阶段：目录骨架已建立。文本型 PDF 逐页解析、四项年度事实提取、确定性同比、Chat Completions 文本连接器、本地年度财务预检、引用坐标内的原文金额复核，以及本机年度预检页面的源码已可查看；公开年报的解析、字段计算和预检已跑通。** 云端实测和智能体分析接口尚未实现。完整核验、舞弊分析、年度列与表头口径的独立确认仍未完成。本机已安装 `frontend/package.json` 声明的依赖并生成 `frontend/package-lock.json`；`npm run typecheck` 与 `npm run build` 已通过。开发服务上已用浏览器验收首页、海天样例创建、回看和错误提示。本地项目无用户注册、登录或账户管理，且不在当前项目范围。模型供应方的 API 密钥仍是另一项独立配置；预检不读取该密钥，浏览器也不持有它。
 
 ## 协作入口
 
@@ -18,12 +18,12 @@
 | --- | --- |
 | 前端 | React + TypeScript + Vite |
 | 后端 | Python + FastAPI |
-| 展示方式 | 本地浏览器访问 Web 界面 |
-| 未来默认开发地址 | 前端 http://localhost:5173，后端 http://localhost:8000 |
+| 展示方式 | 本机浏览器访问 localhost Web |
+| 本机开发地址 | 前端开发服务 http://127.0.0.1:5173，后端按文档命令 http://127.0.0.1:8000 |
 | 模型 | 已有供应方中立的 Chat Completions 文本连接器。默认供应方和型号未选定，由环境变量配置 |
 | 编排 | 第一版采用 LangGraph，不叠加其他智能体协作框架 |
 | 计算与核验 | 本地 Python 执行财务公式、统计筛查和数值核验，保留原文依据 |
-| 当前依赖状态 | `backend/pyproject.toml` 已声明 PyMuPDF、FastAPI 和 Uvicorn。LangGraph 与前端依赖尚未引入，仓库也不代为安装 |
+| 当前依赖状态 | `backend/pyproject.toml` 已声明 PyMuPDF、FastAPI 和 Uvicorn。`frontend/package.json` 已声明 React、ReactDOM、Vite、TypeScript 和 React 插件，本机 `npm install` 已生成 `frontend/package-lock.json`。`node_modules` 不纳入 Git。LangGraph 尚未引入 |
 
 第一版路线确定为“云端 API + 本地轻量 Web + 本地统计计算”，不要求本地 GPU，也不纳入模型本地部署或训练。原始财报、索引、计算和运行记录保存在本地，模型调用仅发送本任务所需且允许外发的片段。云端 API 需要网络；受控运行限制资料范围与外部连接，现场是否允许模型联网仍需依据组委会环境说明核实。历史回放与在线重新运行明确区分，断网回放不能替代实时处理验收。
 
@@ -49,7 +49,7 @@
 └── submission/        # 初赛计划书、视频和决赛材料
 ```
 
-前端目录预留页面、组件、接口调用、类型和样式。后端按财报解析、检索、智能体、财务计算、核验和报告等职责划分，具体边界见架构文档。
+前端已有年度预检页面、请求客户端、类型和样式。上传、任务进度和报告导出尚未实现。后端按财报解析、检索、智能体、财务计算、核验和报告等职责划分，具体边界见架构文档。
 
 ## 文件存放约定
 
@@ -103,7 +103,7 @@ tmp/ 按需创建，正式功能不能依赖其中的文件。已有 tmp/、任�
 
 空白页、只有图片或矢量图形的页、以及提取结果只有空白的页，状态为 `no_extractable_text`，文字块为空。本增量不执行 OCR，也不编造文字。页内同时有文字和图片时，只返回文字块，并注明图片未做 OCR。加密或损坏的 PDF 会报错，不会被当成空白页。
 
-在解析结果之上，还可以提取合并利润表营业收入、归属于母公司股东的净利润、合并现金流量表经营活动产生的现金流量净额，以及非经常性损益表的披露合计，并对同一指标的报告年和上一年做确定性同比。这不是通用财报抽取，也不是独立原文核验。云端侧目前只有同步 Chat Completions 文本连接器，尚未接到分析流程。本地 FastAPI 只提供年度预检：`POST /v1/annual-prechecks` 同步完成，`GET /v1/annual-prechecks/{run_id}` 只返回该次运行。预检不是 Agent 风险判断。舞弊或异常分析、检索、报告、LangGraph 编排和前端仍未实现。
+在解析结果之上，还可以提取合并利润表营业收入、归属于母公司股东的净利润、合并现金流量表经营活动产生的现金流量净额，以及非经常性损益表的披露合计，并对同一指标的报告年和上一年做确定性同比。这不是通用财报抽取。字段提取命令本身不复核引用坐标里的原文金额。云端侧目前只有同步 Chat Completions 文本连接器，尚未接到分析流程。本地 FastAPI 年度预检在哈希一致后，从原始 PDF 的引用坐标重新读取金额，并独立复核单位换算：`POST /v1/annual-prechecks` 同步完成，`GET /v1/annual-prechecks/{run_id}` 只返回该次运行。本机页面只展示这次预检。模型分析、检索、报告、LangGraph、上传和报告导出仍未实现。
 
 ### 安装、调用与测试
 
@@ -136,6 +136,20 @@ Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/v1/annual-prechecks" 
 ```
 
 `parsed_path` 相对 `data/processed`，`source_pdf_path` 相对 `data/raw`。解析后的绝对路径必须仍在对应目录内。原始 PDF 的 SHA256 必须与解析 JSON 的 `source_sha256` 一致，否则不写事实。
+
+本机展示先启动上面的后端，再另开一个终端进入 `frontend/`。本工作区已经执行过 `npm install`，并生成 `frontend/package-lock.json`。克隆后的环境没有 `node_modules`，需要先安装再启动：
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+Vite 按 `frontend/vite.config.ts` 只绑定 `127.0.0.1:5173`，且 `strictPort` 为 true。浏览器打开 http://127.0.0.1:5173 。页面请求 `/api/v1/annual-prechecks`；Vite 去掉 `/api` 前缀后转发到 http://127.0.0.1:8000 。浏览器不保存模型密钥，项目也没有用户账户。
+
+页面可以一键填入海天 2024 样例的相对路径，也可以手写 `data/processed` 与 `data/raw` 下的相对路径、`company_id` 和 `report_year`，然后创建或按 `run_id` 回看。结果展示事实、同比和引用坐标内的原文金额复核。样例 PDF 与解析 JSON 已在本机对应目录，但被 Git 忽略；克隆仓库后需要先准备这两份文件，页面不会下载它们。
+
+2026-09-23 在本机执行了 `npm run typecheck` 和 `npm run build`，二者通过。随后用已有 Playwright 打开 http://127.0.0.1:5173 。首页可以加载；填入海天 2024 样例并创建，得到 `annual-precheck-603288-2024-20260923-192840`，状态 `completed`，8 条事实、4 组同比，原文金额复核通过 8、未通过 0、弃权 0。按该 `run_id` 回看仍为这次记录。不存在的 `run_id` 显示 HTTP 404 `run_not_found`。空的解析路径会提示填写。这次验收没有覆盖上传、任务进度、报告导出、模型分析或完整核验。重新加载页面后，控制台不再出现 `favicon.ico` 的 404；`/favicon.svg` 返回 200。直接请求 `/favicon.ico` 仍然是 404。浏览器日志在 `artifacts/runs/web-qa-20260923-200437/browser/`。页面没有单独的自动化测试套件。
 
 ```python
 from pathlib import Path
@@ -177,6 +191,18 @@ python scripts/extract_annual_facts.py `
 | Uvicorn | 0.49.0 | [uvicorn.dev](https://uvicorn.dev/)，仓库 [Kludex/uvicorn](https://github.com/Kludex/uvicorn) | `License-Expression`: BSD-3-Clause | 按文档命令启动预检应用的 ASGI 服务器 |
 | httpx | 0.28.1 | [python-httpx.org](https://www.python-httpx.org)，仓库 [encode/httpx](https://github.com/encode/httpx) | `License`: BSD-3-Clause | `TestClient` 调用本地预检测试；预检本身不靠它访问云端 |
 
+`frontend/package.json` 声明了下面这些精确版本。2026-09-23 用 `npm view <包>@<版本> license` 核对过 registry 的 `license` 字段，本机 `npm ls --depth=0` 看到的安装版本与声明一致。许可证栏仍是该 registry 字段，没有另录安装目录中的许可证全文。
+
+| 包 | 声明版本 | registry `license` 字段 | 用途 |
+| --- | --- | --- | --- |
+| react | 19.3.0 | MIT | 年度预检页面 |
+| react-dom | 19.3.0 | MIT | 在浏览器中渲染该页面 |
+| vite | 8.3.0 | MIT | 本机开发服务与构建。产品页 [vite.dev](https://vite.dev) |
+| @vitejs/plugin-react | 6.1.1 | MIT | Vite 的 React 转换 |
+| typescript | 5.9.3 | Apache-2.0 | `tsc --noEmit` 类型检查。产品页 [typescriptlang.org](https://www.typescriptlang.org/) |
+| @types/react | 19.3.0 | MIT | React 的 TypeScript 类型 |
+| @types/react-dom | 19.3.0 | MIT | ReactDOM 的 TypeScript 类型 |
+
 ### 限制
 
 - 只解析可选中文字的文本型 PDF，不处理扫描件 OCR。
@@ -184,11 +210,11 @@ python scripts/extract_annual_facts.py `
 - 文字块坐标在未旋转页面上。页宽和页高来自旋转后的 `page.rect`，旋转 90 或 270 度时两者不能混用。
 - 只记录 PDF 页序号，不识别印刷页码。
 - 整份文件会读入内存。
-- 本地预检是 HTTP 入口。按文档中的 Uvicorn 命令默认绑定 `127.0.0.1`；应用本身不强制 host。尚无智能体编排入口。
+- 本地预检是 HTTP 入口。按文档中的 Uvicorn 命令默认绑定 `127.0.0.1`；应用本身不强制 host。本机页面只展示预检。尚无智能体编排入口。
 
 ## 公开样例
 
-已导入一份真实公开年报，用于文本解析、四项年度事实和同比验收。它不是人工构造数据，也不在 `data/samples/`。原始 PDF、解析 JSON 和运行摘要默认不纳入 Git。
+已导入一份真实公开年报，用于文本解析、四项年度事实和同比验收。它不是人工构造数据，也不在 `data/samples/`。原始 PDF、解析 JSON 和运行摘要默认不纳入 Git。本机已有样例 PDF 和解析 JSON；克隆仓库后需要先准备这两份文件，预检页面的一键填充不会下载它们。
 
 | 项目 | 内容 |
 | --- | --- |
@@ -236,9 +262,9 @@ python scripts/extract_annual_facts.py `
 本项目的软件开发工作聚焦可运行系统、数据、核验和复现说明。初赛计划书 PDF 和项目介绍视频 MP4 不在本开发任务内。`submission/` 仍保留，用于存放比赛材料；比赛对计划书和视频的客观要求不变。本文不指定这些材料的完成人，已有比赛资料保持原样。
 
 1. 文本型 PDF 的逐页文字与坐标已实现，并已对上述公开年报做过定位验收。
-2. 四项年度事实和确定性同比已实现。独立原文核验、其他指标和完整财务分析仍未实现。
+2. 四项年度事实、确定性同比，以及引用坐标内的原文金额与单位换算复核已实现。完整核验、其他指标和完整财务分析仍未实现。
 3. 接入模型、任务编排和调用记录，生成带证据的风险分析结果。
-4. 本地年度预检接口已实现。按文档启动命令默认绑定 127.0.0.1。前端页面和完整任务进度仍未实现。项目不包含用户注册、登录或账户管理。
+4. 本地年度预检接口和本机预检页面已在开发服务上验收。按文档先启动绑定 127.0.0.1:8000 的后端，再在 `frontend/` 安装依赖并执行 `npm run dev`。本机已生成 `frontend/package-lock.json`，类型检查与生产构建已通过，浏览器验收见上文。上传、任务进度和报告导出仍未实现。项目不包含用户注册、登录或账户管理。
 5. 建立对照评测，并整理可复现说明。
 
-当前可运行增量是文本型 PDF 解析、四项年度事实提取、确定性同比、Chat Completions 文本连接器、本地年度预检接口，以及 `tests/unit` 中的对应测试。连接器尚未做云端实测，也未接到智能体接口。LangGraph 仍是后续唯一的智能体编排框架，此次没有实现 Agent。独立原文核验、前端和舞弊分析仍未实现。
+当前可运行增量是文本型 PDF 解析、四项年度事实提取、确定性同比、Chat Completions 文本连接器、本地年度预检接口、引用坐标内的原文金额复核、本机预检页面，以及 `tests/unit` 中的后端测试。前端类型检查和生产构建已在本机通过，开发服务上的浏览器验收已完成上述预检流程。连接器尚未做云端实测，也未接到智能体接口。LangGraph 仍是后续唯一的智能体编排框架，模型分析、上传、任务进度和报告导出仍未实现。完整核验和舞弊分析仍未实现。页面没有单独的自动化测试套件。
