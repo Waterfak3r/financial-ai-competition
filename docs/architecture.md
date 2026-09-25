@@ -53,7 +53,7 @@ flowchart TD
 | 前端目录 | 职责 |
 | --- | --- |
 | frontend/public/ | 正式静态资源 |
-| frontend/src/pages/ | 目前只有年度预检页面。上传、任务进度和报告导出尚未实现 |
+| frontend/src/pages/ | 单页年度预检仪表盘：首页、创建、结果、报告四个视图。摘要数字只来自已加载记录。报告视图说明生成与导出尚未实现。上传和任务进度尚未实现 |
 | frontend/src/components/ | 公共界面组件 |
 | frontend/src/api/ | 与后端的请求、响应及错误处理 |
 | frontend/src/types/ | 前端数据类型 |

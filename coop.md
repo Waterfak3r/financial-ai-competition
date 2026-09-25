@@ -83,6 +83,15 @@
 - 审阅与局限：主控核对实际改动和验证结果，并同步检查了 `AGENTS.md`、`README.md`、`docs/architecture.md` 的状态说明。后端此前单元测试为 62 passed、1 warning。本机页面仍无单独自动化测试套件；Agent/模型分析、上传、任务进度和报告导出尚未实现。
 - 本次观察：针对页面验收范围执行浏览器检查并保留浏览器材料和正式运行记录，之后主控再次核对构建及 HTTP 结果。本记录仅描述本次协作，不推断一般能力。
 
+## 2026-09-23：参照视觉稿调整年度预检 Web 页面
+
+- 任务：根据 `tem/web_expected` 中四张 PNG 参考图调整网页前端，覆盖首页、创建、结果和报告视图。
+- 执行信息：主控通过 Herdr 核验并启动 grok-4.7。初轮 reasoning effort high 因长时间规划且没有文件改动而取消；medium 轮遇到连接及大图片请求失败，未产生文件改动；最终 low 轮依据文字化参考说明完成实现。主控截图审阅后，Grok 又以 low 完成一轮定向视觉修正。随后一次可选的文档验收补记请求因模型连接不稳定取消，未修改文档。
+- 交付：修改 `frontend/src/pages/AnnualPrecheckPage.tsx`、`frontend/src/styles/app.css`、`frontend/index.html`、`README.md` 和 `docs/architecture.md`。实现首页、创建、结果及报告视图；摘要由真实预检记录驱动；报告视图说明报告生成功能尚未实现。
+- 审阅与修正：主控查看实际页面截图，首版主视觉较弱且报告层次平；主控给出定向视觉反馈后，Grok 完成修正，主控复核通过。
+- 验证：主控运行 `npm run typecheck`、`npm run build` 和 `git diff --check`，均通过。Chrome 桌面 1588×990、手机 390×844 浏览器检查未见页面错误或水平溢出，四项导航均可见。海天样例创建运行 `annual-precheck-603288-2024-20260923-211321`，按 `run_id` 回看得到 8 facts、4 changes、8 passed、0 issues；404、空解析路径及空 `run_id` 校验与焦点检查通过。验收材料位于 `artifacts/runs/web-ref-ui-qa-20260923-211924/`。
+- 本次观察：文字化参考说明在大图片请求失败后支持了最终实现；截图审阅指出主视觉和报告层次的具体问题，定向反馈后完成修正。初轮未形成文件改动，连接不稳定也使一次可选补记请求取消；以上仅记录本次过程，不外推一般能力。
+
 ## 2026-09-25：脱敏模型调用审计包装器
 
 - 任务与执行：主控通过 Herdr 核对执行端为 Grok 4.7。最初以 medium 启动的一轮长时间规划且没有文件改动，主控取消；随后使用显式参数 `--model grok-4.7 --reasoning-effort low` 启动，实际 UI 显示 Grok 4.7 (low)。
