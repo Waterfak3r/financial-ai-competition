@@ -52,7 +52,7 @@
 - 处理后结果引用对应 document_id 和原始文件哈希；需要纠正提取值时记录修正原因及依据。
 - 第三方模型、代码和数据投入使用时补充版本、来源、许可证或使用条件、具体用途；不得把第三方成果描述为自主成果。
 
-上述目录约定已用于这一份样例：原始 PDF 与 `source.json` 放在 `data/raw/603288/2024/cninfo-1222994233/`。自动导入程序仍未实现。
+上述目录约定已用于这一份样例：原始 PDF 与 `source.json` 放在 `data/raw/603288/2024/cninfo-1222994233/`。`POST /v1/text-pdf-uploads` 只在 `data/raw/<company_id>/<report_year>/<document_id>/` 新建 `source.pdf`，并在平行的 `data/processed` 路径新建 `text_pdf.json` 与 `processing.md`。处理说明只记录生成的原始相对路径、SHA256、PyMuPDF 解析器及版本、未做 OCR，以及仅覆盖有可提取文字的文本型 PDF；不写上传原文件名、绝对路径或密钥。没有可提取文字的 PDF（含纯图片或扫描件）返回 422，并撤回本次新建文件。它不覆盖或修改已有原始资料。上传成功后仍需另调预检。
 
 ## 4. 财务事实与证据
 

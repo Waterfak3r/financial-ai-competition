@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from finagent.api.annual_precheck import (
@@ -14,6 +14,7 @@ from finagent.api.annual_precheck import (
 )
 from finagent.core.safe_paths import PathBoundaryError
 from finagent.ingestion.errors import PdfInputError
+from finagent.ingestion.upload_text_pdf import UploadRejected, save_text_pdf_upload
 
 
 class AnnualPrecheckRequest(BaseModel):
@@ -27,6 +28,25 @@ def create_app(project_root: Path | None = None) -> FastAPI:
     root = Path(project_root).resolve() if project_root is not None else Path(__file__).resolve().parents[4]
     app = FastAPI(title="finagent annual precheck", version="0.1.0")
     app.state.project_root = root
+
+    @app.post("/v1/text-pdf-uploads", status_code=201)
+    def post_text_pdf_upload(
+        file: UploadFile = File(...),
+        company_id: str = Form(...),
+        report_year: str = Form(...),
+    ) -> dict:
+        try:
+            return save_text_pdf_upload(
+                app.state.project_root,
+                company_id=company_id,
+                report_year=report_year,
+                stream=file.file,
+            )
+        except UploadRejected as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": exc.message},
+            ) from None
 
     @app.post("/v1/annual-prechecks", status_code=201)
     def post_annual_precheck(body: AnnualPrecheckRequest) -> dict:

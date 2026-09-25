@@ -98,3 +98,11 @@
 - 审阅与修正：主控指出利润分母为负数或零时不应给出现金转化比值；同比结果缺失或不一致时不能静默重算。Grok 据此修正并补充测试。
 - 验证：主控独立运行 `python -m pytest tests/unit -q`，结果为 91 passed，另有 1 条现存 Starlette/httpx 弃用警告；`git diff --check` 退出码为 0，仅有换行提示。公开海天样例正式运行记录位于 `artifacts/runs/annual-precheck-603288-2024-20260925-105059/`：状态 completed，含 8 facts、4 changes，8 项来源金额复核通过；生成两条方向性候选线索、计算两条现金流/利润比值，非经常性损益比值弃权。记录标示 `model_called=false`、`independently_verified=false`。主控核对 `annual_signals` 源码 SHA256 与运行代码快照一致。
 - 局限与观察：尚未接入 LangGraph、报告或风险指数，也未独立核验年度列和表头。给出具体数据口径、弃权边界及反例后，Grok 修正了实现；此观察仅描述本次协作。
+
+## 2026-09-25：文本 PDF 上传与解析 API
+
+- 任务：实现后端文本 PDF 上传与解析接口，保留原始文件并将解析结果写入独立处理路径，供已有年度预检使用；页面上传、LangGraph 和报告不在本次交付范围。
+- 执行信息：初版通过 Herdr 交给 UI 核验为 Grok 4.7 (low) 的旧执行端；虽然任务文字要求 medium，旧会话实际为 low。初版包括上传 API、唯一 raw/processed 路径、32 MiB 大小限制、multipart 依赖及测试，首轮结果为 95 passed。审阅后，新执行端以明确参数 `--model grok-4.7 --reasoning-effort medium` 启动，UI 确认 Grok 4.7 (medium)。medium 首轮长时间规划，主控取消；结束前代码已写入两项修正及测试，主控复跑为 97 passed。随后一次 low 定向重试连接失败并中止，未改动文件。medium 后续完成无文字 PDF 返回 422 并回滚本次新建文件，以及 `processing.md` 处理说明和相应测试。
+- 审阅与交付：主控指出初版存在数据根路径的 symlink 逃逸风险及部分写入后未回滚的问题；最终实现加入路径边界处理和失败回滚。无文字 PDF 被拒绝时返回 422 且不留下部分文件，处理说明记录解析信息。`POST /v1/text-pdf-uploads` 返回相对路径，可传给已有年度预检。
+- 验证：主控独立执行 `python -m pytest tests/unit -q`，结果为 `99 passed`，另有 1 条既有 Starlette/httpx 警告；`git diff --check` 退出码为 0，仅有换行警告。
+- 局限与观察：页面上传尚未实现，接口仅接受文本型 PDF；LangGraph 和报告仍未实现。本次应以 UI 核验区分旧会话 low 与新执行端 medium，明确启动参数和结束时实际落盘状态有助于复核长时间规划及中止后的变更。以上记录限于本次过程。
