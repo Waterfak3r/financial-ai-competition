@@ -90,3 +90,11 @@
 - 审阅与修正：主控指出初版路径校验可能接受仓库外同名目录、缺少时间状态信息，以及测试可任意注入 root 等问题；Grok 随后修正。主控审阅代码和文档后接受本次增量。
 - 验证：主控独立运行 `python -m pytest tests/unit -q`，结果为 `79 passed`，有 1 条现存 Starlette/httpx 弃用警告；`git diff --check` 退出码为 0，仅有换行提示。超时模拟测试运行后，本地服务器打印 `ConnectionAbortedError`，测试进程退出码仍为 0。
 - 本次观察：明确失败前置条件、脱敏要求、路径边界和分阶段范围有助于完成实现；medium 轮规划较久，low 轮实施有效，期间 Grok 连接有重试。以上仅记录本次可核对过程，不推断其他任务能力。
+
+## 2026-09-25：年度确定性筛查候选线索
+
+- 任务与执行：主控经 Herdr 使用 UI 已确认实际模型为 Grok 4.7 (low) 的执行端，本次 reasoning effort 为 low。
+- 交付：Grok 实现 `backend/src/finagent/finance/annual_signals.py`、`backend/src/finagent/finance/__init__.py`、`backend/src/finagent/api/annual_precheck.py`，新增 `tests/unit/test_annual_signals.py` 和 `tests/unit/test_annual_precheck_api.py`，并更新 `AGENTS.md`、`README.md`、`docs/architecture.md`、`docs/data-policy.md`。年度筛查确定性地产生利润/现金流及收入/现金流方向性候选线索，并提供现金流/归母净利润的描述性比值；非经常性损益口径不一致时弃权。只对通过原文金额复核且文档、公司、币种、合并口径一致的事实输出，保留来源页码、坐标和公式。线索不确认舞弊，也不代表年度列已完整核验。
+- 审阅与修正：主控指出利润分母为负数或零时不应给出现金转化比值；同比结果缺失或不一致时不能静默重算。Grok 据此修正并补充测试。
+- 验证：主控独立运行 `python -m pytest tests/unit -q`，结果为 91 passed，另有 1 条现存 Starlette/httpx 弃用警告；`git diff --check` 退出码为 0，仅有换行提示。公开海天样例正式运行记录位于 `artifacts/runs/annual-precheck-603288-2024-20260925-105059/`：状态 completed，含 8 facts、4 changes，8 项来源金额复核通过；生成两条方向性候选线索、计算两条现金流/利润比值，非经常性损益比值弃权。记录标示 `model_called=false`、`independently_verified=false`。主控核对 `annual_signals` 源码 SHA256 与运行代码快照一致。
+- 局限与观察：尚未接入 LangGraph、报告或风险指数，也未独立核验年度列和表头。给出具体数据口径、弃权边界及反例后，Grok 修正了实现；此观察仅描述本次协作。

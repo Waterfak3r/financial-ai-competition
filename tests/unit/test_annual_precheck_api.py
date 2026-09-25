@@ -81,6 +81,8 @@ def test_post_and_get_keep_local_facts_without_model_or_verification(tmp_path: P
     assert body["verification"]["kind"] == "pdf_clip_amount_and_normalization"
     assert body["verification"]["status"] == "abstained"
     assert body["status"] == "completed_with_issues"
+    assert body["screening"]["kind"] == "deterministic_annual_candidate_screen"
+    assert any(item["status"] == "abstained" for item in body["screening"]["items"])
     assert body["model_called"] is False
     assert body["independently_verified"] is False
     assert "未调用模型" in body["note"]
@@ -95,6 +97,7 @@ def test_post_and_get_keep_local_facts_without_model_or_verification(tmp_path: P
     source = Path(annual_precheck.__file__)
     assert recorded == hashlib.sha256(source.read_bytes()).hexdigest()
     assert code["missing_source_files"] == []
+    assert "finagent.finance.annual_signals" in body["code"]["source_file_sha256"]
     assert body["facts"]["facts"][0]["normalized_value"] == "150.00"
     assert body["calculation"]["changes"][0]["difference"] == "50.00"
     run_id = body["run_id"]
@@ -104,12 +107,24 @@ def test_post_and_get_keep_local_facts_without_model_or_verification(tmp_path: P
     assert fetched.json()["verification"]["status"] == "abstained"
     assert fetched.json()["model_called"] is False
     assert fetched.json()["independently_verified"] is False
+    assert fetched.json()["screening"]["kind"] == "deterministic_annual_candidate_screen"
     assert fetched.json()["facts"]["facts"][0]["indicator_name"] == "营业收入"
     stored = (tmp_path / "artifacts" / "runs" / run_id / "precheck.json").read_bytes()
     second = _post(client)
     assert second.status_code == 201
     assert second.json()["run_id"] != run_id
     assert (tmp_path / "artifacts" / "runs" / run_id / "precheck.json").read_bytes() == stored
+
+
+def test_get_keeps_old_record_without_screening(tmp_path: Path) -> None:
+    run_dir = tmp_path / "artifacts" / "runs" / "legacy-precheck"
+    run_dir.mkdir(parents=True)
+    record = {"run_id": "legacy-precheck", "status": "completed", "model_called": False}
+    (run_dir / "precheck.json").write_text(json.dumps(record), encoding="utf-8")
+    fetched = _client(tmp_path).get("/v1/annual-prechecks/legacy-precheck")
+    assert fetched.status_code == 200
+    assert fetched.json() == record
+    assert "screening" not in fetched.json()
 
 
 def test_rejects_path_escape_and_hash_mismatch(tmp_path: Path) -> None:

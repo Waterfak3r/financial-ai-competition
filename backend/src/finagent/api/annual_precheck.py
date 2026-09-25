@@ -12,6 +12,7 @@ from pathlib import Path
 
 from finagent.core.safe_paths import PathBoundaryError, resolve_inside, run_directory, validate_run_id
 from finagent.finance.annual_change import ANNUAL_CHANGE_FORMULA, calculate_annual_changes
+from finagent.finance.annual_signals import screen_annual_signals
 from finagent.ingestion.errors import PdfInputError
 from finagent.ingestion.extract_annual_facts import extract_annual_financial_facts
 from finagent.schemas.text_pdf import ParsedTextPdf
@@ -21,6 +22,7 @@ PRECHECK_NOTE = (
     "本预检在哈希一致后，从原始 PDF 的引用页和坐标重新读取文字，复核原始金额是否位于这些区域内，"
     "并用独立 Decimal 计算复核 raw_value 乘 unit_multiplier 是否等于 normalized_value。"
     "尚未独立确认年度列、表头口径或完整财报事实。未调用模型。它不是舞弊结论。"
+    "screening 只给出确定性候选线索、描述性比值或弃权，供后续编排和报告使用。"
 )
 _SNAPSHOT_MODULES = (
     "finagent.api.annual_precheck",
@@ -28,6 +30,7 @@ _SNAPSHOT_MODULES = (
     "finagent.core.safe_paths",
     "finagent.ingestion.extract_annual_facts",
     "finagent.finance.annual_change",
+    "finagent.finance.annual_signals",
     "finagent.schemas.financial_fact",
     "finagent.schemas.text_pdf",
     "finagent.verification.source_amount",
@@ -87,6 +90,7 @@ def create_annual_precheck(
     extracted = extract_annual_financial_facts(parsed, company_id, report_year)
     calculated = calculate_annual_changes(extracted, report_year)
     verification = verify_source_amounts(source_file, extracted.facts)
+    screening = screen_annual_signals(extracted.facts, calculated, verification, report_year)
     if verification["failed_count"]:
         status = "verification_failed"
     elif not extracted.issues and not calculated.issues and verification["status"] == "passed":
@@ -115,6 +119,7 @@ def create_annual_precheck(
         "note": PRECHECK_NOTE,
         "formula": ANNUAL_CHANGE_FORMULA,
         "verification": verification,
+        "screening": screening,
         "facts": extracted.to_dict(),
         "calculation": calculated.to_dict(),
         "issues": {
