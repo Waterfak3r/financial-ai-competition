@@ -95,6 +95,8 @@ tmp/ 按需创建，正式功能不能依赖其中的文件。已有 tmp/、任�
 
 连接器不会自动发送整份 PDF，也还没有接到智能体分析接口。测试使用本地模拟 HTTP，不访问上述云端地址。
 
+`audited_complete_chat(messages, settings, run_dir=..., evidence_refs=[{"document_id": "doc-1", "page": 12}], prompt_version="prompt-v1")` 包装上述连接器。`run_dir` 必须是本仓库 `artifacts/runs` 的直接子目录。每次调用新建 UUID 子目录，联网前写入 `request.json`（`status` 为 `started`），成功再写 `response.json`，失败写 `failure.json` 且只含安全类别。记录包含 UTC 起止时间。落盘字符串会去掉 `MODEL_API_KEY`，不写 `base_url`、请求头或异常原文。响应文件写失败会抛出 `AuditPersistError`，不返回成功。年度预检和智能体尚未调用它，云端实测仍未进行。
+
 ## 已实现：文本型 PDF 逐页解析
 
 `finagent.ingestion.parse_text_pdf` 读取文本型 PDF，返回逐页文字块。结果包含文档标识、原始文件 SHA256、文件名、PDF 1-based 页序号、块文字和页面坐标，可用 `to_json()` 序列化。函数只在内存中打开文件字节，不修改原 PDF，也不写入 `data/processed/`。

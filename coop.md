@@ -82,3 +82,11 @@
 - 验收结果：Grok 执行 `npm run typecheck` 和 `npm run build` 均通过。主控复核后再次执行 `npm run build`（`tsc --noEmit` 与 Vite 8.3.0 build）成功；HTTP 烟测首页和 `/favicon.svg` 均返回 200，API 代理读取样例运行成功。浏览器验收覆盖首页、海天 2024 样例 POST 创建、按 `run_id` GET 回看、缺失 `run_id` 的 404 错误和空路径校验。正式运行 `annual-precheck-603288-2024-20260923-192840` 状态为 completed，含 8 facts、4 changes；verification 为 8 passed、0 failed、0 abstained；`model_called=false`、`independently_verified=false`。favicon 初次缺失导致 404，添加后返回 200；重载日志仅见 React DevTools INFO。
 - 审阅与局限：主控核对实际改动和验证结果，并同步检查了 `AGENTS.md`、`README.md`、`docs/architecture.md` 的状态说明。后端此前单元测试为 62 passed、1 warning。本机页面仍无单独自动化测试套件；Agent/模型分析、上传、任务进度和报告导出尚未实现。
 - 本次观察：针对页面验收范围执行浏览器检查并保留浏览器材料和正式运行记录，之后主控再次核对构建及 HTTP 结果。本记录仅描述本次协作，不推断一般能力。
+
+## 2026-09-25：脱敏模型调用审计包装器
+
+- 任务与执行：主控通过 Herdr 核对执行端为 Grok 4.7。最初以 medium 启动的一轮长时间规划且没有文件改动，主控取消；随后使用显式参数 `--model grok-4.7 --reasoning-effort low` 启动，实际 UI 显示 Grok 4.7 (low)。
+- 交付：Grok 新增 `backend/src/finagent/audit/audited_chat.py`、`backend/src/finagent/audit/__init__.py` 和 `tests/unit/test_audited_chat.py`，并更新 `AGENTS.md`、`README.md`、`docs/architecture.md` 的审计状态。显式 `audited_complete_chat` 包装现有连接器：调用前在本仓库 `artifacts/runs/<run_id>` 的 UUID 子目录持久化脱敏的 started 请求，完成后记录成功响应与用量，或安全失败类别；记录提供 `document_id`、`page` 证据字段和 `prompt_version`。记录写入失败不会静默作为成功处理，并包含路径校验。该包装器尚未接入年度预检或 Agent，未做云端实测。
+- 审阅与修正：主控指出初版路径校验可能接受仓库外同名目录、缺少时间状态信息，以及测试可任意注入 root 等问题；Grok 随后修正。主控审阅代码和文档后接受本次增量。
+- 验证：主控独立运行 `python -m pytest tests/unit -q`，结果为 `79 passed`，有 1 条现存 Starlette/httpx 弃用警告；`git diff --check` 退出码为 0，仅有换行提示。超时模拟测试运行后，本地服务器打印 `ConnectionAbortedError`，测试进程退出码仍为 0。
+- 本次观察：明确失败前置条件、脱敏要求、路径边界和分阶段范围有助于完成实现；medium 轮规划较久，low 轮实施有效，期间 Grok 连接有重试。以上仅记录本次可核对过程，不推断其他任务能力。

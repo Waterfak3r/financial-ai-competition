@@ -6,7 +6,7 @@
 
 在 `ParsedTextPdf` 上，已能按表标题、年度表头、单位和币种提取四项年度事实，并由 `finance` 对同一指标的报告年与上一年计算差额和同比率。`scripts/extract_annual_facts.py` 读取已有 `text_pdf.json`，可选核对原始 PDF 的 SHA256，并把 `facts.json`、`calculation.json`、`summary.json` 写入新的运行目录。这不是通用财报抽取。该命令不复核引用坐标内的原文金额；这项复核在年度预检中进行，且仍未覆盖年度列、表头口径和完整财报事实。
 
-云端模型目前只实现供应方中立的同步 Chat Completions 文本连接器，使用 `MODEL_BASE_URL`、`MODEL_API_KEY` 和 `MODEL_NAME`。请求只含 `model`、`messages` 和 `stream=false`。默认供应方和型号仍未选定，连接器也尚未接到智能体或财报分析接口。
+云端模型目前实现供应方中立的同步 Chat Completions 文本连接器，使用 `MODEL_BASE_URL`、`MODEL_API_KEY` 和 `MODEL_NAME`。请求只含 `model`、`messages` 和 `stream=false`。`finagent.audit.audited_complete_chat` 在此之外把脱敏请求、成功或失败记录写入本次运行目录的 UUID 子目录。默认供应方和型号仍未选定。该包装器尚未接到智能体或年度预检，也未做云端实测。
 
 本地 FastAPI 已提供年度财务预检：`POST /v1/annual-prechecks` 与 `GET /v1/annual-prechecks/{run_id}`。应用本身不强制 host；按文档中的 Uvicorn 命令默认绑定 `127.0.0.1`。项目无用户注册、登录或账户管理，且不在当前项目范围。模型供应方的 API 密钥仍是独立配置，预检不读取它。预检在哈希一致后，从原始 PDF 的引用坐标重新读取金额，并独立复核单位换算。这尚未确认年度列、表头口径或完整财报事实，也不是 Agent 风险判断。新的预检归档包含 `code` 和 `verification`。`annual-precheck-603288-2024-20260923-160938` 没有这两项，保持原样。把同一行空格与负号、括号、千分位一并计入金额边界的正式运行是 `annual-precheck-603288-2024-20260923-165111`。`164542`、`163707`、`163126` 和 `160938` 仍保留。
 
@@ -72,8 +72,8 @@ flowchart TD
 | verification | 原文、字段、公式、引用及结论证据的核验。已实现按原始 PDF 引用坐标复核金额，并用独立 Decimal 复核单位换算；尚未独立确认年度列、表头口径或完整财报事实 |
 | reports | 从结构化结果组织报告和导出内容，保留证据及限制条件 |
 | schemas | 文档、财务事实、证据、分析任务和结果等共用类型。已实现文本型 PDF 解析结果和四项年度财务事实；证据、任务和分析结果类型尚未实现 |
-| llm | 后端云端模型 API 连接。已实现同步 Chat Completions 纯文本调用；云端实测、请求和响应审计、智能体接入尚未实现。候选根地址见 README，北京和新加坡使用工作空间专属域名，协议限于三家共有字段 |
-| audit | 文件访问、工具调用、计算及生成过程记录，处理敏感凭据 |
+| llm | 后端云端模型 API 连接。已实现同步 Chat Completions 纯文本调用。候选根地址见 README，北京和新加坡使用工作空间专属域名，协议限于三家共有字段。云端实测和智能体接入尚未实现 |
+| audit | 文件访问、工具调用、计算及生成过程记录，处理敏感凭据。已实现 `audited_complete_chat`：调用方提供 `artifacts/runs` 的直接子目录、带 `document_id` 与 PDF 页码的 `evidence_refs`、`prompt_version`。联网前写入 `started`，成功写入 `succeeded`，失败只写安全类别。不记录 `base_url`、请求头或异常原文。尚未接入预检、智能体或云端实测 |
 | core | 配置、路径、公共异常等基础能力 |
 
 依赖清单和构建配置分别归属 frontend/ 和 backend/。`backend/pyproject.toml` 已声明 PyMuPDF、FastAPI 和 Uvicorn，测试可选依赖包含 httpx。`frontend/package.json` 已声明页面依赖的精确版本，本机 `npm install` 已生成 `frontend/package-lock.json`。`node_modules` 不纳入 Git。LangGraph 仍是后续唯一智能体编排框架，当前依赖中没有它。
