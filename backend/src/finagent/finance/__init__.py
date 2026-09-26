@@ -2,5 +2,12 @@
 
 from finagent.finance.annual_change import calculate_annual_changes
 from finagent.finance.annual_signals import screen_annual_signals
+from finagent.finance.v2_calculation import calculate_v2_annual_changes
+from finagent.finance.v2_screening import screen_v2_annual_candidates
 
-__all__ = ["calculate_annual_changes", "screen_annual_signals"]
+__all__ = [
+    "calculate_annual_changes",
+    "calculate_v2_annual_changes",
+    "screen_annual_signals",
+    "screen_v2_annual_candidates",
+]

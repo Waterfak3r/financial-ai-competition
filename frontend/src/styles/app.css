@@ -412,6 +412,22 @@ input:focus-visible,
   gap: 0.9rem 1rem;
 }
 
+.field-span {
+  grid-column: 1 / -1;
+}
+
+.upload-note {
+  margin: 0.9rem 0 0.2rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid #c5daf0;
+  border-radius: var(--radius);
+  background: #f7fbff;
+}
+
+.upload-note p {
+  margin: 0;
+}
+
 .field label {
   display: block;
   margin-bottom: 0.3rem;
@@ -425,6 +441,14 @@ input:focus-visible,
   border: 1px solid #c5daf0;
   border-radius: 10px;
   background: #fff;
+}
+
+.field input[type="file"] {
+  padding: 0.4rem 0.7rem;
+}
+
+.field input[type="file"]:disabled {
+  background: #e7eef6;
 }
 
 .help,

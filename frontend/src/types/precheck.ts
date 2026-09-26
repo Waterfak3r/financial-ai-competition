@@ -19,6 +19,15 @@ export interface AnnualPrecheckRequest {
   report_year: number;
 }
 
+/** POST /v1/text-pdf-uploads 的成功响应。路径相对 data/raw 与 data/processed。 */
+export interface TextPdfUploadReceipt {
+  document_id: string;
+  source_pdf_path: string;
+  parsed_path: string;
+  sha256: string;
+  page_count: number;
+}
+
 export interface PrecheckInputs {
   parsed_path: string;
   source_pdf_path: string;

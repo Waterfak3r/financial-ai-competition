@@ -4,6 +4,7 @@ import type {
   AnnualChangeCalculation,
   AnnualPrecheckRecord,
   AnnualPrecheckRequest,
+  TextPdfUploadReceipt,
   FactColumnRole,
   FactExtraction,
   FactHit,
@@ -18,6 +19,17 @@ import type {
 } from "../types/precheck";
 
 const PRECHECK_PATH = "/api/v1/annual-prechecks";
+const UPLOAD_PATH = "/api/v1/text-pdf-uploads";
+const MAX_TEXT_PDF_BYTES = 32 * 1024 * 1024;
+const UPLOAD_COMPANY = /^[A-Za-z0-9][A-Za-z0-9._-]{0,64}$/;
+const UPLOAD_DOCUMENT = /^upload-[0-9a-f]{32}$/;
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+
+export interface TextPdfUploadIssues {
+  file?: string;
+  companyId?: string;
+  reportYear?: string;
+}
 
 const REQUEST_FIELDS = {
   parsed_path: "解析结果相对路径",
@@ -51,6 +63,71 @@ export async function createAnnualPrecheck(
   });
 }
 
+export function textPdfUploadIssues(
+  file: File | null,
+  companyId: string,
+  reportYear: string,
+): TextPdfUploadIssues {
+  const issues: TextPdfUploadIssues = {};
+  if (file === null) {
+    issues.file = "请选择要上传的 PDF。";
+  } else if (file.size === 0) {
+    issues.file = "上传文件为空。";
+  } else if (file.size > MAX_TEXT_PDF_BYTES) {
+    issues.file = "上传超过 32 MiB 上限，未发送请求。";
+  }
+  if (companyId === "") {
+    issues.companyId = "请填写 company_id。";
+  } else if (!UPLOAD_COMPANY.test(companyId) || companyId.includes("..")) {
+    issues.companyId = "company_id 只能包含字母、数字、点、下划线和短横线。";
+  }
+  if (!/^\d+$/.test(reportYear)) {
+    issues.reportYear = "report_year 需要是 1900 到 2100 的整数。";
+  } else {
+    const year = Number(reportYear);
+    if (!Number.isInteger(year) || year < 1900 || year > 2100) {
+      issues.reportYear = "report_year 需要是 1900 到 2100 的整数。";
+    }
+  }
+  return issues;
+}
+
+export async function uploadTextPdf(
+  file: File,
+  companyId: string,
+  reportYear: string,
+): Promise<TextPdfUploadReceipt> {
+  const issues = textPdfUploadIssues(file, companyId, reportYear);
+  const problem = issues.file ?? issues.companyId ?? issues.reportYear;
+  if (problem !== undefined) {
+    throw new PrecheckApiError(problem);
+  }
+  const body = new FormData();
+  body.append("company_id", companyId);
+  body.append("report_year", reportYear);
+  body.append("file", file, "source.pdf");
+  let response: Response;
+  try {
+    response = await fetch(UPLOAD_PATH, {
+      method: "POST",
+      headers: { Accept: "application/json" },
+      body,
+      cache: "no-store",
+      credentials: "omit",
+    });
+  } catch {
+    throw new PrecheckApiError(
+      "无法连接本地预检服务。请确认后端已在 127.0.0.1:8000 启动，并由页面通过 /api 访问。",
+    );
+  }
+  const payload = await readJson(response);
+  if (!response.ok) {
+    const failure = messageFromFailure(response.status, payload, "上传");
+    throw new PrecheckApiError(failure.message, response.status, failure.code);
+  }
+  return readUploadReceipt(payload, companyId, reportYear);
+}
+
 export async function loadAnnualPrecheck(runId: string): Promise<AnnualPrecheckRecord> {
   if (runId === "") {
     throw new PrecheckApiError("请填写 run_id。");
@@ -81,7 +158,7 @@ async function requestPrecheck(url: string, init: RequestInit): Promise<AnnualPr
   }
   const payload = await readJson(response);
   if (!response.ok) {
-    const failure = messageFromFailure(response.status, payload);
+    const failure = messageFromFailure(response.status, payload, "预检请求");
     throw new PrecheckApiError(failure.message, response.status, failure.code);
   }
   return readRecord(payload);
@@ -102,9 +179,13 @@ async function readJson(response: Response): Promise<unknown> {
   }
 }
 
-function messageFromFailure(status: number, payload: unknown): { message: string; code: string | null } {
+function messageFromFailure(
+  status: number,
+  payload: unknown,
+  action: string,
+): { message: string; code: string | null } {
   if (!isRecord(payload) || !("detail" in payload)) {
-    return { message: `预检请求失败（HTTP ${status}）。`, code: null };
+    return { message: `${action}失败（HTTP ${status}）。`, code: null };
   }
   const detail = payload.detail;
   if (isRecord(detail)) {
@@ -113,9 +194,9 @@ function messageFromFailure(status: number, payload: unknown): { message: string
       return { message: detail.message, code };
     }
     if (code !== null) {
-      return { message: `预检请求失败（HTTP ${status}，${code}）。`, code };
+      return { message: `${action}失败（HTTP ${status}，${code}）。`, code };
     }
-    return { message: `预检请求失败（HTTP ${status}）。`, code: null };
+    return { message: `${action}失败（HTTP ${status}）。`, code: null };
   }
   if (Array.isArray(detail)) {
     const parts = detail.map(validationText).filter((item) => item !== "");
@@ -128,7 +209,7 @@ function messageFromFailure(status: number, payload: unknown): { message: string
   if (typeof detail === "string" && detail.trim() !== "") {
     return { message: detail, code: null };
   }
-  return { message: `预检请求失败（HTTP ${status}）。`, code: null };
+  return { message: `${action}失败（HTTP ${status}）。`, code: null };
 }
 
 function validationText(item: unknown): string {
@@ -153,6 +234,38 @@ function fieldLabel(name: string): string {
     return REQUEST_FIELDS[name as keyof typeof REQUEST_FIELDS];
   }
   return name;
+}
+
+function readUploadReceipt(
+  payload: unknown,
+  companyId: string,
+  reportYear: string,
+): TextPdfUploadReceipt {
+  const record = expectRecord(payload, "上传结果");
+  const documentId = expectString(record, "document_id");
+  const sourcePdfPath = expectString(record, "source_pdf_path");
+  const parsedPath = expectString(record, "parsed_path");
+  const sha256 = expectString(record, "sha256");
+  const pageCount = expectNumber(record, "page_count");
+  const sourceExpected = `${companyId}/${reportYear}/${documentId}/source.pdf`;
+  const parsedExpected = `${companyId}/${reportYear}/${documentId}/text_pdf.json`;
+  if (
+    !UPLOAD_DOCUMENT.test(documentId) ||
+    !SHA256_HEX.test(sha256) ||
+    !Number.isInteger(pageCount) ||
+    pageCount < 1 ||
+    sourcePdfPath !== sourceExpected ||
+    parsedPath !== parsedExpected
+  ) {
+    throw new PrecheckApiError("上传响应与本次公司、年度或文本 PDF 结果不一致，未填入路径。");
+  }
+  return {
+    document_id: documentId,
+    source_pdf_path: sourcePdfPath,
+    parsed_path: parsedPath,
+    sha256,
+    page_count: pageCount,
+  };
 }
 
 function readRecord(payload: unknown): AnnualPrecheckRecord {

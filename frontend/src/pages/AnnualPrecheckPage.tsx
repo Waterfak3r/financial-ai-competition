@@ -1,6 +1,12 @@
 import { useRef, useState } from "react";
-import type { FormEvent, ReactNode } from "react";
-import { createAnnualPrecheck, loadAnnualPrecheck, PrecheckApiError } from "../api/prechecks";
+import type { FormEvent, ReactNode, RefObject } from "react";
+import {
+  createAnnualPrecheck,
+  loadAnnualPrecheck,
+  PrecheckApiError,
+  textPdfUploadIssues,
+  uploadTextPdf,
+} from "../api/prechecks";
 import type {
   AnnualChange,
   AnnualPrecheckRecord,
@@ -9,6 +15,7 @@ import type {
   PrecheckIssue,
   SourceAmountEvidence,
   SourceAmountResult,
+  TextPdfUploadReceipt,
 } from "../types/precheck";
 
 const HAITIAN_2024 = {
@@ -26,9 +33,10 @@ interface FieldErrors {
   companyId?: string;
   reportYear?: string;
   runId?: string;
+  pdfFile?: string;
 }
 
-type RequestPhase = "idle" | "creating" | "loading";
+type RequestPhase = "idle" | "uploading" | "creating" | "loading";
 type AppView = "home" | "create" | "result" | "report";
 type ReportSection = "status" | "scope" | "record";
 
@@ -45,7 +53,9 @@ export function AnnualPrecheckPage() {
   const [view, setView] = useState<AppView>("home");
   const [selectedIndicator, setSelectedIndicator] = useState<string | null>(null);
   const [reportSection, setReportSection] = useState<ReportSection>("status");
+  const [uploadReceipt, setUploadReceipt] = useState<TextPdfUploadReceipt | null>(null);
   const requestLock = useRef(false);
+  const pdfInputRef = useRef<HTMLInputElement>(null);
   const busy = phase !== "idle" || requestLock.current;
 
   function fillHaitianSample() {
@@ -53,6 +63,7 @@ export function AnnualPrecheckPage() {
     setSourcePdfPath(HAITIAN_2024.sourcePdfPath);
     setCompanyId(HAITIAN_2024.companyId);
     setReportYear(HAITIAN_2024.reportYear);
+    setUploadReceipt(null);
     setFieldErrors((current) => ({
       ...current,
       parsedPath: undefined,
@@ -60,6 +71,78 @@ export function AnnualPrecheckPage() {
       companyId: undefined,
       reportYear: undefined,
     }));
+  }
+
+  function changeCompanyId(value: string) {
+    setCompanyId(value);
+    setUploadReceipt(null);
+  }
+
+  function changeReportYear(value: string) {
+    setReportYear(value);
+    setUploadReceipt(null);
+  }
+
+  function changeParsedPath(value: string) {
+    setParsedPath(value);
+    setUploadReceipt(null);
+  }
+
+  function changeSourcePdfPath(value: string) {
+    setSourcePdfPath(value);
+    setUploadReceipt(null);
+  }
+
+  async function onUpload() {
+    if (requestLock.current) {
+      return;
+    }
+    const nextCompanyId = companyId.trim();
+    const nextReportYear = reportYear.trim();
+    setCompanyId(nextCompanyId);
+    setReportYear(nextReportYear);
+    const selected = pdfInputRef.current?.files?.[0] ?? null;
+    const issues = textPdfUploadIssues(selected, nextCompanyId, nextReportYear);
+    setFieldErrors((current) => ({
+      ...current,
+      pdfFile: issues.file,
+      companyId: issues.companyId,
+      reportYear: issues.reportYear,
+    }));
+    if (issues.file !== undefined || issues.companyId !== undefined || issues.reportYear !== undefined) {
+      setView("create");
+      const fieldId =
+        issues.file !== undefined ? "pdf-file" : issues.companyId !== undefined ? "company-id" : "report-year";
+      document.getElementById(fieldId)?.focus();
+      return;
+    }
+    if (selected === null) {
+      return;
+    }
+    requestLock.current = true;
+    setPhase("uploading");
+    setRequestError(null);
+    try {
+      const receipt = await uploadTextPdf(selected, nextCompanyId, nextReportYear);
+      setParsedPath(receipt.parsed_path);
+      setSourcePdfPath(receipt.source_pdf_path);
+      setUploadReceipt(receipt);
+      setFieldErrors((current) => ({
+        ...current,
+        parsedPath: undefined,
+        sourcePdfPath: undefined,
+        companyId: undefined,
+        reportYear: undefined,
+        pdfFile: undefined,
+      }));
+      setView("create");
+    } catch (error) {
+      setRequestError(errorMessage(error));
+      setView("create");
+    } finally {
+      requestLock.current = false;
+      setPhase("idle");
+    }
   }
 
   async function onCreate(event: FormEvent<HTMLFormElement>) {
@@ -191,7 +274,9 @@ export function AnnualPrecheckPage() {
             <p role="status" className="status-line">
               {phase === "creating"
                 ? "正在创建预检。接口同步返回，页面没有单独的任务进度。"
-                : "正在读取该次运行。"}
+                : phase === "uploading"
+                  ? "正在上传并解析文本 PDF。完成后仍需点击创建预检，页面不会自动开始。"
+                  : "正在读取该次运行。"}
             </p>
           )}
           {requestError !== null ? (
@@ -220,11 +305,14 @@ export function AnnualPrecheckPage() {
               reportYear={reportYear}
               fieldErrors={fieldErrors}
               busy={busy}
-              onParsedPath={setParsedPath}
-              onSourcePdfPath={setSourcePdfPath}
-              onCompanyId={setCompanyId}
-              onReportYear={setReportYear}
+              uploadReceipt={uploadReceipt}
+              pdfInputRef={pdfInputRef}
+              onParsedPath={changeParsedPath}
+              onSourcePdfPath={changeSourcePdfPath}
+              onCompanyId={changeCompanyId}
+              onReportYear={changeReportYear}
               onFill={fillHaitianSample}
+              onUpload={onUpload}
               onSubmit={onCreate}
             />
           ) : null}
@@ -374,11 +462,14 @@ function CreateView({
   reportYear,
   fieldErrors,
   busy,
+  uploadReceipt,
+  pdfInputRef,
   onParsedPath,
   onSourcePdfPath,
   onCompanyId,
   onReportYear,
   onFill,
+  onUpload,
   onSubmit,
 }: {
   parsedPath: string;
@@ -387,39 +478,25 @@ function CreateView({
   reportYear: string;
   fieldErrors: FieldErrors;
   busy: boolean;
+  uploadReceipt: TextPdfUploadReceipt | null;
+  pdfInputRef: RefObject<HTMLInputElement | null>;
   onParsedPath: (value: string) => void;
   onSourcePdfPath: (value: string) => void;
   onCompanyId: (value: string) => void;
   onReportYear: (value: string) => void;
   onFill: () => void;
+  onUpload: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
+  const fileHelpId = "pdf-file-help";
+  const fileErrorId = "pdf-file-error";
   return (
     <form className="panel" onSubmit={onSubmit} noValidate>
       <h2>创建预检</h2>
       <p id="sample-help">
-        一键填充写入海天味业（603288）2024
-        年公开年报的相对路径。使用前，本机 data/processed 与 data/raw 中需要已经有这些文件。
+        上传和预检是两步。填写 company_id 与 report_year 后选择文本型 PDF 并上传；成功后才会填入相对路径。再点击创建预检才会开始预检。也可以不上传，直接填写已有路径，或一键填入海天味业（603288）2024 年公开年报的相对路径。样例文件需要已经在本机 data/processed 与 data/raw 中。
       </p>
       <div className="form-grid">
-        <TextField
-          id="parsed-path"
-          label="解析结果相对路径（相对 data/processed）"
-          value={parsedPath}
-          help="例如 603288/2024/cninfo-1222994233/text_pdf.json"
-          error={fieldErrors.parsedPath}
-          disabled={busy}
-          onChange={onParsedPath}
-        />
-        <TextField
-          id="source-pdf-path"
-          label="原始 PDF 相对路径（相对 data/raw）"
-          value={sourcePdfPath}
-          help="例如 603288/2024/cninfo-1222994233/1222994233.PDF"
-          error={fieldErrors.sourcePdfPath}
-          disabled={busy}
-          onChange={onSourcePdfPath}
-        />
         <TextField
           id="company-id"
           label="company_id"
@@ -438,6 +515,68 @@ function CreateView({
           disabled={busy}
           inputMode="numeric"
           onChange={onReportYear}
+        />
+        <div className="field field-span">
+          <label htmlFor="pdf-file">文本型 PDF</label>
+          <input
+            id="pdf-file"
+            ref={pdfInputRef}
+            type="file"
+            accept="application/pdf,.pdf"
+            disabled={busy}
+            aria-invalid={fieldErrors.pdfFile !== undefined}
+            aria-describedby={fieldErrors.pdfFile === undefined ? fileHelpId : `${fileHelpId} ${fileErrorId}`}
+          />
+          <p id={fileHelpId} className="help">
+            选择后点击上传。空文件和超过 32 MiB 的文件不会发送。没有可提取文字的 PDF 由服务端拒绝。
+          </p>
+          {fieldErrors.pdfFile !== undefined ? (
+            <p id={fileErrorId} className="field-error">
+              {fieldErrors.pdfFile}
+            </p>
+          ) : null}
+        </div>
+      </div>
+      <div className="actions">
+        <button type="button" className="secondary" onClick={onUpload} disabled={busy}>
+          上传文本 PDF
+        </button>
+      </div>
+      {uploadReceipt !== null ? (
+        <div className="upload-note" role="status">
+          <p>文本 PDF 已保存并解析。请核对下面三项，再点击创建预检。页面没有自动开始预检。</p>
+          <dl className="meta">
+            <dt>document_id</dt>
+            <dd>
+              <code>{uploadReceipt.document_id}</code>
+            </dd>
+            <dt>页数</dt>
+            <dd>{uploadReceipt.page_count}</dd>
+            <dt>SHA256</dt>
+            <dd>
+              <code>{uploadReceipt.sha256}</code>
+            </dd>
+          </dl>
+        </div>
+      ) : null}
+      <div className="form-grid">
+        <TextField
+          id="parsed-path"
+          label="解析结果相对路径（相对 data/processed）"
+          value={parsedPath}
+          help="例如 603288/2024/cninfo-1222994233/text_pdf.json"
+          error={fieldErrors.parsedPath}
+          disabled={busy}
+          onChange={onParsedPath}
+        />
+        <TextField
+          id="source-pdf-path"
+          label="原始 PDF 相对路径（相对 data/raw）"
+          value={sourcePdfPath}
+          help="例如 603288/2024/cninfo-1222994233/1222994233.PDF"
+          error={fieldErrors.sourcePdfPath}
+          disabled={busy}
+          onChange={onSourcePdfPath}
         />
       </div>
       <div className="actions">
@@ -476,7 +615,9 @@ function ResultView({
             ? "这次请求没有得到预检记录。"
             : phase === "idle"
               ? "尚未创建或读取预检。到创建页填写路径，或在顶栏输入 run_id 回看。"
-              : "正在等待预检记录。"}
+              : phase === "uploading"
+                ? "正在上传文本 PDF，预检尚未开始。"
+                : "正在等待预检记录。"}
         </p>
         <button type="button" className="secondary" onClick={onCreate}>
           去创建
@@ -524,7 +665,10 @@ function ReportView({
           {section === "scope" ? (
             <>
               <h3 className="section-title">未实现范围</h3>
-              <p>上传、任务进度、模型分析、LangGraph 编排、完整核验和报告导出都还未接到这个页面。</p>
+              <p>
+                创建页可以上传文本 PDF，上传成功后仍需另行点击创建预检。任务进度、模型分析、LangGraph
+                编排、完整核验和报告导出都还未接到这个页面。
+              </p>
             </>
           ) : null}
           {section === "record" ? (
