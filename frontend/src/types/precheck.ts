@@ -158,6 +158,71 @@ export interface SourceAmountVerification {
   results: SourceAmountResult[];
 }
 
+/** 旧版年度确定性筛查的状态；它只表示计算或候选线索。 */
+export type AnnualScreeningStatus = "candidate" | "not_triggered" | "calculated" | "abstained";
+
+export interface ScreeningFactHit {
+  page_number: number;
+  block_index: number;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+/** Screening 将使用到的旧事实摘要，不代表该事实已经独立核验。 */
+export interface ScreeningFactInput {
+  role: "fact";
+  indicator_name: string;
+  report_year: number;
+  column_role: FactColumnRole;
+  normalized_value: DecimalString;
+  document_id: string;
+  source_sha256: string;
+  company_id: string;
+  currency: string;
+  statement_scope: string;
+  period_type: string;
+  hits: ScreeningFactHit[];
+}
+
+export interface ScreeningDifferenceValue {
+  role: "calculation";
+  left_difference: DecimalString;
+  right_difference: DecimalString;
+}
+
+export interface ScreeningRatioValue {
+  role: "calculation";
+  year: number;
+  report_year: number;
+  numerator: DecimalString;
+  denominator: DecimalString;
+  ratio: DecimalString;
+}
+
+export type ScreeningValue = ScreeningDifferenceValue | ScreeningRatioValue;
+
+export interface AnnualScreeningItem {
+  signal_id: string;
+  title: string;
+  status: AnnualScreeningStatus;
+  statement_kind: "inference" | "calculation";
+  formula: string;
+  inputs: ScreeningFactInput[];
+  value: ScreeningValue | null;
+  reason: string | null;
+  note: string | null;
+  limitation: string;
+}
+
+export interface AnnualScreening {
+  kind: "deterministic_annual_candidate_screen";
+  role: "candidate_input_for_later_agent_or_report";
+  limitation: string;
+  items: AnnualScreeningItem[];
+}
+
 export interface AnnualPrecheckRecord {
   run_id: string;
   status: string;
@@ -169,6 +234,7 @@ export interface AnnualPrecheckRecord {
   note?: string;
   formula?: string;
   verification?: SourceAmountVerification;
+  screening?: AnnualScreening;
   facts: FactExtraction;
   calculation: AnnualChangeCalculation;
   issues: PrecheckIssueGroups;

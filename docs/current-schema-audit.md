@@ -1,6 +1,6 @@
-# 当前事实结构审计
+# 旧年度预检事实结构审计（历史基线）
 
-本审计描述修改前的旧预检流程，也就是仍在跑的 `FinancialFact`、同比、坐标金额复核和 `screening`。`backend/src/finagent/schemas/financial_fact_v2.py` 里的 v2 schema 已经落盘，包括表格证据以及核验、计算、主张的类型，但独立核验仍未实现，预检也还没有改用 v2。旧 API 和历史 `artifacts/runs/` 不改写。
+本文主体记录旧年度预检所用的 `FinancialFact`、同比、坐标金额复核和 `screening`，是旧流程的历史字段审计，不描述 v2 的完整现状。v2 确定性年度分析已有正式 CLI 和运行/报告归档；海天 603288 的 2024 样例运行 `annual-analysis-ffcd6078-a1df-416b-88b8-6774ebe66d42` 中，8 条事实、8 项计算、16 条确定性 Claim 均核验通过，并形成 2 条候选信号。M1（海天样例）和 M2（单样例确定性 Golden Path）已验收，不代表跨公司泛化。可比性依据定位于同一报告 PDF 第 116、163、197 页，proof 由当前进程签发；序列化副本只供审计，不能授权计算，也不表示与此前已披露的 2023 年报独立勾稽。旧预检 API/页面及历史 `artifacts/runs/` 保持原样，仍未接入 v2。
 
 ## 实际结构
 
@@ -18,9 +18,11 @@
 
 `screen_annual_signals` 在复核通过且口径相容时，给出利润或收入上升同时经营现金流下降的候选，以及经营现金流与归母净利润的比值。归母净利润小于或等于 0 时比值弃权。没有相符同比结果时不自行重算差额来形成候选。上期为 0 时只记录绝对差额，并注明这不是通常意义的同比增速。非经常性损益披露合计不除以归母净利润。
 
-HTTP 已有 `POST /v1/text-pdf-uploads`、`POST /v1/annual-prechecks`、`GET /v1/annual-prechecks/{run_id}`。预检页创建、回看和上传后填入路径已经接上。没有 Claim、TableCellEvidence 或独立语义核验类型。
+旧流程 HTTP 已有 `POST /v1/text-pdf-uploads`、`POST /v1/annual-prechecks`、`GET /v1/annual-prechecks/{run_id}`。预检页创建、回看和上传后填入路径已经接上。旧预检 API/数据结构没有 Claim、TableCellEvidence 或独立语义核验类型；这些类型和 v2 核验模块已存在，但没有接入旧接口或页面。
 
 ## 缺口
+
+以下缺口仅针对上述旧 `FinancialFact` 与预检流程。v2 已经有相应类型或模块的项目另行说明。
 
 - 没有 `fact_id`、`metric_id`，指标只靠中文 `indicator_name`。
 - `period_type=annual` 不能区分时点与期间，也不能支持以后的半年报或季报。
@@ -30,7 +32,7 @@ HTTP 已有 `POST /v1/text-pdf-uploads`、`POST /v1/annual-prechecks`、`GET /v1
 - `hits` 不能证明数字属于哪一行、哪一列。
 - 没有稳定的公司或文档实体 ID；`company_id` 与 `document_id` 是字符串，上传生成的 `document_id` 与手工导入的 cninfo 目录标识不是同一套。
 - 核验状态词汇与目标词汇不同：现为 passed、failed、abstained，目标为 verified、conflict、insufficient_evidence。
-- 没有 Claim。screening 用 `statement_kind` 区分 fact、calculation、inference，但不是可引用的主张对象。同比结果没有 `calculation_id`。
+- 旧预检没有 Claim。其 `screening` 用 `statement_kind` 区分 fact、calculation、inference，但不是可引用的主张对象；旧同比结果也没有 `calculation_id`。v2 已定义 Claim 与 Calculation 类型，并在正式 CLI 中执行确定性 Claim 核验；该核验仅覆盖当前类型和已实现的确定性文案。
 
 ## 重复字段
 
@@ -47,10 +49,10 @@ HTTP 已有 `POST /v1/text-pdf-uploads`、`POST /v1/annual-prechecks`、`GET /v1
 - 上传路径是 `source.pdf` 与 `text_pdf.json`。海天样例仍是原始 PDF 文件名。两条路径约定并存。
 - 前端按现有预检 JSON 读取。给旧记录补字段或改状态枚举会破坏回看。
 
-## 推荐修改
+## 已落实的兼容方向与后续缺口
 
-新事实与单元格证据放在隔离的 v2 类型中，由适配层读取旧事实。适配未经验收前，不改 `FinancialFact`、预检响应或历史 JSON。v2 至少分开时点与期间、使用稳定 scope 枚举、在追溯状态未知时不做同比、用单元格证据而不是文字块充当语义来源。旧预检继续服务现有页面。
+新事实与单元格证据已放在隔离的 v2 类型中，由适配层读取旧事实。正式 CLI 从真实海天 PDF 重新定位事实、年度可比性、计算输入和 Claim 支持证据；8 条事实、8 项计算和 16 条确定性 Claim 均核验通过，2 条候选筛查进入报告。可比性确认依赖同一 PDF 第 116、163、197 页的披露，在当前进程内签发 proof；序列化结果只作审计，且没有与此前已披露的 2023 年报独立勾稽。没有有效 proof 时，`restatement_status=unknown` 仍必须拒绝计算。正式 CLI 和 `artifacts/runs/`、`artifacts/reports/` 归档已完成；v2 HTTP API、旧前端接入、LangGraph、模型解释、多公司 golden 仍待后续。旧 `FinancialFact`、预检响应、前端和历史 JSON 保持兼容，不为 v2 回归改写。
 
 ## 受影响文件
 
-以后实现 v2 时会碰到：`backend/src/finagent/schemas/financial_fact.py`、`ingestion/extract_annual_facts.py`、`finance/annual_change.py`、`finance/annual_signals.py`、`verification/source_amount.py`、`api/annual_precheck.py`、`api/app.py`，以及 `frontend/src/types/precheck.ts` 和预检页。本文不修改这些文件。
+旧流程实现及兼容边界涉及：`backend/src/finagent/schemas/financial_fact.py`、`ingestion/extract_annual_facts.py`、`finance/annual_change.py`、`finance/annual_signals.py`、`verification/source_amount.py`、`api/annual_precheck.py`、`api/app.py`，以及 `frontend/src/types/precheck.ts` 和预检页。前端可展示旧预检中可选的 `screening` 字段。v2 实现位于独立 schema、verification、finance、reports 与 `scripts/analyze_annual.py`；v2 HTTP API、旧前端报告接入和产品级导出仍待后续实施。本文保留旧结构说明，不修改代码。

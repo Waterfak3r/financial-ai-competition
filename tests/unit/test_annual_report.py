@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+from dataclasses import replace
 from datetime import date, datetime
+from pathlib import Path
 
 import pytest
+import pymupdf
 
+from finagent.finance.v2_calculation import calculate_v2_annual_changes
 from finagent.reports.annual_report import ReportBuildError, build_annual_report, render_markdown
 from finagent.schemas.financial_fact_v2 import (
     CalculationResult,
@@ -16,6 +21,11 @@ from finagent.schemas.financial_fact_v2 import (
     VerificationResult,
 )
 from finagent.schemas.text_pdf import PdfBBox
+from finagent.verification.claim import (
+    expected_calculation_claim_text,
+    expected_fact_claim_text,
+)
+from finagent.verification.comparability import verify_annual_comparability
 
 SHA = "ab" * 32
 OTHER_SHA = "cd" * 32
@@ -65,6 +75,7 @@ def _fact(
     unit: str | None = "元",
     metric_id: str | None = None,
     scope: str = "consolidated",
+    currency: str = "人民币",
 ) -> FinancialFactV2:
     return FinancialFactV2(
         fact_id=fact_id,
@@ -73,7 +84,7 @@ def _fact(
         label_raw=label,
         raw_value=raw,
         normalized_value=raw,
-        currency="人民币",
+        currency=currency,
         unit_multiplier="1",
         unit=unit,
         report_year=2024,
@@ -140,6 +151,93 @@ def _build(**overrides):
     return build_annual_report(**payload)
 
 
+def _comparability_proof(tmp_path: Path):
+    pdf_path = tmp_path / "annual-comparability.pdf"
+    document = pymupdf.open()
+    page = document.new_page()
+    _insert_pdf_text(page, 60, 35, "佛山市海天调味食品股份有限公司2024 年年度报告")
+    _insert_pdf_text(page, 60, 110, "(1).重要会计政策变更")
+    _insert_pdf_text(page, 60, 130, "□适用   √不适用")
+    _insert_pdf_text(page, 60, 160, "(2).重要会计估计变更")
+    _insert_pdf_text(page, 60, 180, "□适用   √不适用")
+    _insert_pdf_text(
+        page,
+        60,
+        210,
+        "(3).2024年起首次执行新会计准则或准则解释等涉及调整首次执行当年年初的财务报表",
+    )
+    _insert_pdf_text(page, 60, 230, "□适用   √不适用")
+    page = document.new_page()
+    _insert_pdf_text(page, 60, 35, "佛山市海天调味食品股份有限公司2024 年年度报告")
+    for index, text in enumerate((
+        "1、由于《企业会计准则》及其相关新规定进行追溯调整，影响期初未分配利润0元。",
+        "2、由于会计政策变更，影响期初未分配利润0元。",
+        "3、由于重大会计差错更正，影响期初未分配利润0元。",
+        "4、由于同一控制导致的合并范围变更，影响期初未分配利润0元。",
+        "5、其他调整合计影响期初未分配利润0元。",
+    )):
+        _insert_pdf_text(page, 60, 110 + index * 20, text, fontsize=9)
+    page = document.new_page()
+    _insert_pdf_text(page, 60, 35, "佛山市海天调味食品股份有限公司2024 年年度报告")
+    _insert_pdf_text(page, 60, 620, "十八、其他重要事项")
+    _insert_pdf_text(page, 60, 640, "1、前期会计差错更正")
+    _insert_pdf_text(page, 60, 660, "(1).追溯重述法")
+    _insert_pdf_text(page, 60, 680, "□适用   √不适用")
+    document.save(pdf_path)
+    document.close()
+    digest = hashlib.sha256(pdf_path.read_bytes()).hexdigest()
+    return verify_annual_comparability(
+        pdf_path,
+        document_id="doc-1",
+        source_sha256=digest,
+        report_year=2024,
+    )
+
+
+def _insert_pdf_text(page, x: int, y: int, text: str, *, fontsize: int = 10) -> None:
+    page.insert_text((x, y), text, fontname="china-s", fontsize=fontsize)
+
+
+def _annual_report_inputs(proof):
+    current_evidence = replace(
+        _evidence("ev-current", "营业收入 100.10"),
+        source_sha256=proof.source_sha256,
+    )
+    prior_evidence = replace(
+        _evidence("ev-prior", "营业收入 90.00", value="90.00"),
+        source_sha256=proof.source_sha256,
+        period_start=date(2023, 1, 1),
+        period_end=date(2023, 12, 31),
+        column_label="2023年度",
+        column_region=_region("2023年度", 81),
+    )
+    current_fact = replace(_fact("fact-current", "ev-current"), source_sha256=proof.source_sha256)
+    prior_fact = replace(
+        _fact("fact-prior", "ev-prior", raw="90.00"),
+        source_sha256=proof.source_sha256,
+        comparison_role="comparative",
+        period_start=date(2023, 1, 1),
+        period_end=date(2023, 12, 31),
+    )
+    fact_verifications = (
+        _verification("ver-current", "fact-current", "verified", "ev-current"),
+        _verification("ver-prior", "fact-prior", "verified", "ev-prior"),
+    )
+    calculations, issues = calculate_v2_annual_changes(
+        (current_fact, prior_fact),
+        fact_verifications,
+        2024,
+        comparability=proof,
+    )
+    assert issues == ()
+    return (
+        (current_fact, prior_fact),
+        (current_evidence, prior_evidence),
+        fact_verifications,
+        calculations,
+    )
+
+
 def test_verified_items_are_separated_from_conflict_and_candidates() -> None:
     good_evidence = _evidence("ev-good", "营业收入 100.10")
     weak_evidence = _evidence("ev-weak", "合并利润表", value=None)
@@ -154,7 +252,7 @@ def test_verified_items_are_separated_from_conflict_and_candidates() -> None:
     fact_claim = Claim(
         claim_id="claim-fact",
         claim_type="fact",
-        text="营业收入为 100.10 元。",
+        text=expected_fact_claim_text(good),
         supporting_fact_ids=("fact-good",),
         supporting_evidence_ids=("ev-good",),
         calculation_ids=(),
@@ -167,7 +265,7 @@ def test_verified_items_are_separated_from_conflict_and_candidates() -> None:
         text="利润与经营现金流变化存在背离。",
         supporting_fact_ids=("fact-good",),
         supporting_evidence_ids=("ev-good",),
-        calculation_ids=("calc-good",),
+        calculation_ids=(),
         verification_status="insufficient_evidence",
         limitations=("推论限制，尚未排除口径差异。",),
         alternative_explanations=("也可能只是季节性回款。",),
@@ -194,10 +292,11 @@ def test_verified_items_are_separated_from_conflict_and_candidates() -> None:
     assert [item["calculation_id"] for item in report["pending_review"]["calculations"]] == ["calc-good", "calc-open"]
     pending_ids = [item["fact_id"] for item in report["pending_review"]["facts"]]
     assert pending_ids == ["fact-conflict", "fact-insufficient", "fact-open"]
-    assert any("公式重算" in reason for reason in report["pending_review"]["calculations"][0]["placement_reasons"])
+    assert any("独立计算核验未通过" in reason for reason in report["pending_review"]["calculations"][0]["placement_reasons"])
     assert report["verified_claims"][0]["claim_id"] == "claim-fact"
     assert report["pending_review"]["claims"] == []
     assert report["interpretations"][0]["alternative_explanations"] == ["也可能只是季节性回款。"]
+    assert report["interpretations"][0]["independent_verification"]["status"] == "interpretation"
     assert report["interpretations"][0]["follow_up_items"] == ["核查应收账款附注。"]
     assert report["interpretations"][0]["limitations"] == ["推论限制，尚未排除口径差异。"]
     assert "model_called" not in report
@@ -212,7 +311,10 @@ def test_verified_items_are_separated_from_conflict_and_candidates() -> None:
     text = render_markdown(report)
     assert text.startswith("# FINTRACE 年度财报分析报告 603288 2024")
     assert "模型调用" not in text.split("## 范围与缺口", 1)[0]
-    assert "[第81页](#pdf-page-81)" in text
+    assert "独立重算受支持的年度差额和同比率" in report["scope"]["note"]
+    assert "不重新计算" not in report["scope"]["note"]
+    assert "PDF 第81页" in text
+    assert "#pdf-page-81" not in text
     assert "bbox (10.5, 20.25, 80.5, 40.75)" in text
     assert "也可能只是季节性回款。" in text
     assert "核查应收账款附注。" in text
@@ -395,6 +497,153 @@ def test_calculation_claim_stays_pending_until_calculation_is_confirmed() -> Non
     assert report["pending_review"]["claims"][0]["claim_id"] == "claim-calc"
 
 
+def test_forged_verified_record_cannot_confirm_wrong_fact_claim_text() -> None:
+    evidence = _evidence("ev-good", "营业收入 100.10")
+    fact = _fact("fact-good", "ev-good")
+    claim = Claim(
+        claim_id="claim-forged-fact",
+        claim_type="fact",
+        text="营业收入为 999999.99 元。",
+        supporting_fact_ids=("fact-good",),
+        supporting_evidence_ids=("ev-good",),
+        calculation_ids=(),
+        verification_status="verified",
+    )
+    report = _build(
+        facts=(fact,),
+        evidences=(evidence,),
+        verifications=(
+            _verification("ver-good", "fact-good", "verified", "ev-good"),
+            _verification("ver-forged-claim", "claim-forged-fact", "verified", "ev-good", target_type="claim"),
+        ),
+        claims=(claim,),
+    )
+    assert report["verified_claims"] == []
+    pending = report["pending_review"]["claims"][0]
+    assert pending["claim_id"] == "claim-forged-fact"
+    assert "结构化事实的受控表示" in pending["independent_verification"]["reason"]
+
+
+def test_forged_calculation_check_cannot_confirm_wrong_result(tmp_path: Path) -> None:
+    proof = _comparability_proof(tmp_path)
+    facts, evidences, fact_verifications, calculations = _annual_report_inputs(proof)
+    wrong = next(item for item in calculations if item.formula_id == "annual_difference")
+    wrong = replace(wrong, output_value="99999")
+    calculations = tuple(wrong if item.calculation_id == wrong.calculation_id else item for item in calculations)
+    forged_check = VerificationResult(
+        verification_id="ver-forged-calculation",
+        target_type="calculation",
+        target_id=wrong.calculation_id,
+        status="verified",
+        checks=("结果校验：99999", "公式重算通过"),
+        conflicts=(),
+        evidence_ids=("ev-current", "ev-prior"),
+        limitations=(),
+        verified_at=WHEN,
+    )
+
+    report = _build(
+        facts=facts,
+        evidences=evidences,
+        verifications=(*fact_verifications, forged_check),
+        calculations=calculations,
+        comparability=proof,
+        source_sha256=proof.source_sha256,
+    )
+
+    assert all(item["calculation_id"] != wrong.calculation_id for item in report["confirmed"]["analyses"])
+    pending = next(
+        item for item in report["pending_review"]["calculations"]
+        if item["calculation_id"] == wrong.calculation_id
+    )
+    assert pending["independent_verification"]["status"] == "conflict"
+    assert "与独立重算值" in pending["independent_verification"]["reason"]
+    markdown = render_markdown(report)
+    assert "结果校验：99999" in markdown
+    assert "独立核验原因：计算输出 99999 与独立重算值 10.10 不一致。" in markdown
+
+
+def test_calculation_claim_text_must_match_recomputed_result(tmp_path: Path) -> None:
+    proof = _comparability_proof(tmp_path)
+    facts, evidences, fact_verifications, calculations = _annual_report_inputs(proof)
+    calculation = next(item for item in calculations if item.formula_id == "annual_difference")
+    bad_claim = Claim(
+        claim_id="claim-forged-calculation",
+        claim_type="calculation",
+        text="revenue 年度差额为 999999.99。",
+        supporting_fact_ids=calculation.input_fact_ids,
+        supporting_evidence_ids=("ev-current", "ev-prior"),
+        calculation_ids=(calculation.calculation_id,),
+        verification_status="verified",
+    )
+    claim_check = _verification(
+        "ver-forged-calculation-claim",
+        "claim-forged-calculation",
+        "verified",
+        "ev-current",
+        target_type="claim",
+    )
+
+    report = _build(
+        facts=facts,
+        evidences=evidences,
+        verifications=(*fact_verifications, claim_check),
+        calculations=calculations,
+        claims=(bad_claim,),
+        comparability=proof,
+        source_sha256=proof.source_sha256,
+    )
+
+    assert any(item["calculation_id"] == calculation.calculation_id for item in report["confirmed"]["analyses"])
+    assert report["verified_claims"] == []
+    pending = report["pending_review"]["claims"][0]
+    assert "结构化计算结果的受控表示" in pending["independent_verification"]["reason"]
+
+
+def test_valid_proof_recomputes_calculation_and_confirms_canonical_claims(tmp_path: Path) -> None:
+    proof = _comparability_proof(tmp_path)
+    facts, evidences, fact_verifications, calculations = _annual_report_inputs(proof)
+    current_fact = facts[0]
+    difference = next(item for item in calculations if item.formula_id == "annual_difference")
+    fact_claim = Claim(
+        claim_id="claim-revenue-fact",
+        claim_type="fact",
+        text=expected_fact_claim_text(current_fact),
+        supporting_fact_ids=(current_fact.fact_id,),
+        supporting_evidence_ids=("ev-current",),
+        calculation_ids=(),
+        verification_status="verified",
+    )
+    calculation_claim = Claim(
+        claim_id="claim-revenue-difference",
+        claim_type="calculation",
+        text=expected_calculation_claim_text(difference, {fact.fact_id: fact for fact in facts}),
+        supporting_fact_ids=difference.input_fact_ids,
+        supporting_evidence_ids=("ev-current", "ev-prior"),
+        calculation_ids=(difference.calculation_id,),
+        verification_status="verified",
+    )
+
+    report = _build(
+        facts=facts,
+        evidences=evidences,
+        verifications=fact_verifications,
+        calculations=calculations,
+        claims=(fact_claim, calculation_claim),
+        comparability=proof,
+        source_sha256=proof.source_sha256,
+    )
+
+    assert {item["calculation_id"] for item in report["confirmed"]["analyses"]} == {
+        item.calculation_id for item in calculations
+    }
+    assert {item["claim_id"] for item in report["verified_claims"]} == {
+        "claim-revenue-fact",
+        "claim-revenue-difference",
+    }
+    assert all(item["independent_verification"]["status"] == "verified" for item in report["confirmed"]["analyses"])
+
+
 def test_empty_inputs_state_the_gap_without_a_conclusion() -> None:
     report = _build()
     assert report["confirmed"] == {"metrics": [], "analyses": []}
@@ -474,6 +723,122 @@ def test_adapted_blank_unit_and_non_recurring_scope_can_be_confirmed() -> None:
     ]
     pending = [item["fact_id"] for item in report["pending_review"]["facts"]]
     assert pending == ["fact-nr-merged", "fact-unit"]
+
+
+def test_numbered_non_recurring_title_is_accepted_but_unrelated_title_is_rejected() -> None:
+    numbered = _replace_regions(
+        _evidence("ev-nr-numbered", "274709462.33", value="274709462.33"),
+        row_text="合计",
+        title_text="十、 非经常性损益项目和金额",
+    )
+    unrelated = _replace_regions(
+        _evidence("ev-nr-unrelated", "274709462.33", value="274709462.33"),
+        row_text="合计",
+        title_text="附注：非经常性损益项目和金额",
+    )
+    accepted_fact = _fact(
+        "fact-nr-numbered",
+        "ev-nr-numbered",
+        label="披露的非经常性损益合计",
+        raw="274709462.33",
+        metric_id="non_recurring_total",
+        scope="unknown",
+    )
+    rejected_fact = _fact(
+        "fact-nr-unrelated",
+        "ev-nr-unrelated",
+        label="披露的非经常性损益合计",
+        raw="274709462.33",
+        metric_id="non_recurring_total",
+        scope="unknown",
+    )
+    report = _build(
+        facts=(accepted_fact, rejected_fact),
+        evidences=(numbered, unrelated),
+        verifications=(
+            _verification("ver-nr-numbered", "fact-nr-numbered", "verified", "ev-nr-numbered"),
+            _verification("ver-nr-unrelated", "fact-nr-unrelated", "verified", "ev-nr-unrelated"),
+        ),
+    )
+    assert [item["fact_id"] for item in report["confirmed"]["metrics"]] == ["fact-nr-numbered"]
+    assert [item["fact_id"] for item in report["pending_review"]["facts"]] == ["fact-nr-unrelated"]
+
+
+def test_operating_cash_row_matches_when_label_wraps_across_lines() -> None:
+    evidence = _replace_regions(
+        _evidence("ev-cash", "100.10"),
+        row_text="经营活动产生的现金流量\n净额",
+        title_text="合并现金流量表",
+    )
+    fact = _fact(
+        "fact-cash",
+        "ev-cash",
+        label="经营活动产生的现金流量净额",
+        metric_id="operating_cash_flow",
+    )
+    report = _build(
+        facts=(fact,),
+        evidences=(evidence,),
+        verifications=(_verification("ver-cash", "fact-cash", "verified", "ev-cash"),),
+    )
+    assert [item["fact_id"] for item in report["confirmed"]["metrics"]] == ["fact-cash"]
+
+
+@pytest.mark.parametrize(
+    ("fact_currency", "evidence_currency"),
+    (("CNY", "人民币"), ("人民币", "CNY")),
+)
+def test_cny_and_rmb_currency_labels_are_equivalent(fact_currency: str, evidence_currency: str) -> None:
+    evidence = replace(_evidence("ev-currency", "100.10"), currency=evidence_currency)
+    fact = _fact("fact-currency", "ev-currency", currency=fact_currency)
+    report = _build(
+        facts=(fact,),
+        evidences=(evidence,),
+        verifications=(_verification("ver-currency", "fact-currency", "verified", "ev-currency"),),
+    )
+    assert [item["fact_id"] for item in report["confirmed"]["metrics"]] == ["fact-currency"]
+
+
+def test_markdown_shows_verification_calculation_and_screening_gaps_with_citations() -> None:
+    evidence = _evidence("ev-markdown", "营业收入 100.10")
+    fact = _fact("fact-markdown", "ev-markdown")
+    failed = CalculationResult(
+        calculation_id="calc-failed",
+        formula_id="annual_difference",
+        input_fact_ids=("fact-markdown",),
+        formula_expression="current - prior",
+        output_value=None,
+        unit="元",
+        status="failed",
+        failure_reason="追溯调整状态未知，不能比较。",
+        rule_version="v2-test",
+    )
+    report = _build(
+        facts=(fact,),
+        evidences=(evidence,),
+        verifications=(_verification("ver-markdown", "fact-markdown", "verified", "ev-markdown"),),
+        calculations=(failed,),
+        candidate_signals=(
+            {
+                "signal_id": "profit_up_cash_down",
+                "status": "abstained",
+                "reason": "缺少已成功且可比的年度差额。",
+                "left_difference": None,
+                "right_difference": "-2.00",
+                "input_fact_ids": ("fact-markdown",),
+                "calculation_ids": ("calc-failed",),
+            },
+        ),
+    )
+    markdown = render_markdown(report)
+    assert "核验限制：核验限制" in markdown
+    assert "失败原因：追溯调整状态未知，不能比较。" in markdown
+    assert "筛查原因：缺少已成功且可比的年度差额。" in markdown
+    assert "左侧差额：`未提供`" in markdown
+    assert "右侧差额：`-2.00`" in markdown
+    assert "引用 `ev-markdown`：PDF 第81页" in markdown
+    assert "坐标 bbox (10.5, 20.25, 80.5, 40.75)" in markdown
+    assert "#pdf-page-" not in markdown
 
 
 def _replace_regions(

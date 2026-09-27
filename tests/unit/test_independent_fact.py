@@ -64,6 +64,26 @@ def _base() -> list[list[tuple[int, str]]]:
     ]
 
 
+def _split_cash_flow_pdf(path: Path, final_label: str) -> str:
+    document = pymupdf.open()
+    page = document.new_page()
+    for x, y, text in (
+        (72, 72, "合并现金流量表"),
+        (72, 94, "单位：元  币种：人民币"),
+        (72, 116, "项目"),
+        (280, 116, "2024 年度"),
+        (420, 116, "2023 年度"),
+        (72, 153, "经营活动产生的现金流量净"),
+        (280, 163, "100.00"),
+        (420, 163, "80.00"),
+        (72, 173, final_label),
+    ):
+        page.insert_text((x, y), text, fontname="china-s")
+    document.save(path)
+    document.close()
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def test_verified_fact_uses_new_regions(tmp_path: Path) -> None:
     sha = _pdf(tmp_path / "ok.pdf", [_base()])
     checked = verify_financial_fact(tmp_path / "ok.pdf", _fact(sha))
@@ -93,6 +113,14 @@ def test_wrong_value_column_unit_scope_header_and_duplicate(tmp_path: Path) -> N
     )
     assert wrong_column.result.status == "conflict"
     assert verify_financial_fact(tmp_path / "a.pdf", _fact(sha, unit="万元", unit_multiplier="10000")).result.status == "conflict"
+    assert verify_financial_fact(tmp_path / "a.pdf", _fact(sha, unit="万元", unit_multiplier="1")).result.status == "conflict"
+    unknown_unit = verify_financial_fact(tmp_path / "a.pdf", _fact(sha, unit=None))
+    assert unknown_unit.result.status == "verified"
+    assert any("未提供单位" in note for note in unknown_unit.result.limitations)
+    assert verify_financial_fact(
+        tmp_path / "a.pdf",
+        _fact(sha, unit=None, unit_multiplier="10000"),
+    ).result.status == "conflict"
     assert verify_financial_fact(tmp_path / "a.pdf", _fact(sha, scope="parent")).result.status == "conflict"
     missing = _pdf(
         tmp_path / "b.pdf",
@@ -104,6 +132,64 @@ def test_wrong_value_column_unit_scope_header_and_duplicate(tmp_path: Path) -> N
         [_base() + [[(72, "其中：营业收入"), (280, "100.00"), (420, "80.00")]]],
     )
     assert verify_financial_fact(tmp_path / "c.pdf", _fact(duplicated)).result.status == "insufficient_evidence"
+
+
+def test_split_minus_and_parentheses_preserve_negative_amount(tmp_path: Path) -> None:
+    minus_lines = _base()
+    minus_lines[-1] = [(72, "其中：营业收入"), (280, "-"), (286, "100.00"), (420, "80.00")]
+    minus_sha = _pdf(tmp_path / "minus.pdf", [minus_lines])
+    negative = verify_financial_fact(
+        tmp_path / "minus.pdf",
+        _fact(minus_sha, raw_value="-100.00", normalized_value="-100.00"),
+    )
+    assert negative.result.status == "verified"
+    assert negative.evidence[0].value_raw == "-100.00"
+    assert negative.evidence[0].value_region is not None
+    assert negative.evidence[0].value_region.text == "-100.00"
+    assert negative.evidence[0].value_region.bbox.x0 < 286
+    assert verify_financial_fact(tmp_path / "minus.pdf", _fact(minus_sha)).result.status == "conflict"
+
+    parenthesized_lines = _base()
+    parenthesized_lines[-1] = [
+        (72, "其中：营业收入"),
+        (280, "("),
+        (285, "100.00"),
+        (355, ")"),
+        (420, "80.00"),
+    ]
+    paren_sha = _pdf(tmp_path / "parenthesized.pdf", [parenthesized_lines])
+    accounting_negative = verify_financial_fact(
+        tmp_path / "parenthesized.pdf",
+        _fact(paren_sha, raw_value="(100.00)", normalized_value="-100.00"),
+    )
+    assert accounting_negative.result.status == "verified"
+    assert accounting_negative.evidence[0].value_raw == "(100.00)"
+    assert accounting_negative.evidence[0].value_region is not None
+    assert accounting_negative.evidence[0].value_region.text == "(100.00)"
+    assert accounting_negative.evidence[0].value_region.bbox.x0 < 285
+    assert verify_financial_fact(tmp_path / "parenthesized.pdf", _fact(paren_sha)).result.status == "conflict"
+
+
+def test_unmatched_parenthesis_is_insufficient(tmp_path: Path) -> None:
+    lines = _base()
+    lines[-1] = [(72, "其中：营业收入"), (280, "("), (285, "100.00"), (420, "80.00")]
+    sha = _pdf(tmp_path / "unmatched.pdf", [lines])
+    checked = verify_financial_fact(
+        tmp_path / "unmatched.pdf",
+        _fact(sha, raw_value="100.00", normalized_value="100.00"),
+    )
+    assert checked.result.status == "insufficient_evidence"
+
+
+def test_distant_split_minus_is_not_silently_dropped(tmp_path: Path) -> None:
+    lines = _base()
+    lines[-1] = [(72, "其中：营业收入"), (280, "-"), (300, "100.00"), (420, "80.00")]
+    sha = _pdf(tmp_path / "distant-minus.pdf", [lines])
+    checked = verify_financial_fact(
+        tmp_path / "distant-minus.pdf",
+        _fact(sha, raw_value="100.00", normalized_value="100.00"),
+    )
+    assert checked.result.status == "insufficient_evidence"
 
 
 def test_cross_page_row_and_hash_conflict(tmp_path: Path) -> None:
@@ -130,3 +216,34 @@ def test_cross_page_row_and_hash_conflict(tmp_path: Path) -> None:
     mismatched = verify_financial_fact(tmp_path / "cross.pdf", _fact("b" * 64))
     assert mismatched.result.status == "conflict"
     assert mismatched.evidence == ()
+
+
+def test_cash_flow_label_region_contains_only_complete_recognized_label(tmp_path: Path) -> None:
+    path = tmp_path / "cash-flow.pdf"
+    sha = _split_cash_flow_pdf(path, "额")
+    fact = _fact(
+        sha,
+        fact_id="fact-cash-split-label",
+        metric_id="operating_cash_flow",
+        label_raw="经营活动产生的现金流量净额",
+        statement_type="cash_flow_statement",
+    )
+    checked = verify_financial_fact(path, fact)
+    assert checked.result.status == "verified", checked.result.limitations
+    evidence = checked.evidence[0]
+    assert evidence.row_label == "经营活动产生的现金流量净额"
+    assert evidence.row_region is not None
+    assert evidence.row_region.text == "经营活动产生的现金流量净额"
+
+
+def test_unrelated_neighbor_text_cannot_complete_cash_flow_row(tmp_path: Path) -> None:
+    path = tmp_path / "cash-flow-unrelated.pdf"
+    sha = _split_cash_flow_pdf(path, "额外说明")
+    fact = _fact(
+        sha,
+        fact_id="fact-cash-unrelated-label",
+        metric_id="operating_cash_flow",
+        label_raw="经营活动产生的现金流量净额",
+        statement_type="cash_flow_statement",
+    )
+    assert verify_financial_fact(path, fact).result.status == "insufficient_evidence"

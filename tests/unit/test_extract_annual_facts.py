@@ -258,3 +258,54 @@ def test_plain_decimal_parentheses_and_note_number() -> None:
     assert Decimal(facts[1].normalized_value) == Decimal("-1000.25")
     assert facts[0].hits[0].page_number == 6
     assert facts[0].hits[0].block_index == 3
+
+
+def test_numbered_statement_titles_footnote_reference_and_unknown_currency() -> None:
+    parsed = _parsed(
+        _page(
+            10,
+            [
+                "3、合并利润表",
+                "单位：元",
+                "项目 2024 年度 2023 年度",
+                "其中：营业收入\n40\n12,000.00 11,000.00",
+                "归属于母公司股东的净利润\n3,000.00 2,500.00",
+            ],
+        ),
+        _page(
+            11,
+            [
+                "5、合并现金流量表",
+                "单位：元",
+                "项目 2024 年度 2023 年度",
+                "经营活动产生的现金流量净额\n4,000.00 3,500.00",
+            ],
+        ),
+        _page(
+            12,
+            [
+                "九、非经常性损益项目及金额",
+                "单位：元",
+                "项目 2024 年金额 2023 年金额",
+                "合计\n-100.00 -90.00 --",
+            ],
+        ),
+    )
+
+    result = extract_annual_financial_facts(parsed, "000858", 2024)
+
+    assert result.issues == ()
+    assert len(result.facts) == 8
+    revenue = _facts(result, "营业收入")
+    assert [(fact.report_year, fact.raw_value) for fact in revenue] == [
+        (2024, "12,000.00"),
+        (2023, "11,000.00"),
+    ]
+    assert all(fact.currency == "未披露" for fact in result.facts)
+    assert all(
+        any("不得按人民币推断" in note for note in fact.limitations)
+        for fact in result.facts
+    )
+    non_recurring = _facts(result, "披露的非经常性损益合计")
+    assert all(fact.table_name == "非经常性损益项目和金额" for fact in non_recurring)
+    assert [fact.raw_value for fact in non_recurring] == ["-100.00", "-90.00"]

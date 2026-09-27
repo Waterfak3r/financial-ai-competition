@@ -4,13 +4,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
 from pydantic import BaseModel, Field
 
 from finagent.api.annual_precheck import (
     HashMismatchError,
     create_annual_precheck,
     load_annual_precheck,
+)
+from finagent.api.annual_report_read import (
+    AnnualReportReadError,
+    load_annual_report,
+    render_evidence_preview,
 )
 from finagent.core.safe_paths import PathBoundaryError
 from finagent.ingestion.errors import PdfInputError
@@ -86,6 +91,42 @@ def create_app(project_root: Path | None = None) -> FastAPI:
                 status_code=404,
                 detail={"code": "run_not_found", "message": "找不到该预检运行。"},
             ) from None
+
+    @app.get("/v1/annual-analyses/{run_id}/evidence/{evidence_id}/preview.png")
+    def get_annual_analysis_evidence_preview(run_id: str, evidence_id: str) -> Response:
+        try:
+            archive = load_annual_report(app.state.project_root, run_id)
+            image, page_number = render_evidence_preview(archive, evidence_id)
+        except AnnualReportReadError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": exc.message},
+            ) from None
+        return Response(
+            content=image,
+            media_type="image/png",
+            headers={
+                "X-PDF-Page": str(page_number),
+                "X-Report-SHA256": archive.manifest_summary["report_sha256"],
+            },
+        )
+
+    @app.get("/v1/annual-analyses/{run_id:path}")
+    def get_annual_analysis_report(run_id: str) -> dict:
+        try:
+            archive = load_annual_report(app.state.project_root, run_id)
+        except AnnualReportReadError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": exc.message},
+            ) from None
+        return {
+            "report": archive.report,
+            "manifest": archive.manifest_summary,
+            # This curated index contains only evidence_ids attached to a
+            # verified record under report.confirmed.metrics[*].
+            "verification_evidences": list(archive.verification_evidences),
+        }
 
     return app
 

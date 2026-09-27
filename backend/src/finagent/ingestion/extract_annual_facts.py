@@ -35,6 +35,7 @@ _STATEMENT_TITLES = (
     "母公司所有者权益变动表",
 )
 _NON_RECURRING_TITLE = "非经常性损益项目和金额"
+_UNDISCLOSED_CURRENCY = "未披露"
 _UNIT_MULTIPLIERS = {"元": Decimal("1"), "万元": Decimal("10000"), "亿元": Decimal("100000000")}
 _AMOUNT_RE = re.compile(
     r"[（(]\s*[-－−]?\d{1,3}(?:,\d{3})+(?:\.\d+)?\s*[）)]"
@@ -46,6 +47,8 @@ _REVENUE_MAIN = "一、营业收入"
 _REVENUE_DETAIL_LIMIT = "合并利润表没有“一、营业收入”主行，改用“其中：营业收入”。"
 _YEAR_RE = re.compile(r"(\d{4})年(?:度|金额)")
 _NOTE_RE = re.compile(r"^[一二三四五六七八九十]+、\d+[（(]?\d*[）)]?$")
+_REFERENCE_RE = re.compile(r"^\d+(?:[（(]\d+[）)])?$")
+_DASH_FILL_RE = re.compile(r"^[\-－−–—]+$")
 _SECTION_RE = re.compile(r"^\s*[一二三四五六七八九十百千]+、\s*\S")
 _NOTE_SECTION_RE = re.compile(r"^\s*[一二三四五六七八九十]+、\s*\d")
 _HARD_ROW_RE = re.compile(
@@ -133,7 +136,12 @@ def _extract_target(
         )
     built: list[FinancialFact] = []
     hits = _hits(matched[0])
-    limitations = _limitations(target, hits, extra_limits)
+    limitations = _limitations(
+        target,
+        hits,
+        extra_limits,
+        currency_confirmed=context.currency_confirmed,
+    )
     for year in (report_year, report_year - 1):
         token = amounts[context.years.index(year)]
         try:
@@ -171,6 +179,7 @@ class _Context:
     period_style: str
     unit_multiplier: Decimal
     currency: str
+    currency_confirmed: bool
     scope: str
 
 
@@ -179,7 +188,7 @@ def _table_context(
     target: _Target,
     report_year: int,
 ) -> tuple[_Context | None, ExtractionIssue | None]:
-    meta = [line.text for line in body if _is_meta_line(line.text)]
+    meta = [line.text for line in body if _is_meta_line(line.text) and not _is_furniture(line.text)]
     meta_text = "\n".join(meta)
     units = re.findall(r"单位[:：]\s*(亿元|万元|元)", meta_text)
     currencies = re.findall(r"币种[:：]\s*(人民币|美元|港元|港币|欧元|日元)", meta_text)
@@ -199,8 +208,6 @@ def _table_context(
         return None, _issue(target, "missing_unit", "表头区域没有可识别的单位。")
     if len(set(units)) > 1:
         return None, _issue(target, "conflicting_unit", "表头区域的单位互相矛盾。")
-    if not currencies:
-        return None, _issue(target, "missing_currency", "表头区域没有可识别的币种。")
     if len(set(currencies)) > 1:
         return None, _issue(target, "conflicting_currency", "表头区域的币种互相矛盾。")
     if report_year not in years or report_year - 1 not in years:
@@ -209,7 +216,17 @@ def _table_context(
     if styles[report_year - 1] != style:
         return None, _issue(target, "conflicting_year_header", "报告年度与上一年度的表头期间写法不一致。")
     scope = "合并" if "合并" in target.table_title else "披露表格口径"
-    return _Context(tuple(years), style, _UNIT_MULTIPLIERS[units[0]], currencies[0], scope), None
+    return (
+        _Context(
+            tuple(years),
+            style,
+            _UNIT_MULTIPLIERS[units[0]],
+            currencies[0] if currencies else _UNDISCLOSED_CURRENCY,
+            bool(currencies),
+            scope,
+        ),
+        None,
+    )
 
 
 def _table_body(lines: list[_Line], title_index: int, target: _Target) -> list[_Line]:
@@ -220,6 +237,8 @@ def _table_body(lines: list[_Line], title_index: int, target: _Target) -> list[_
         if line.page_number > last_page + 1:
             break
         last_page = max(last_page, line.page_number)
+        if target.table_title != _NON_RECURRING_TITLE and _is_non_recurring_title(line.text):
+            break
         if target.stop_at_section and _is_later_section(line.text):
             break
         other = _statement_title(line.text)
@@ -310,7 +329,14 @@ def _row_label(row: list[_Line]) -> str:
     parts: list[str] = []
     for line in row:
         stripped = line.text.strip()
-        if not stripped or _is_amount_only(stripped) or _NOTE_RE.fullmatch(_compact(stripped)):
+        compact = _compact(stripped)
+        if (
+            not stripped
+            or _is_amount_only(stripped)
+            or _NOTE_RE.fullmatch(compact)
+            or _REFERENCE_RE.fullmatch(compact)
+            or _DASH_FILL_RE.fullmatch(compact)
+        ):
             continue
         parts.append(stripped)
     return _compact("".join(parts))
@@ -355,8 +381,12 @@ def _limitations(
     target: _Target,
     hits: tuple[FactHit, ...],
     extra: tuple[str, ...] = (),
+    *,
+    currency_confirmed: bool = True,
 ) -> tuple[str, ...]:
     notes: list[str] = list(extra)
+    if not currency_confirmed:
+        notes.append("表头未明确披露币种，币种记为“未披露”；独立核验不得按人民币推断。")
     if len(hits) > 1:
         notes.append("行名或金额分布在相邻文字块中，已按阅读顺序拼接。")
     if target.match == "non_recurring_total":
@@ -389,13 +419,24 @@ def _line_from(page_number: int, block: PdfTextBlock, text: str) -> _Line:
 
 
 def _is_title(text: str, title: str) -> bool:
-    compact = _compact(text)
-    if compact == title:
+    compact = _canonical_title(_compact(text))
+    canonical_title = _canonical_title(title)
+    if compact == canonical_title:
         return True
-    if compact.endswith(title) and len(compact) - len(title) <= 6:
-        prefix = compact[: -len(title)]
-        return bool(re.fullmatch(r"[一二三四五六七八九十百千]+、", prefix))
+    if compact.endswith(canonical_title):
+        prefix = compact[: -len(canonical_title)]
+        return bool(re.fullmatch(r"(?:[一二三四五六七八九十百千万]+|\d+)[、．.]", prefix))
     return False
+
+
+def _canonical_title(text: str) -> str:
+    """Normalize known wording variants while preserving the source text in hits."""
+
+    return text.replace("非经常性损益项目及金额", _NON_RECURRING_TITLE)
+
+
+def _is_non_recurring_title(text: str) -> bool:
+    return _NON_RECURRING_TITLE in _canonical_title(_compact(text))
 
 
 def _statement_title(text: str) -> str | None:
@@ -410,7 +451,7 @@ def _is_later_section(text: str) -> bool:
         return False
     if not _SECTION_RE.match(text):
         return False
-    return _NON_RECURRING_TITLE not in _compact(text)
+    return not _is_non_recurring_title(text)
 
 
 def _is_meta_line(text: str) -> bool:
@@ -435,7 +476,7 @@ def _is_furniture(text: str) -> bool:
     if re.fullmatch(r"\d+\s*/\s*\d+", stripped):
         return True
     compact = _compact(stripped)
-    return compact.endswith("年度报告") and "公司" in compact and len(compact) <= 80
+    return compact.endswith(("年度报告", "年度报告全文")) and "公司" in compact and len(compact) <= 80
 
 
 def _is_amount_only(text: str) -> bool:

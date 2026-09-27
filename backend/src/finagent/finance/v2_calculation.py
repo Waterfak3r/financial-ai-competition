@@ -14,15 +14,18 @@ from finagent.schemas.financial_fact import decimal_to_str
 from finagent.schemas.financial_fact_v2 import (
     CALC_FAILED,
     CALC_SUCCEEDED,
-    RESTATEMENT_UNKNOWN,
     SCOPE_UNKNOWN,
     VERIFIED,
     CalculationResult,
     FinancialFactV2,
     VerificationResult,
 )
+from finagent.verification.comparability import (
+    AnnualComparabilityCheck,
+    comparability_mismatch_reason,
+)
 
-RULE_VERSION = "v2-annual-1"
+RULE_VERSION = "v2-annual-3"
 FORMULA_DIFFERENCE = "annual_difference"
 FORMULA_YOY = "annual_yoy_rate"
 DIFFERENCE_EXPRESSION = "current.normalized_value - comparative.normalized_value"
@@ -46,8 +49,13 @@ def calculate_v2_annual_changes(
     facts: Sequence[FinancialFactV2],
     verifications: Sequence[VerificationResult],
     report_year: int,
+    *,
+    comparability: AnnualComparabilityCheck | None = None,
 ) -> tuple[tuple[CalculationResult, ...], tuple[V2CalculationIssue, ...]]:
-    """按 metric_id 配对报告年与上一年度。缺失不当作零。"""
+    """按 metric_id 配对报告年与上一年度。缺失不当作零。
+
+    旧三参调用仍可使用，但没有从来源 PDF 独立核验的可比性证明时，年度计算失败。
+    """
 
     if type(report_year) is not int or report_year < 1900 or report_year > 2100:
         raise ValueError("report_year 必须是 1900 到 2100 之间的整数。")
@@ -76,7 +84,7 @@ def calculate_v2_annual_changes(
             continue
         grouped[fact.metric_id].append(fact)
     for metric_id in sorted(grouped):
-        _pair(metric_id, grouped[metric_id], checks, report_year, results, issues)
+        _pair(metric_id, grouped[metric_id], checks, report_year, comparability, results, issues)
     return tuple(results), tuple(issues)
 
 
@@ -85,6 +93,7 @@ def _pair(
     facts: list[FinancialFactV2],
     checks: dict[str, list[VerificationResult]],
     report_year: int,
+    comparability: AnnualComparabilityCheck | None,
     results: list[CalculationResult],
     issues: list[V2CalculationIssue],
 ) -> None:
@@ -118,18 +127,32 @@ def _pair(
     if verify_reason is not None:
         _fail_pair(results, issues, metric_id, ids, "verification", verify_reason)
         return
-    if left.restatement_status == RESTATEMENT_UNKNOWN or right.restatement_status == RESTATEMENT_UNKNOWN:
+    comparability_reason = comparability_mismatch_reason(
+        comparability,
+        document_id=left.source_document_id,
+        source_sha256=left.source_sha256,
+        report_year=report_year,
+    )
+    if comparability_reason is not None:
         _fail_pair(
             results,
             issues,
             metric_id,
             ids,
-            "restatement_unknown",
-            "追溯调整状态未知，不能当作可比，不产生已成功的同比或已核实差额。",
+            "comparability",
+            "追溯调整状态未知，不能当作可比；缺少有效年度可比性证明，不能产生已成功的同比或已核实差额："
+            + comparability_reason,
         )
         return
-    if left.restatement_status != right.restatement_status:
-        _fail_pair(results, issues, metric_id, ids, "restatement_mismatch", "两年的追溯调整状态不一致。")
+    if left.restatement_status == "restated" or right.restatement_status == "restated":
+        _fail_pair(
+            results,
+            issues,
+            metric_id,
+            ids,
+            "restatement_mismatch",
+            "事实字段与核验通过的 not_restated 可比性证明冲突。",
+        )
         return
     difference = Decimal(left.normalized_value) - Decimal(right.normalized_value)
     _succeeded(results, metric_id, FORMULA_DIFFERENCE, ids, DIFFERENCE_EXPRESSION, difference, report_year)
@@ -170,6 +193,8 @@ def _compatible(current: FinancialFactV2, prior: FinancialFactV2, report_year: i
     failed = [name for name, bad in checks if bad]
     if failed:
         return "两年事实的" + "、".join(failed) + "不一致。"
+    if current.scope == SCOPE_UNKNOWN and current.metric_id != "non_recurring_total":
+        return "普通利润、收入或现金流等指标的报表口径未知，不能计算年度差额或同比。"
     return None
 
 

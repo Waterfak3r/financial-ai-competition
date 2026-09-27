@@ -4,6 +4,9 @@ import type {
   AnnualChangeCalculation,
   AnnualPrecheckRecord,
   AnnualPrecheckRequest,
+  AnnualScreening,
+  AnnualScreeningItem,
+  AnnualScreeningStatus,
   TextPdfUploadReceipt,
   FactColumnRole,
   FactExtraction,
@@ -13,6 +16,9 @@ import type {
   PrecheckInputs,
   PrecheckIssue,
   PrecheckIssueGroups,
+  ScreeningFactHit,
+  ScreeningFactInput,
+  ScreeningValue,
   SourceAmountEvidence,
   SourceAmountResult,
   SourceAmountVerification,
@@ -293,6 +299,9 @@ function readRecord(payload: unknown): AnnualPrecheckRecord {
   if ("verification" in record) {
     parsed.verification = readVerification(record.verification);
   }
+  if ("screening" in record) {
+    parsed.screening = readScreening(record.screening);
+  }
   return parsed;
 }
 
@@ -443,6 +452,188 @@ function readVerificationResult(value: unknown): SourceAmountResult {
     amount_match: readAmountMatch(record.amount_match),
     evidence: expectArray(record.evidence, "evidence").map(readEvidence),
   };
+}
+
+function readScreening(value: unknown): AnnualScreening {
+  const path = "screening";
+  const record = screeningRecord(value, path);
+  if (record.kind !== "deterministic_annual_candidate_screen") {
+    throw screeningError(`${path}.kind`);
+  }
+  if (record.role !== "candidate_input_for_later_agent_or_report") {
+    throw screeningError(`${path}.role`);
+  }
+  return {
+    kind: "deterministic_annual_candidate_screen",
+    role: "candidate_input_for_later_agent_or_report",
+    limitation: screeningString(record.limitation, `${path}.limitation`),
+    items: screeningArray(record.items, `${path}.items`).map((item, index) =>
+      readScreeningItem(item, `${path}.items[${index}]`),
+    ),
+  };
+}
+
+function readScreeningItem(value: unknown, path: string): AnnualScreeningItem {
+  const record = screeningRecord(value, path);
+  const statementKind = record.statement_kind;
+  if (statementKind !== "inference" && statementKind !== "calculation") {
+    throw screeningError(`${path}.statement_kind`);
+  }
+  return {
+    signal_id: screeningString(record.signal_id, `${path}.signal_id`),
+    title: screeningString(record.title, `${path}.title`),
+    status: readScreeningStatus(record.status, `${path}.status`),
+    statement_kind: statementKind,
+    formula: screeningString(record.formula, `${path}.formula`),
+    inputs: screeningArray(record.inputs, `${path}.inputs`).map((input, index) =>
+      readScreeningFactInput(input, `${path}.inputs[${index}]`),
+    ),
+    value: readScreeningValue(record.value, `${path}.value`),
+    reason: screeningNullableString(record.reason, `${path}.reason`),
+    note: screeningNullableString(record.note, `${path}.note`),
+    limitation: screeningString(record.limitation, `${path}.limitation`),
+  };
+}
+
+function readScreeningStatus(value: unknown, path: string): AnnualScreeningStatus {
+  if (
+    value === "candidate" ||
+    value === "not_triggered" ||
+    value === "calculated" ||
+    value === "abstained"
+  ) {
+    return value;
+  }
+  throw screeningError(path);
+}
+
+function readScreeningFactInput(value: unknown, path: string): ScreeningFactInput {
+  const record = screeningRecord(value, path);
+  if (record.role !== "fact") {
+    throw screeningError(`${path}.role`);
+  }
+  const columnRole = record.column_role;
+  if (columnRole !== "current" && columnRole !== "comparative") {
+    throw screeningError(`${path}.column_role`);
+  }
+  return {
+    role: "fact",
+    indicator_name: screeningString(record.indicator_name, `${path}.indicator_name`),
+    report_year: screeningInteger(record.report_year, `${path}.report_year`),
+    column_role: columnRole,
+    normalized_value: screeningDecimal(record.normalized_value, `${path}.normalized_value`),
+    document_id: screeningString(record.document_id, `${path}.document_id`),
+    source_sha256: screeningString(record.source_sha256, `${path}.source_sha256`),
+    company_id: screeningString(record.company_id, `${path}.company_id`),
+    currency: screeningString(record.currency, `${path}.currency`),
+    statement_scope: screeningString(record.statement_scope, `${path}.statement_scope`),
+    period_type: screeningString(record.period_type, `${path}.period_type`),
+    hits: screeningArray(record.hits, `${path}.hits`).map((hit, index) =>
+      readScreeningFactHit(hit, `${path}.hits[${index}]`),
+    ),
+  };
+}
+
+function readScreeningFactHit(value: unknown, path: string): ScreeningFactHit {
+  const record = screeningRecord(value, path);
+  const pageNumber = screeningInteger(record.page_number, `${path}.page_number`);
+  const blockIndex = screeningInteger(record.block_index, `${path}.block_index`);
+  if (pageNumber < 1 || blockIndex < 0) {
+    throw screeningError(path);
+  }
+  return {
+    page_number: pageNumber,
+    block_index: blockIndex,
+    x0: screeningNumber(record.x0, `${path}.x0`),
+    y0: screeningNumber(record.y0, `${path}.y0`),
+    x1: screeningNumber(record.x1, `${path}.x1`),
+    y1: screeningNumber(record.y1, `${path}.y1`),
+  };
+}
+
+function readScreeningValue(value: unknown, path: string): ScreeningValue | null {
+  if (value === null) {
+    return null;
+  }
+  const record = screeningRecord(value, path);
+  if (record.role !== "calculation") {
+    throw screeningError(`${path}.role`);
+  }
+  const hasDifferences = "left_difference" in record || "right_difference" in record;
+  const hasRatio = "ratio" in record || "numerator" in record || "denominator" in record;
+  if (hasDifferences === hasRatio) {
+    throw screeningError(path);
+  }
+  if (hasDifferences) {
+    return {
+      role: "calculation",
+      left_difference: screeningDecimal(record.left_difference, `${path}.left_difference`),
+      right_difference: screeningDecimal(record.right_difference, `${path}.right_difference`),
+    };
+  }
+  return {
+    role: "calculation",
+    year: screeningInteger(record.year, `${path}.year`),
+    report_year: screeningInteger(record.report_year, `${path}.report_year`),
+    numerator: screeningDecimal(record.numerator, `${path}.numerator`),
+    denominator: screeningDecimal(record.denominator, `${path}.denominator`),
+    ratio: screeningDecimal(record.ratio, `${path}.ratio`),
+  };
+}
+
+function screeningRecord(value: unknown, path: string): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw screeningError(path);
+  }
+  return value;
+}
+
+function screeningArray(value: unknown, path: string): unknown[] {
+  if (!Array.isArray(value)) {
+    throw screeningError(path);
+  }
+  return value;
+}
+
+function screeningString(value: unknown, path: string): string {
+  if (typeof value !== "string") {
+    throw screeningError(path);
+  }
+  return value;
+}
+
+function screeningNullableString(value: unknown, path: string): string | null {
+  if (value === null || typeof value === "string") {
+    return value;
+  }
+  throw screeningError(path);
+}
+
+function screeningNumber(value: unknown, path: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw screeningError(path);
+  }
+  return value;
+}
+
+function screeningInteger(value: unknown, path: string): number {
+  const number = screeningNumber(value, path);
+  if (!Number.isInteger(number)) {
+    throw screeningError(path);
+  }
+  return number;
+}
+
+function screeningDecimal(value: unknown, path: string): string {
+  const decimal = screeningString(value, path);
+  if (!/^-?\d+(?:\.\d+)?$/.test(decimal)) {
+    throw screeningError(path);
+  }
+  return decimal;
+}
+
+function screeningError(path: string): PrecheckApiError {
+  return new PrecheckApiError(`预检记录的筛查字段 ${path} 格式错误，无法显示筛查结果。`);
 }
 
 function readAmountMatch(value: unknown): AmountMatch | null {

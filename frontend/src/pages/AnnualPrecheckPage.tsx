@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import type { FormEvent, ReactNode, RefObject } from "react";
+import { AnnualAnalysisPage } from "./AnnualAnalysisPage";
 import {
   createAnnualPrecheck,
   loadAnnualPrecheck,
@@ -10,6 +11,10 @@ import {
 import type {
   AnnualChange,
   AnnualPrecheckRecord,
+  AnnualScreening,
+  AnnualScreeningItem,
+  ScreeningFactInput,
+  ScreeningValue,
   FactColumnRole,
   FinancialFact,
   PrecheckIssue,
@@ -37,7 +42,7 @@ interface FieldErrors {
 }
 
 type RequestPhase = "idle" | "uploading" | "creating" | "loading";
-type AppView = "home" | "create" | "result" | "report";
+type AppView = "home" | "create" | "result" | "report" | "annual-analysis";
 type ReportSection = "status" | "scope" | "record";
 
 export function AnnualPrecheckPage() {
@@ -231,7 +236,7 @@ export function AnnualPrecheckPage() {
           <span className="brand-mark" aria-hidden="true" />
           财务智析
         </p>
-        <nav aria-label="预检功能">
+        <nav aria-label="年度分析与预检">
           <ul className="nav-list">
             <li>
               <NavButton view="home" current={view} onSelect={setView} icon={<HomeIcon />} label="首页" />
@@ -245,32 +250,39 @@ export function AnnualPrecheckPage() {
             <li>
               <NavButton view="report" current={view} onSelect={setView} icon={<DocIcon />} label="报告" />
             </li>
+            <li>
+              <NavButton view="annual-analysis" current={view} onSelect={setView} icon={<DocIcon />} label="年度分析" />
+            </li>
           </ul>
         </nav>
       </aside>
       <div className="workspace">
         <header className="topbar">
-          <form className="lookup" onSubmit={onLoad} noValidate>
-            <label htmlFor="run-id">运行 ID</label>
-            <input
-              id="run-id"
-              value={runId}
-              disabled={busy}
-              autoComplete="off"
-              spellCheck={false}
-              aria-invalid={fieldErrors.runId !== undefined}
-              aria-describedby={fieldErrors.runId === undefined ? undefined : "run-id-help"}
-              placeholder="输入 run_id 回看"
-              onChange={(event) => setRunId(event.target.value)}
-            />
-            <button type="submit" disabled={busy}>
-              回看
-            </button>
-          </form>
-          <p className="top-note">本地预检 · 无账户</p>
+          {view === "annual-analysis" ? null : (
+            <form className="lookup" onSubmit={onLoad} noValidate>
+              <label htmlFor="run-id">运行 ID</label>
+              <input
+                id="run-id"
+                value={runId}
+                disabled={busy}
+                autoComplete="off"
+                spellCheck={false}
+                aria-invalid={fieldErrors.runId !== undefined}
+                aria-describedby={fieldErrors.runId === undefined ? undefined : "run-id-help"}
+                placeholder="输入 run_id 回看"
+                onChange={(event) => setRunId(event.target.value)}
+              />
+              <button type="submit" disabled={busy}>
+                回看
+              </button>
+            </form>
+          )}
+          <p className="top-note">
+            {view === "annual-analysis" ? "本地年度报告 · 只读归档" : "本地预检 · 无账户"}
+          </p>
         </header>
         <main className="content" aria-busy={busy}>
-          {phase === "idle" ? null : (
+          {view === "annual-analysis" || phase === "idle" ? null : (
             <p role="status" className="status-line">
               {phase === "creating"
                 ? "正在创建预检。接口同步返回，页面没有单独的任务进度。"
@@ -279,12 +291,12 @@ export function AnnualPrecheckPage() {
                   : "正在读取该次运行。"}
             </p>
           )}
-          {requestError !== null ? (
+          {view !== "annual-analysis" && requestError !== null ? (
             <p role="alert" className="alert">
               {requestError}
             </p>
           ) : null}
-          {fieldErrors.runId !== undefined ? (
+          {view !== "annual-analysis" && fieldErrors.runId !== undefined ? (
             <p id="run-id-help" className="field-error">
               {fieldErrors.runId}
             </p>
@@ -334,6 +346,7 @@ export function AnnualPrecheckPage() {
               onResult={() => setView("result")}
             />
           ) : null}
+          {view === "annual-analysis" ? <AnnualAnalysisPage /> : null}
         </main>
       </div>
     </div>
@@ -958,6 +971,17 @@ function PrecheckResult({
         )}
       </div>
 
+      {record.screening === undefined ? (
+        <div className="panel screening-panel screening-missing-panel">
+          <h3>旧版确定性筛查</h3>
+          <p className="empty">
+            这条历史记录未保存 screening 结果；页面不据此推断筛查是否触发或是否弃权。
+          </p>
+        </div>
+      ) : (
+        <ScreeningBlock screening={record.screening} />
+      )}
+
       <div className="panel">
         <h3>问题与局限</h3>
         <h4>提取问题</h4>
@@ -978,6 +1002,132 @@ function PrecheckResult({
         )}
       </div>
     </section>
+  );
+}
+
+function ScreeningBlock({ screening }: { screening: AnnualScreening }) {
+  return (
+    <div className="panel screening-panel">
+      <h3>旧版确定性筛查</h3>
+      <aside className="screening-warning" role="note">
+        <strong>候选异常不是确认舞弊。</strong>
+        <span>
+          这些是旧预检保存的规则筛查结果，只能作为后续核查线索或描述性计算；它们不独立验证输入事实、年度列或报表口径，也不会改变上方的独立核验状态。
+        </span>
+      </aside>
+      <p className="screening-root-limitation">
+        <strong>整体局限：</strong>{screening.limitation}
+      </p>
+      {screening.items.length === 0 ? (
+        <p className="empty">这条历史记录没有筛查项目。</p>
+      ) : (
+        <div className="screening-list">
+          {screening.items.map((item, index) => (
+            <ScreeningItemView key={`${item.signal_id}-${index}`} item={item} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ScreeningItemView({ item }: { item: AnnualScreeningItem }) {
+  return (
+    <article className="screening-item">
+      <div className="screening-item-head">
+        <div>
+          <h4>{item.title}</h4>
+          <p className="sub">
+            <code>{item.signal_id}</code> · {item.statement_kind === "inference" ? "推论线索" : "描述性计算"}
+          </p>
+        </div>
+        <span className={`screening-status screening-status-${item.status}`}>
+          {screeningStatusText(item.status)}
+        </span>
+      </div>
+      <div className="screening-info-grid">
+        <div className="screening-detail">
+          <h5>公式</h5>
+          <p>{item.formula}</p>
+        </div>
+        <div className="screening-detail">
+          <h5>数值</h5>
+          <ScreeningValueDetails value={item.value} />
+        </div>
+        <div className="screening-detail screening-wide">
+          <h5>输入事实与引用页</h5>
+          <ScreeningInputs inputs={item.inputs} />
+        </div>
+        <div className="screening-detail screening-wide">
+          <h5>原因、备注与局限</h5>
+          <dl className="screening-meta">
+            <dt>原因</dt>
+            <dd>{item.reason ?? "无额外原因说明"}</dd>
+            <dt>备注</dt>
+            <dd>{item.note ?? "无备注"}</dd>
+            <dt>局限</dt>
+            <dd>{item.limitation}</dd>
+          </dl>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function ScreeningValueDetails({ value }: { value: ScreeningValue | null }) {
+  if (value === null) {
+    return <p className="empty screening-empty-value">没有形成数值。</p>;
+  }
+  if ("left_difference" in value) {
+    return (
+      <dl className="screening-meta">
+        <dt>左侧差额</dt>
+        <dd className="num"><DecimalValue value={value.left_difference} /></dd>
+        <dt>右侧差额</dt>
+        <dd className="num"><DecimalValue value={value.right_difference} /></dd>
+      </dl>
+    );
+  }
+  return (
+    <dl className="screening-meta">
+      <dt>计算年度</dt>
+      <dd>{value.year}</dd>
+      <dt>报告年度</dt>
+      <dd>{value.report_year}</dd>
+      <dt>分子</dt>
+      <dd className="num"><DecimalValue value={value.numerator} /></dd>
+      <dt>分母</dt>
+      <dd className="num"><DecimalValue value={value.denominator} /></dd>
+      <dt>比值</dt>
+      <dd className="num"><DecimalValue value={value.ratio} /></dd>
+    </dl>
+  );
+}
+
+function ScreeningInputs({ inputs }: { inputs: ScreeningFactInput[] }) {
+  if (inputs.length === 0) {
+    return <p className="empty">没有输入事实引用。</p>;
+  }
+  return (
+    <ul className="screening-input-list">
+      {inputs.map((fact, index) => (
+        <li key={`${fact.document_id}-${fact.indicator_name}-${fact.report_year}-${fact.column_role}-${index}`}>
+          <strong>
+            {fact.indicator_name}（{fact.report_year} 年，{columnRoleText(fact.column_role)}）
+          </strong>
+          <dl className="screening-meta">
+            <dt>文档标识</dt>
+            <dd><code>{fact.document_id}</code></dd>
+            <dt>规范值</dt>
+            <dd className="num"><DecimalValue value={fact.normalized_value} /></dd>
+            <dt>引用页</dt>
+            <dd>{screeningInputPageList(fact)}</dd>
+            <dt>公司与口径</dt>
+            <dd>{fact.company_id} · {fact.currency} · {fact.statement_scope} · {fact.period_type}</dd>
+          </dl>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -1250,6 +1400,16 @@ function pageList(fact: FinancialFact): string {
     .join("、");
 }
 
+function screeningInputPageList(fact: ScreeningFactInput): string {
+  if (fact.hits.length === 0) {
+    return "无引用页";
+  }
+  return fact.hits
+    .map((hit) => `第 ${hit.page_number} 页（块 ${hit.block_index}）`)
+    .filter((label, index, labels) => labels.indexOf(label) === index)
+    .join("、");
+}
+
 function columnRoleText(role: FactColumnRole): string {
   return role === "current" ? "报告年" : "比较年";
 }
@@ -1274,6 +1434,19 @@ function statusText(status: string): string {
       return "弃权";
     default:
       return status;
+  }
+}
+
+function screeningStatusText(status: AnnualScreeningItem["status"]): string {
+  switch (status) {
+    case "candidate":
+      return "候选线索";
+    case "not_triggered":
+      return "未触发";
+    case "calculated":
+      return "描述性计算";
+    case "abstained":
+      return "弃权";
   }
 }
 

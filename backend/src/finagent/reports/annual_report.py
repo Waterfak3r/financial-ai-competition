@@ -1,7 +1,7 @@
 """把 v2 事实、证据、核验、计算、主张和候选线索整理成 FINTRACE 年度财报分析报告。
 
-只做引用校验和分区，不重新计算，不调用模型，也不写文件。
-verified 不能单独把对象送入已确认区，还必须对上证据和文档哈希。
+报告分区时独立重算受支持的年度计算，并核验事实、计算类 Claim 的确定性文本。
+不调用模型，也不写文件。
 """
 
 from __future__ import annotations
@@ -14,8 +14,6 @@ from typing import Any
 from finagent.schemas.financial_fact import decimal_to_str
 from finagent.schemas.financial_fact_v2 import (
     CALC_SUCCEEDED,
-    CLAIM_CALCULATION,
-    CLAIM_FACT,
     CLAIM_HYPOTHESIS,
     CLAIM_INFERENCE,
     SCOPE_CONSOLIDATED,
@@ -29,10 +27,12 @@ from finagent.schemas.financial_fact_v2 import (
     VerificationResult,
     contains_complete_raw_token,
 )
+from finagent.verification.claim import verify_claim
+from finagent.verification.comparability import AnnualComparabilityCheck
+from finagent.verification.independent_calculation import verify_annual_calculation
 
 _SHA = re.compile(r"^[0-9a-fA-F]{64}$")
 _REPORT_TITLE = "FINTRACE 年度财报分析报告"
-_VERIFIED_CLAIM_TYPES = {CLAIM_FACT, CLAIM_CALCULATION}
 _INTERPRETATION_TYPES = {CLAIM_INFERENCE, CLAIM_HYPOTHESIS}
 _FACT_TYPES = {"financial_fact", "fact"}
 _CALC_TYPES = {"calculation"}
@@ -58,6 +58,7 @@ def build_annual_report(
     candidate_signals: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None,
     limitations: Sequence[str] = (),
     model_called: bool | None = None,
+    comparability: AnnualComparabilityCheck | None = None,
 ) -> dict[str, Any]:
     """组装报告字典。调用方负责归档，本函数不写磁盘。"""
 
@@ -118,12 +119,18 @@ def build_annual_report(
         group.sort(key=lambda item: item.verification_id)
 
     confirmed_ids: set[str] = set()
+    confirmed_fact_evidence_ids: dict[str, set[str]] = {}
     confirmed_metrics: list[dict[str, Any]] = []
     pending_facts: list[dict[str, Any]] = []
     for fact in sorted(fact_list, key=lambda item: item.fact_id):
         record, confirmed = _place_fact(fact, evidences_by_id, verifications_for.get(("fact", fact.fact_id), ()))
         if confirmed:
             confirmed_ids.add(fact.fact_id)
+            confirmed_fact_evidence_ids[fact.fact_id] = _confirmed_fact_evidence_ids(
+                fact,
+                verifications_for.get(("fact", fact.fact_id), ()),
+                evidences_by_id,
+            )
             confirmed_metrics.append(record)
         else:
             pending_facts.append(record)
@@ -137,6 +144,8 @@ def build_annual_report(
             facts_by_id,
             evidences_by_id,
             verifications_for.get(("calculation", calculation.calculation_id), ()),
+            report_year,
+            comparability,
         )
         if confirmed:
             confirmed_analyses.append(record)
@@ -154,8 +163,11 @@ def build_annual_report(
             evidences_by_id,
             confirmed_ids,
             {item["calculation_id"] for item in confirmed_analyses},
+            confirmed_fact_evidence_ids,
+            facts_by_id,
+            calculations_by_id,
         )
-        if claim.claim_type in _INTERPRETATION_TYPES:
+        if record["placement"] == "interpretations":
             interpretations.append(record)
         elif record["placement"] == "verified_claims":
             verified_claims.append(record)
@@ -183,9 +195,13 @@ def build_annual_report(
         "source_sha256": source_sha256.lower(),
         "fraud_conclusion": None,
         "scope": {
-            "note": "本报告只整理调用方给出的事实、证据、核验、计算、主张和候选线索，不重新计算，也不确认舞弊。",
+            "note": (
+                "本报告检查事实与引证是否对齐，按受控公式独立重算受支持的年度差额和同比率，"
+                "并用确定规则核对事实与计算类主张；推论和假设单独列示。报告不调用模型，也不确认舞弊。"
+            ),
             "gaps": gaps,
         },
+        "comparability": None if comparability is None else comparability.to_dict(),
         "confirmed": {"metrics": confirmed_metrics, "analyses": confirmed_analyses},
         "verified_claims": verified_claims,
         "interpretations": interpretations,
@@ -230,6 +246,40 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         lines.append("- 已提供的对象都进入了已确认区或待核查区。")
     else:
         lines.extend(f"- {gap}" for gap in gaps)
+    comparability = report.get("comparability")
+    if comparability is not None:
+        lines.extend(["", "## 年度可比性核验", ""])
+        lines.extend(
+            [
+                f"- 核验状态：`{comparability['status']}`",
+                f"- 追溯调整状态：`{comparability['restatement_status']}`",
+                f"- 覆盖期间：{comparability['current_year']} 年本期与 {comparability['comparative_year']} 年比较期",
+            ]
+        )
+        for check in comparability["checks"]:
+            lines.append(f"- 已检查：{check}")
+        for conflict in comparability["conflicts"]:
+            lines.append(f"- 冲突：{conflict}")
+        for limitation in comparability["limitations"]:
+            lines.append(f"- 限制：{limitation}")
+        if not comparability["evidence"]:
+            lines.append("- 没有可定位的原文可比性证据。")
+        for evidence in comparability["evidence"]:
+            bbox = evidence["bbox"]
+            lines.extend(
+                [
+                    "",
+                    f"### `{evidence['topic']}`（PDF 第{evidence['pdf_page']}页）",
+                    "",
+                    f"- 证据 ID：`{evidence['evidence_id']}`",
+                    (
+                        f"- 坐标 bbox：`{bbox['x0']}, {bbox['y0']}, "
+                        f"{bbox['x1']}, {bbox['y1']}`"
+                    ),
+                    f"- 原文确认报告年份：PDF 第{evidence['report_year_page']}页，{evidence['report_year_text']}",
+                    "> " + "\n> ".join(str(evidence["text"]).splitlines()),
+                ]
+            )
     lines.extend(["", "## 已确认指标与分析", ""])
     confirmed = report["confirmed"]
     if not confirmed["metrics"] and not confirmed["analyses"]:
@@ -258,8 +308,12 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         lines.extend(_analysis_lines(analysis, pending=True))
     for claim in pending["claims"]:
         lines.extend(_claim_lines(claim))
+    fact_records = {
+        metric["fact_id"]: metric
+        for metric in (*confirmed["metrics"], *pending["facts"])
+    }
     for signal in pending["candidate_signals"]:
-        lines.extend(_signal_lines(signal))
+        lines.extend(_signal_lines(signal, fact_records))
     for evidence in pending["uncited_evidences"]:
         lines.extend(["", f"### 未引用证据 `{evidence['evidence_id']}`", "", _page_text(evidence)])
     lines.extend(["", "## 限制", ""])
@@ -298,6 +352,8 @@ def _place_calculation(
     facts: Mapping[str, FinancialFactV2],
     evidences: Mapping[str, TableCellEvidence],
     verifications: Sequence[VerificationResult],
+    report_year: int,
+    comparability: AnnualComparabilityCheck | None,
 ) -> tuple[dict[str, Any], bool]:
     reasons: list[str] = []
     if calculation.status != CALC_SUCCEEDED or calculation.output_value is None:
@@ -305,20 +361,19 @@ def _place_calculation(
     missing_inputs = [fact_id for fact_id in calculation.input_fact_ids if fact_id not in confirmed_fact_ids]
     if missing_inputs:
         reasons.append("输入事实未全部进入已确认指标。")
-    verified = [item for item in verifications if item.status == VERIFIED]
     blocking = [item for item in verifications if item.status != VERIFIED]
-    if not verifications:
-        reasons.append("没有核验对象。")
     if blocking:
         reasons.append("存在 conflict 或 insufficient_evidence 核验，不能进入已确认区。")
-    usable = [
-        item
-        for item in verified
-        if _verification_supports_calculation(calculation, facts, item, evidences)
-    ]
-    if verified and not usable:
-        reasons.append("计算核验须为每个输入事实提供独立可用证据，并在 checks 中写明公式重算或结果校验依据。")
-    confirmed = not reasons and bool(usable)
+    independent_check = verify_annual_calculation(
+        calculation,
+        facts,
+        verified_fact_ids=confirmed_fact_ids,
+        report_year=report_year,
+        comparability=comparability,
+    )
+    if independent_check.status != "verified":
+        reasons.append("独立计算核验未通过：" + (independent_check.reason or "未能确认计算结果。"))
+    confirmed = not reasons and independent_check.status == "verified"
     record = {
         "calculation_id": calculation.calculation_id,
         "formula_id": calculation.formula_id,
@@ -330,6 +385,7 @@ def _place_calculation(
         "failure_reason": calculation.failure_reason,
         "rule_version": calculation.rule_version,
         "verifications": [_verification_record(item) for item in verifications],
+        "independent_verification": independent_check.to_dict(),
         "placement_reasons": [] if confirmed else reasons,
     }
     return record, confirmed
@@ -374,43 +430,37 @@ def _claim_record(
     evidences: Mapping[str, TableCellEvidence],
     confirmed_fact_ids: set[str],
     confirmed_calculation_ids: set[str],
+    confirmed_fact_evidence_ids: Mapping[str, set[str]],
+    facts: Mapping[str, FinancialFactV2],
+    calculations: Mapping[str, CalculationResult],
 ) -> dict[str, Any]:
     payload = claim.to_dict()
     payload["verifications"] = [_verification_record(item) for item in verifications]
     payload["evidences"] = [_evidence_record(evidences[evidence_id]) for evidence_id in claim.supporting_evidence_ids]
-    if claim.claim_type in _INTERPRETATION_TYPES:
+    independent_check = verify_claim(
+        claim,
+        facts,
+        calculations,
+        verified_fact_ids=confirmed_fact_ids,
+        verified_calculation_ids=confirmed_calculation_ids,
+        verified_fact_evidence_ids=confirmed_fact_evidence_ids,
+    )
+    payload["independent_verification"] = independent_check.to_dict()
+    if claim.claim_type in _INTERPRETATION_TYPES and independent_check.status == "interpretation":
         payload["placement"] = "interpretations"
         payload["requires_alternative_explanations"] = True
         payload["requires_follow_up_items"] = True
-        payload["placement_reasons"] = ["推论或假设单独列出，并保留限制、替代解释和后续核查。"]
+        payload["placement_reasons"] = [independent_check.reason or "推论或假设单独列出。"]
         return payload
-    if _claim_is_verified(claim, verifications, confirmed_fact_ids, confirmed_calculation_ids):
+    if independent_check.status == "verified":
         payload["placement"] = "verified_claims"
         payload["placement_reasons"] = []
         return payload
     payload["placement"] = "pending_review"
-    payload["placement_reasons"] = ["事实或计算主张所支持的事实或计算未全部进入已确认区。"]
+    payload["placement_reasons"] = [
+        independent_check.reason or "事实或计算主张未通过确定性 Claim 核验。"
+    ]
     return payload
-
-
-def _claim_is_verified(
-    claim: Claim,
-    verifications: Sequence[VerificationResult],
-    confirmed_fact_ids: set[str],
-    confirmed_calculation_ids: set[str],
-) -> bool:
-    if claim.claim_type not in _VERIFIED_CLAIM_TYPES or claim.verification_status != VERIFIED:
-        return False
-    verified = [item for item in verifications if item.status == VERIFIED]
-    if not verified or any(item.status != VERIFIED for item in verifications):
-        return False
-    if claim.claim_type == CLAIM_FACT and not claim.supporting_fact_ids:
-        return False
-    if claim.claim_type == CLAIM_CALCULATION and not claim.calculation_ids:
-        return False
-    if any(fact_id not in confirmed_fact_ids for fact_id in claim.supporting_fact_ids):
-        return False
-    return all(calculation_id in confirmed_calculation_ids for calculation_id in claim.calculation_ids)
 
 
 def _signal_record(signal: Mapping[str, Any]) -> dict[str, Any]:
@@ -434,42 +484,20 @@ def _verification_supports_fact(
     return any(_evidence_matches_fact(fact, evidence) for evidence in cited)
 
 
-def _verification_supports_calculation(
-    calculation: CalculationResult,
-    facts: Mapping[str, FinancialFactV2],
-    verification: VerificationResult,
+def _confirmed_fact_evidence_ids(
+    fact: FinancialFactV2,
+    verifications: Sequence[VerificationResult],
     evidences: Mapping[str, TableCellEvidence],
-) -> bool:
-    if verification.status != VERIFIED or calculation.output_value is None or not calculation.input_fact_ids:
-        return False
-    if not _calculation_checks_support(verification, calculation):
-        return False
-    cited = [evidences[evidence_id] for evidence_id in verification.evidence_ids]
-    used: set[str] = set()
-    for fact_id in calculation.input_fact_ids:
-        fact = facts.get(fact_id)
-        if fact is None:
-            return False
-        match = next(
-            (
-                evidence
-                for evidence in cited
-                if evidence.evidence_id not in used and _evidence_matches_fact(fact, evidence)
-            ),
-            None,
-        )
-        if match is None:
-            return False
-        used.add(match.evidence_id)
-    return True
+) -> set[str]:
+    """收集实际匹配事实的已核验来源证据，供 Claim 检查引用绑定。"""
 
-
-def _calculation_checks_support(verification: VerificationResult, calculation: CalculationResult) -> bool:
-    text = "\n".join(verification.checks)
-    if "公式重算" not in text and "结果校验" not in text:
-        return False
-    output_value = calculation.output_value or ""
-    return calculation.formula_expression in text or output_value in text
+    return {
+        evidence_id
+        for verification in verifications
+        if verification.status == VERIFIED
+        for evidence_id in verification.evidence_ids
+        if _evidence_matches_fact(fact, evidences[evidence_id])
+    }
 
 
 def _is_legacy_text_only(evidence: TableCellEvidence) -> bool:
@@ -486,7 +514,7 @@ def _evidence_matches_fact(fact: FinancialFactV2, evidence: TableCellEvidence) -
         return False
     if evidence.value_raw != fact.raw_value or evidence.value_normalized != fact.normalized_value:
         return False
-    if evidence.currency != fact.currency or not _unit_matches_multiplier(fact, evidence):
+    if not _currency_matches(fact.currency, evidence.currency) or not _unit_matches_multiplier(fact, evidence):
         return False
     if evidence.period_start != fact.period_start or evidence.period_end != fact.period_end:
         return False
@@ -517,6 +545,12 @@ def _unit_matches_multiplier(fact: FinancialFactV2, evidence: TableCellEvidence)
     if not expected.is_finite() or expected != from_region:
         return False
     return fact.unit is None or fact.unit == evidence.unit
+
+
+def _currency_matches(fact_currency: str, evidence_currency: str | None) -> bool:
+    if evidence_currency == fact_currency:
+        return True
+    return {fact_currency, evidence_currency} == {"人民币", "CNY"}
 
 
 def _multiplier_from_unit_text(text: str) -> Decimal | None:
@@ -554,8 +588,13 @@ def _scope_matches(fact: FinancialFactV2, evidence: TableCellEvidence) -> bool:
         return "母公司" in title and "合并" not in title and "母公司" in table and "合并" not in table
     if fact.scope == SCOPE_UNKNOWN and fact.metric_id == "non_recurring_total":
         canonical = _compact("非经常性损益项目和金额")
-        return title == canonical and table == canonical
+        return _non_recurring_title(title) == canonical and _non_recurring_title(table) == canonical
     return False
+
+
+def _non_recurring_title(text: str) -> str:
+    compact = _compact(text)
+    return re.sub(r"^(?:[一二三四五六七八九十百千]+、|\d+[、.．])", "", compact)
 
 
 def _compact(text: str) -> str:
@@ -668,6 +707,7 @@ def _metric_lines(metric: Mapping[str, Any], *, pending: bool = False) -> list[s
         lines.append(f"- 核验 `{verification['verification_id']}`：{verification['status']}")
         lines.extend(f"  - 分项：{check}" for check in verification["checks"])
         lines.extend(f"  - 冲突：{conflict}" for conflict in verification["conflicts"])
+        lines.extend(f"  - 核验限制：{item}" for item in verification["limitations"])
     lines.extend(f"- 限制：{item}" for item in metric["limitations"])
     lines.extend(f"- 分区原因：{item}" for item in metric.get("placement_reasons", []))
     return lines
@@ -688,6 +728,16 @@ def _analysis_lines(analysis: Mapping[str, Any], *, pending: bool = False) -> li
     for verification in analysis["verifications"]:
         lines.append(f"- 核验 `{verification['verification_id']}`：{verification['status']}")
         lines.extend(f"  - 分项：{check}" for check in verification["checks"])
+        lines.extend(f"  - 核验限制：{item}" for item in verification["limitations"])
+    independent = analysis.get("independent_verification")
+    if independent is not None:
+        lines.append(f"- 独立重算核验：{independent['status']}")
+        if independent["recomputed_value"] is not None:
+            lines.append(f"- 独立重算值：`{independent['recomputed_value']}`")
+        if independent["reason"] is not None:
+            lines.append(f"- 独立核验原因：{independent['reason']}")
+    if analysis["failure_reason"] is not None:
+        lines.append(f"- 失败原因：{analysis['failure_reason']}")
     lines.extend(f"- 分区原因：{item}" for item in analysis["placement_reasons"])
     return lines
 
@@ -703,7 +753,7 @@ def _claim_lines(claim: Mapping[str, Any]) -> list[str]:
         "",
         claim["text"],
         "",
-        f"- 核验状态：{claim['verification_status']}",
+        f"- 核验状态：{claim.get('independent_verification', {}).get('status', claim['verification_status'])}",
     ]
     if claim["claim_type"] in {CLAIM_INFERENCE, CLAIM_HYPOTHESIS} or claim["alternative_explanations"] or claim["follow_up_items"]:
         alternatives = claim["alternative_explanations"] or ["未提供替代解释。"]
@@ -713,11 +763,21 @@ def _claim_lines(claim: Mapping[str, Any]) -> list[str]:
         lines.append("- 后续核查：")
         lines.extend(f"  - {item}" for item in follow_ups)
     lines.extend(f"- 限制：{item}" for item in claim["limitations"])
+    for verification in claim["verifications"]:
+        lines.append(f"- 核验 `{verification['verification_id']}`：{verification['status']}")
+        lines.extend(f"  - 核验限制：{item}" for item in verification["limitations"])
+    independent = claim.get("independent_verification")
+    if independent is not None:
+        lines.append(f"- 独立主张核验：{independent['status']}")
+        if independent["reason"] is not None:
+            lines.append(f"- 独立核验原因：{independent['reason']}")
+        if independent["expected_text"] is not None and independent["status"] != "verified":
+            lines.append(f"- 受控文本应为：{independent['expected_text']}")
     lines.extend(f"- 分区原因：{item}" for item in claim["placement_reasons"])
     return lines
 
 
-def _signal_lines(signal: Mapping[str, Any]) -> list[str]:
+def _signal_lines(signal: Mapping[str, Any], facts: Mapping[str, Mapping[str, Any]]) -> list[str]:
     title = signal.get("title") or signal["signal_id"]
     lines = [
         "",
@@ -727,10 +787,34 @@ def _signal_lines(signal: Mapping[str, Any]) -> list[str]:
         f"- 状态：{signal.get('status', '未提供')}",
         "- 这是候选线索，不是确认舞弊。",
     ]
+    if "reason" in signal:
+        lines.append(f"- 筛查原因：{signal['reason'] or '上游未提供'}")
+    for key, label in (("left_difference", "左侧差额"), ("right_difference", "右侧差额")):
+        if key in signal:
+            value = signal[key]
+            lines.append(f"- {label}：`{value if value is not None else '未提供'}`")
     if signal.get("formula") is not None:
         lines.append(f"- 公式：`{signal['formula']}`")
     if signal.get("value") is not None:
         lines.append(f"- 数值：`{signal['value']}`")
+    calculation_ids = signal.get("calculation_ids", [])
+    if calculation_ids:
+        lines.append(f"- 计算引用：{', '.join(f'`{item}`' for item in calculation_ids)}")
+    fact_ids = signal.get("input_fact_ids", [])
+    if fact_ids:
+        lines.append(f"- 输入事实：{', '.join(f'`{item}`' for item in fact_ids)}")
+        cited: set[str] = set()
+        for fact_id in fact_ids:
+            fact = facts.get(fact_id)
+            if fact is None:
+                continue
+            evidence_records = fact.get("verification_evidences") or fact.get("evidences", [])
+            for evidence in evidence_records:
+                evidence_id = evidence.get("evidence_id")
+                if not isinstance(evidence_id, str) or evidence_id in cited:
+                    continue
+                cited.add(evidence_id)
+                lines.append(f"  - 引用 `{evidence_id}`：{_page_text(evidence)}")
     lines.extend(f"- 分区原因：{item}" for item in signal["placement_reasons"])
     return lines
 
@@ -748,17 +832,17 @@ def _page_text(evidence: Mapping[str, Any]) -> str:
     page = evidence["pdf_page"]
     printed = evidence.get("printed_page")
     printed_text = f"，印刷页 {printed}" if printed is not None else ""
-    anchor = f"[第{page}页](#pdf-page-{page})"
+    pdf_page = f"PDF 第{page}页"
     detail = "；".join(regions) if regions else "没有区域坐标"
-    return f"{anchor}{printed_text}；行：{row}；列：{column}；期间：{period}；单位：{unit}；{detail}"
+    return f"{pdf_page}{printed_text}；行：{row}；列：{column}；期间：{period}；单位：{unit}；{detail}"
 
 
 def _region_text(region: Mapping[str, Any]) -> str:
     bbox = region["bbox"]
     page = region["page"]
     return (
-        f"[第{page}页](#pdf-page-{page}) "
-        f"bbox ({bbox['x0']}, {bbox['y0']}, {bbox['x1']}, {bbox['y1']}) {region['text']}"
+        f"PDF 第{page}页，坐标 bbox "
+        f"({bbox['x0']}, {bbox['y0']}, {bbox['x1']}, {bbox['y1']})：{region['text']}"
     )
 
 

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "finagent"
 version = "0.1.0"
-description = "文本型 PDF 解析、四项年度事实、确定性同比和本地预检 API。不含 LangGraph、通用财报抽取或舞弊分析。"
+description = "文本型 PDF 解析、确定性年度分析和本地预检 API；LangGraph 年报调查通过可选依赖启用。"
 requires-python = ">=3.11"
 dependencies = [
     "pymupdf>=1.24",
@@ -19,10 +19,13 @@ test = [
     "pytest>=8",
     "httpx>=0.27",
 ]
+agents = [
+    "langgraph>=1.2,<1.3",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
-testpaths = ["../tests/unit"]
+pythonpath = ["src", ".."]
+testpaths = ["../tests/unit", "../tests/integration"]

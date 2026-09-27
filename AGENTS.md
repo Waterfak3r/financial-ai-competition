@@ -4,8 +4,11 @@
 
 ## 1. 项目定位与当前阶段
 
-- 目标：FINTRACE，面向非金融上市公司文本型年报，构建可追溯、可核验的财务异常分析。当前从海天 603288 的 2024 年报起步。路线见 docs/roadmap.md，字段审计见 docs/current-schema-audit.md。异常线索不是确认舞弊。
-- 技术方向：云端 API + 本地轻量 Web + 本地统计计算。React + TypeScript + Vite 前端、Python + FastAPI 后端在本地运行；LangGraph 作为第一版唯一的智能体编排框架，云端模型由后端调用，财务计算及数值核验在本地执行。模型连接器使用 OpenAI 兼容 Chat Completions 的共有子集，候选供应方包括 Qwen、DeepSeek 和 OpenAI；具体供应方与型号由环境变量配置，项目未选定默认值。本地年度预检接口已使用 FastAPI，并有本机年度预检页面。应用本身不强制 host；按文档启动命令，后端默认绑定 127.0.0.1:8000，Vite 开发服务绑定 127.0.0.1:5173，并把 `/api` 代理到该后端。浏览器不持有模型密钥。本机已在 `frontend/` 执行 `npm install`，生成 `frontend/package-lock.json`，并完成 `npm run typecheck` 与 `npm run build`。开发服务上的浏览器验收覆盖首页、海天 2024 样例创建、按 `run_id` 回看和错误提示；创建记录为 `annual-precheck-603288-2024-20260923-192840`。`node_modules` 不纳入 Git，克隆后仍需自行安装。页面没有单独的自动化测试套件。项目无用户注册、登录或账户管理，且不在当前项目范围。模型供应方的 API 密钥仍是独立配置，预检不读取该密钥。`audited_complete_chat` 已能在 `artifacts/runs/<run_id>` 的 UUID 子目录记录脱敏文本调用；它尚未接入年度预检或智能体，也未做云端实测。新预检可写入确定性 `screening` 候选线索，尚未接入 LangGraph 或报告。后端 `POST /v1/text-pdf-uploads` 已能保存并解析新的文本 PDF，与年度预检分步，不覆盖已有原始资料。创建页可选择文本 PDF 并调用该接口，成功后填入相对路径，仍由用户点击创建预检。模型分析、LangGraph 和报告导出仍未实现。文本解析依赖 PyMuPDF。
+- 目标：FINTRACE 面向非金融上市公司文本型年报，构建可追溯、可核验的财务异常分析，当前从海天 603288 的 2024 年报起步。路线见 `docs/roadmap.md`，旧预检字段审计见 `docs/current-schema-audit.md`。异常线索不是确认舞弊。
+- 技术方向：云端 API + 本地轻量 Web + 本地统计计算。前端为 React + TypeScript + Vite，后端为 Python + FastAPI；LangGraph 是第一版计划采用的唯一智能体编排框架，云端模型由后端调用，财务计算及数值核验在本地执行。模型连接器使用 OpenAI 兼容 Chat Completions 的共有子集，候选供应方包括 Qwen、DeepSeek 和 OpenAI；具体供应方与型号由环境变量配置，项目未选定默认值。
+- 旧年度预检流程已使用 FastAPI，并有本机预检页面。其接口和页面仍使用旧事实、同比、坐标金额复核与旧版确定性 screening；页面在记录包含 screening 时展示旧版候选线索，没有该字段的历史记录会明确显示未保存。上传与预检分步，不覆盖已有原始资料。应用本身不强制 host；按文档启动命令，后端默认绑定 `127.0.0.1:8000`，Vite 开发服务绑定 `127.0.0.1:5173` 并把 `/api` 代理到后端。浏览器不持有模型密钥。页面浏览器验收记录为 `annual-precheck-603288-2024-20260923-192840`；本机已在 `frontend/` 执行 `npm install`，生成 `frontend/package-lock.json`，并完成 `npm run typecheck` 与 `npm run build`。`node_modules` 不纳入 Git，克隆后仍需自行安装。页面没有单独的自动化测试套件。项目无用户注册、登录或账户管理，且不在当前项目范围。模型供应方的 API 密钥仍单独配置，旧预检不读取该密钥。
+- v2 确定性年度分析 CLI `scripts/analyze_annual.py` 已打通 PDF 提取、独立事实核验、年度可比性检查、计算与独立计算核验、筛查、Claim 核验和报告归档。海天 603288 的 2024 样例正式运行 `annual-analysis-ffcd6078-a1df-416b-88b8-6774ebe66d42` 已归档：8 条事实、8 项计算、16 条确定性 Claim 均通过核验，形成 2 条候选信号。可比性依据来自同一 2024 年报 PDF 第 116、163、197 页；proof 由当前进程签发，序列化结果只供审计，结论不表示与此前已披露的 2023 年报独立勾稽。M1（海天样例）和 M2（单样例确定性 Golden Path）已验收，不代表跨公司泛化。
+- `audited_complete_chat` 已能在 `artifacts/runs/<run_id>` 的 UUID 子目录记录脱敏文本调用，尚未接入年度分析或智能体，也未做云端实测。LangGraph、模型解释、Evidence Explorer 和多公司 golden 仍未实现；旧年度预检页面仍未接入 v2 报告。文本解析依赖 PyMuPDF。
 - 当前交付已超出纯骨架。具体能力以 README.md 和实际代码为准，不把计划描述为已实现。
 - 输出财务异常、风险线索及其依据，明确区分事实、推论与观点；异常信号不能直接作为确认舞弊的结论。
 

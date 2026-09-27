@@ -1,0 +1,392 @@
+{
+  "schema_version": 1,
+  "case_id": "600519-2024-provisional-financial-facts",
+  "case_nature": "real_official_annual_report",
+  "case_role": "provisional_cross_company_source_reference",
+  "evaluation_split": "unassigned",
+  "evaluation_only": true,
+  "exclude_labels_from_analysis_materials": true,
+  "review_status": "agent_provisional_pending_human",
+  "human_review_status": "pending",
+  "label_scope": "仅四项财务披露事实的数值、单位、期间列与报表口径；未标注异常、舞弊或违规。",
+  "fraud_or_misconduct_label": {
+    "status": "not_assessed",
+    "value": null,
+    "reason": "本案例不是舞弊或处罚标签；仅整理 2024 年报披露事实。"
+  },
+  "company": {
+    "company_id": "600519",
+    "stock_code": "600519",
+    "company_name": "贵州茅台酒股份有限公司"
+  },
+  "report": {
+    "report_type": "年度报告",
+    "report_year": 2024,
+    "period_end": "2024-12-31",
+    "disclosure_date": "2025-04-08",
+    "material_cutoff_date": "2025-04-08",
+    "disclosure_date_basis": "官方文件目录路径日期为 2025-04-08；报告末页董事会批准报送日期为 2025-04-01，二者分别记录。"
+  },
+  "source": {
+    "document_id": "moutai-2024-annual",
+    "source_url": "https://www.moutai.com.cn/mtgf/articleFileDir/2025-04/08/8055b7bed7db41bdbc617f4c9b9ec591.pdf",
+    "local_path": "data/raw/600519/2024/moutai-2024-annual/8055b7bed7db41bdbc617f4c9b9ec591.pdf",
+    "sha256": "5299f4940e2ce4e91084b73dc457d558b9d335fa76fbfee6227e4254eb7f4a30",
+    "byte_size": 3626217,
+    "pdf_pages": 143,
+    "use_condition": "仅本地开发与评测；未确认再分发许可。"
+  },
+  "review": {
+    "reviewer_role": "agent",
+    "reviewed_at": "2026-09-27",
+    "method": "依据原始 PDF 可抽取文本逐页核对表格标题、行名、2024/2023 列与单位；对三项经营指标与合并报表逐项交叉核对。",
+    "status": "provisional",
+    "human_review": "pending"
+  },
+  "comparison_column_note": "2023 数值来自同一份 2024 年度报告的比较列；本案例未下载或使用 2023 年度报告独立勾稽。",
+  "period_comparability": {
+    "status": "abstain",
+    "restatement_status": "unknown",
+    "reason": "年报比较列明确列示 2024/2023 数值，但现有 CLI 的年度可比性核验未取得充分证明；只保存逐年披露值，不给出差额、同比或可比性结论。"
+  },
+  "labels": [
+    {
+      "metric_id": "revenue",
+      "indicator_name": "营业收入",
+      "label_type": "reported_financial_fact",
+      "period_values": {
+        "2024": {
+          "period_year": 2024,
+          "column_role": "current",
+          "raw_value": "170,899,152,276.34",
+          "normalized_value": "170899152276.34",
+          "value_status": "agent_provisional_pending_human",
+          "evidence": [
+            {
+              "pdf_page": 5,
+              "printed_page": 5,
+              "table": "七、近三年主要会计数据和财务指标 / 主要会计数据",
+              "row": "营业收入",
+              "column": "2024年"
+            },
+            {
+              "pdf_page": 63,
+              "printed_page": 63,
+              "table": "合并利润表",
+              "row": "其中：营业收入",
+              "column": "2024年度"
+            }
+          ]
+        },
+        "2023": {
+          "period_year": 2023,
+          "column_role": "comparative",
+          "raw_value": "147,693,604,994.14",
+          "normalized_value": "147693604994.14",
+          "value_status": "agent_provisional_pending_human",
+          "evidence": [
+            {
+              "pdf_page": 5,
+              "printed_page": 5,
+              "table": "七、近三年主要会计数据和财务指标 / 主要会计数据",
+              "row": "营业收入",
+              "column": "2023年"
+            },
+            {
+              "pdf_page": 63,
+              "printed_page": 63,
+              "table": "合并利润表",
+              "row": "其中：营业收入",
+              "column": "2023年度"
+            }
+          ]
+        }
+      },
+      "unit": {
+        "value": "元",
+        "multiplier_to_yuan": "1",
+        "status": "confirmed_from_report_header",
+        "evidence_pdf_pages": [
+          5,
+          63
+        ]
+      },
+      "currency": {
+        "value": "人民币",
+        "status": "confirmed_from_report_header",
+        "evidence_pdf_pages": [
+          5,
+          63,
+          66,
+          6,
+          7
+        ]
+      },
+      "statement_scope": {
+        "value": "consolidated",
+        "status": "cross_checked",
+        "reason": "数值与合并利润表“其中：营业收入”行逐年一致。"
+      }
+    },
+    {
+      "metric_id": "net_profit_parent",
+      "indicator_name": "归属于上市公司股东的净利润",
+      "label_type": "reported_financial_fact",
+      "period_values": {
+        "2024": {
+          "period_year": 2024,
+          "column_role": "current",
+          "raw_value": "86,228,146,421.62",
+          "normalized_value": "86228146421.62",
+          "value_status": "agent_provisional_pending_human",
+          "evidence": [
+            {
+              "pdf_page": 5,
+              "printed_page": 5,
+              "table": "七、近三年主要会计数据和财务指标 / 主要会计数据",
+              "row": "归属于上市公司股东的净利润",
+              "column": "2024年"
+            },
+            {
+              "pdf_page": 64,
+              "printed_page": 64,
+              "table": "合并利润表 / 按所有权归属分类",
+              "row": "归属于母公司股东的净利润",
+              "column": "2024年度"
+            }
+          ]
+        },
+        "2023": {
+          "period_year": 2023,
+          "column_role": "comparative",
+          "raw_value": "74,734,071,550.75",
+          "normalized_value": "74734071550.75",
+          "value_status": "agent_provisional_pending_human",
+          "evidence": [
+            {
+              "pdf_page": 5,
+              "printed_page": 5,
+              "table": "七、近三年主要会计数据和财务指标 / 主要会计数据",
+              "row": "归属于上市公司股东的净利润",
+              "column": "2023年"
+            },
+            {
+              "pdf_page": 64,
+              "printed_page": 64,
+              "table": "合并利润表 / 按所有权归属分类",
+              "row": "归属于母公司股东的净利润",
+              "column": "2023年度"
+            }
+          ]
+        }
+      },
+      "unit": {
+        "value": "元",
+        "multiplier_to_yuan": "1",
+        "status": "confirmed_from_report_header",
+        "evidence_pdf_pages": [
+          5,
+          63
+        ]
+      },
+      "currency": {
+        "value": "人民币",
+        "status": "confirmed_from_report_header",
+        "evidence_pdf_pages": [
+          5,
+          63,
+          66,
+          6,
+          7
+        ]
+      },
+      "statement_scope": {
+        "value": "consolidated",
+        "status": "cross_checked",
+        "reason": "数值与合并利润表按所有权归属列示的归属于母公司股东净利润行逐年一致。"
+      }
+    },
+    {
+      "metric_id": "operating_cash_flow",
+      "indicator_name": "经营活动产生的现金流量净额",
+      "label_type": "reported_financial_fact",
+      "period_values": {
+        "2024": {
+          "period_year": 2024,
+          "column_role": "current",
+          "raw_value": "92,463,692,168.43",
+          "normalized_value": "92463692168.43",
+          "value_status": "agent_provisional_pending_human",
+          "evidence": [
+            {
+              "pdf_page": 5,
+              "printed_page": 5,
+              "table": "七、近三年主要会计数据和财务指标 / 主要会计数据",
+              "row": "经营活动产生的现金流量净额",
+              "column": "2024年"
+            },
+            {
+              "pdf_page": 66,
+              "printed_page": 66,
+              "table": "合并现金流量表",
+              "row": "合并现金流量表标题及单位/币种（该指标续页行见 PDF 第 67 页）",
+              "column": "2024年度表头"
+            },
+            {
+              "pdf_page": 67,
+              "printed_page": 67,
+              "table": "合并现金流量表（续）",
+              "row": "经营活动产生的现金流量净额",
+              "column": "2024年度"
+            }
+          ]
+        },
+        "2023": {
+          "period_year": 2023,
+          "column_role": "comparative",
+          "raw_value": "66,593,247,721.09",
+          "normalized_value": "66593247721.09",
+          "value_status": "agent_provisional_pending_human",
+          "evidence": [
+            {
+              "pdf_page": 5,
+              "printed_page": 5,
+              "table": "七、近三年主要会计数据和财务指标 / 主要会计数据",
+              "row": "经营活动产生的现金流量净额",
+              "column": "2023年"
+            },
+            {
+              "pdf_page": 67,
+              "printed_page": 67,
+              "table": "合并现金流量表（续）",
+              "row": "经营活动产生的现金流量净额",
+              "column": "2023年度"
+            }
+          ]
+        }
+      },
+      "unit": {
+        "value": "元",
+        "multiplier_to_yuan": "1",
+        "status": "confirmed_from_report_header",
+        "evidence_pdf_pages": [
+          5,
+          66
+        ]
+      },
+      "currency": {
+        "value": "人民币",
+        "status": "confirmed_from_report_header",
+        "evidence_pdf_pages": [
+          5,
+          63,
+          66,
+          6,
+          7
+        ]
+      },
+      "statement_scope": {
+        "value": "consolidated",
+        "status": "cross_checked",
+        "reason": "数值与合并现金流量表该行逐年一致。"
+      }
+    },
+    {
+      "metric_id": "non_recurring_total",
+      "indicator_name": "披露的非经常性损益合计",
+      "label_type": "reported_financial_fact",
+      "period_values": {
+        "2024": {
+          "period_year": 2024,
+          "column_role": "current",
+          "raw_value": "-12,759,555.80",
+          "normalized_value": "-12759555.80",
+          "value_status": "agent_provisional_pending_human",
+          "evidence": [
+            {
+              "pdf_page": 6,
+              "printed_page": 6,
+              "table": "十、非经常性损益项目和金额",
+              "row": "表头及单位/币种",
+              "column": "2024年金额"
+            },
+            {
+              "pdf_page": 7,
+              "printed_page": 7,
+              "table": "十、非经常性损益项目和金额（续）",
+              "row": "合计",
+              "column": "2024年金额"
+            }
+          ]
+        },
+        "2023": {
+          "period_year": 2023,
+          "column_role": "comparative",
+          "raw_value": "-18,492,874.77",
+          "normalized_value": "-18492874.77",
+          "value_status": "agent_provisional_pending_human",
+          "evidence": [
+            {
+              "pdf_page": 6,
+              "printed_page": 6,
+              "table": "十、非经常性损益项目和金额",
+              "row": "表头及单位/币种",
+              "column": "2023年金额"
+            },
+            {
+              "pdf_page": 7,
+              "printed_page": 7,
+              "table": "十、非经常性损益项目和金额（续）",
+              "row": "合计",
+              "column": "2023年金额"
+            }
+          ]
+        }
+      },
+      "unit": {
+        "value": "元",
+        "multiplier_to_yuan": "1",
+        "status": "confirmed_from_report_header",
+        "evidence_pdf_pages": [
+          6,
+          7
+        ]
+      },
+      "currency": {
+        "value": "人民币",
+        "status": "confirmed_from_report_header",
+        "evidence_pdf_pages": [
+          5,
+          63,
+          66,
+          6,
+          7
+        ]
+      },
+      "statement_scope": {
+        "value": null,
+        "status": "abstain",
+        "reason": "非经常性损益表没有明示合并或母公司口径；仅标记原文披露表格合计。"
+      }
+    }
+  ],
+  "cli_run": {
+    "run_id": "annual-analysis-10232970-a22b-498a-9a8b-4bde1b5bb8e6",
+    "status": "completed_with_issues",
+    "facts_extracted": 8,
+    "facts_confirmed": 8,
+    "calculations_generated": 8,
+    "calculations_confirmed": 0,
+    "candidate_signals": 0,
+    "model_called": false,
+    "comparability_status": "insufficient_evidence",
+    "issues": [
+      {
+        "code": "comparability_insufficient_evidence",
+        "indicator": "年度可比性",
+        "reason": "比较年度可比性 proof 不足；8 项计算均失败关闭，筛查未形成已确认线索。"
+      }
+    ],
+    "abstentions": "8 条事实均通过独立核验；8 项计算因年度可比性 proof 不足未获确认，2 条筛查线索均弃权。"
+  }
+}
