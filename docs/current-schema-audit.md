@@ -1,6 +1,6 @@
 # 旧年度预检事实结构审计（历史基线）
 
-本文主体记录旧年度预检所用的 `FinancialFact`、同比、坐标金额复核和 `screening`，是旧流程的历史字段审计，不描述 v2 的完整现状。v2 确定性年度分析已有正式 CLI 和运行/报告归档；海天 603288 的 2024 样例运行 `annual-analysis-ffcd6078-a1df-416b-88b8-6774ebe66d42` 中，8 条事实、8 项计算、16 条确定性 Claim 均核验通过，并形成 2 条候选信号。M1（海天样例）和 M2（单样例确定性 Golden Path）已验收，不代表跨公司泛化。可比性依据定位于同一报告 PDF 第 116、163、197 页，proof 由当前进程签发；序列化副本只供审计，不能授权计算，也不表示与此前已披露的 2023 年报独立勾稽。旧预检 API/页面及历史 `artifacts/runs/` 保持原样，仍未接入 v2。
+本文主体记录旧年度预检所用的 `FinancialFact`、同比、坐标金额复核和 `screening`，是旧流程的历史字段审计，不描述 v2 的完整现状。v2 确定性年度分析已有正式 CLI 和运行/报告归档；海天 603288 的 2024 样例运行 `annual-analysis-ffcd6078-a1df-416b-88b8-6774ebe66d42` 中，8 条事实、8 项计算、16 条确定性 Claim 均核验通过，并形成 2 条候选信号。M1（海天样例）和 M2（单样例确定性 Golden Path）已验收，不代表跨公司泛化。可比性依据定位于同一报告 PDF 第 116、163、197 页，proof 由当前进程签发；序列化副本只供审计，不能授权计算，也不表示与此前已披露的 2023 年报独立勾稽。旧预检 API/页面及历史 `artifacts/runs/` 保持原样，仍与 v2 分开。v2 另已接入只读报告和独立核验证据预览 API，以及年度报告与 Evidence Explorer 页面；没有创建或启动 v2 分析的 HTTP `POST` 接口，页面也不启动分析或提供产品级导出。
 
 ## 实际结构
 
@@ -51,8 +51,8 @@
 
 ## 已落实的兼容方向与后续缺口
 
-新事实与单元格证据已放在隔离的 v2 类型中，由适配层读取旧事实。正式 CLI 从真实海天 PDF 重新定位事实、年度可比性、计算输入和 Claim 支持证据；8 条事实、8 项计算和 16 条确定性 Claim 均核验通过，2 条候选筛查进入报告。可比性确认依赖同一 PDF 第 116、163、197 页的披露，在当前进程内签发 proof；序列化结果只作审计，且没有与此前已披露的 2023 年报独立勾稽。没有有效 proof 时，`restatement_status=unknown` 仍必须拒绝计算。正式 CLI 和 `artifacts/runs/`、`artifacts/reports/` 归档已完成；v2 HTTP API、旧前端接入、LangGraph、模型解释、多公司 golden 仍待后续。旧 `FinancialFact`、预检响应、前端和历史 JSON 保持兼容，不为 v2 回归改写。
+新事实与单元格证据已放在隔离的 v2 类型中，由适配层读取旧事实。正式 CLI 从真实海天 PDF 重新定位事实、年度可比性、计算输入和 Claim 支持证据；8 条事实、8 项计算和 16 条确定性 Claim 均核验通过，2 条候选筛查进入报告。可比性确认依赖同一 PDF 第 116、163、197 页的披露，在当前进程内签发 proof；序列化结果只作审计，且没有与此前已披露的 2023 年报独立勾稽。没有有效 proof 时，`restatement_status=unknown` 仍必须拒绝计算。正式 CLI 和 `artifacts/runs/`、`artifacts/reports/` 归档已完成；v2 只读年度分析 GET API、独立核验证据 PDF 页图预览和 Evidence Explorer 页面已集成，并通过海天归档报告及第 82 页预览浏览器验收。没有创建或启动正式分析的 HTTP POST 接口，页面不启动分析、不提供产品级导出。M3 调查 StateGraph、同源限量检索、提示词与审计调用已编码并接入 CLI 可选 `--with-model --source-record` 路径；`langgraph` 通过 `agents` extra 声明但当前环境未安装，因此 mock 集成测试跳过，M3 未运行验收且没有在线模型调用。海天、茅台和五粮液 2024 年报目前进入跨公司代码检查；茅台 8 条事实确认、可比性证据不足、0 项确认计算；五粮液定位到 8 条数值但未披露币种，当前实现与测试没有确认事实或计算。五粮液 provisional 案例和旧正式 run 尚未在 `0.00` Decimal 误判修正后重新归档；旧运行中的可比性 `conflict` 不应当作修正后结论。两份跨公司案例的标签均为 `agent_provisional_pending_human`，不是人工 golden。M4 人工 golden、有无核验消融和可靠性统计仍待完成。旧 `FinancialFact`、预检响应、前端和历史 JSON 保持兼容，不为 v2 回归改写。
 
 ## 受影响文件
 
-旧流程实现及兼容边界涉及：`backend/src/finagent/schemas/financial_fact.py`、`ingestion/extract_annual_facts.py`、`finance/annual_change.py`、`finance/annual_signals.py`、`verification/source_amount.py`、`api/annual_precheck.py`、`api/app.py`，以及 `frontend/src/types/precheck.ts` 和预检页。前端可展示旧预检中可选的 `screening` 字段。v2 实现位于独立 schema、verification、finance、reports 与 `scripts/analyze_annual.py`；v2 HTTP API、旧前端报告接入和产品级导出仍待后续实施。本文保留旧结构说明，不修改代码。
+旧流程实现及兼容边界涉及：`backend/src/finagent/schemas/financial_fact.py`、`ingestion/extract_annual_facts.py`、`finance/annual_change.py`、`finance/annual_signals.py`、`verification/source_amount.py`、`api/annual_precheck.py`、`api/app.py`，以及 `frontend/src/types/precheck.ts` 和预检页。前端可展示旧预检中可选的 `screening` 字段。v2 实现位于独立 schema、verification、finance、reports、只读 API、Evidence Explorer 页面与 `scripts/analyze_annual.py`；只有报告读取和独立核验证据页图预览 API，没有创建/启动正式分析的 POST 接口，页面没有分析启动和产品级导出。M3 调查代码已接入可选 CLI 路径但未运行验收；跨公司样例及 M4 评测状态见 [roadmap.md](roadmap.md) 和 [data-policy.md](data-policy.md)。本文保留旧结构说明，不修改代码。

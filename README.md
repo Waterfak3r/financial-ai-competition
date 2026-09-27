@@ -2,7 +2,7 @@
 
 非金融上市公司文本型年报的可追溯异常分析。当前样例是海天味业 603288 的 2024 年报。异常线索不是确认舞弊。
 
-旧年度预检已可用：PDF 上传与解析、4 项指标共 8 条旧事实、Decimal 同比、坐标金额复核和旧版确定性 screening；预检页在运行记录带有 screening 时展示候选线索，上传与预检分步。该流程仍使用旧事实、计算和核验。v2 确定性年度分析 CLI `scripts/analyze_annual.py` 已完成海天 603288 的 2024 样例 Golden Path 并归档正式报告：8 条事实、8 项计算、16 条确定性 Claim 均通过核验，形成 2 条候选信号。M1（海天样例）和 M2（单样例确定性 Golden Path）已验收；不据此声称跨公司泛化。年度可比性依据来自同一 PDF 第 116、163、197 页，由当前进程签发可用于本次计算的 proof；序列化结果只供审计，且未与此前已披露的 2023 年报做独立勾稽。旧年度预检页面尚未接入 v2 报告。LangGraph、模型解释、Evidence Explorer、多公司 golden 和在线模型验收仍待完成；在线模型验收等用户配置供应方与密钥后再做，不读取其他工具密钥，也不自行选定供应方。
+旧年度预检 API/页面与 v2 正式年度分析是两条分开的流程。旧预检继续使用旧事实、同比、坐标金额复核和旧版确定性 screening；上传与创建预检分步。v2 CLI `scripts/analyze_annual.py` 已完成海天 603288 的 2024 Golden Path 并归档报告：8 条事实、8 项计算和 16 条确定性 Claim 均通过核验，形成 2 条候选信号。M1（海天样例）和 M2（单样例确定性 Golden Path）已验收；不据此声称跨公司泛化。年度可比性依据来自同一 PDF 第 116、163、197 页，由当前进程签发 proof；序列化结果只供审计，且未与此前已披露的 2023 年报做独立勾稽。v2 另有只读报告读取和已核验证据 PDF 页图预览 API，以及前端 Evidence Explorer 页面；它只读取已有归档，不从页面启动正式分析，也不提供产品级导出。M3 调查工作流已编码并接入 CLI 的可选 `--with-model` 路径，但 LangGraph 可选依赖在当前环境未安装，模拟集成测试被跳过，M3 尚未运行验收且没有真实在线模型调用。茅台、五粮液跨公司案例及 CLI 结果已归档，但案例仅是待人工审阅的 provisional 财务事实参考；M4 人工 golden 和消融未完成。在线模型验收等用户配置供应方与密钥后再做，不读取其他工具密钥，也不自行选定供应方。
 
 样例原文 `data/raw/603288/2024/cninfo-1222994233/1222994233.PDF`。最新 screening 运行 `artifacts/runs/annual-precheck-603288-2024-20260925-105059/`。启动：`uvicorn finagent.api.app:app --host 127.0.0.1 --port 8000`，再到 `frontend/` 执行 `npm run dev`，打开 http://127.0.0.1:5173 。
 
@@ -21,7 +21,7 @@
 | 模型 | 已有供应方中立的 Chat Completions 文本连接器。默认供应方和型号未选定，由环境变量配置 |
 | 编排 | 第一版采用 LangGraph，不叠加其他智能体协作框架 |
 | 计算与核验 | 本地 Python 执行财务公式、统计筛查和数值核验，保留原文依据 |
-| 当前依赖状态 | `backend/pyproject.toml` 已声明 PyMuPDF、FastAPI 和 Uvicorn。`frontend/package.json` 已声明 React、ReactDOM、Vite、TypeScript 和 React 插件，本机 `npm install` 已生成 `frontend/package-lock.json`。`node_modules` 不纳入 Git。LangGraph 尚未引入 |
+| 当前依赖状态 | `backend/pyproject.toml` 已声明 PyMuPDF、FastAPI 和 Uvicorn；`langgraph>=1.2,<1.3` 通过可选的 `agents` extra 声明，当前环境未安装。前端依赖已声明，本机 `npm install` 已生成 `frontend/package-lock.json`；`node_modules` 不纳入 Git |
 
 第一版路线确定为“云端 API + 本地轻量 Web + 本地统计计算”，不要求本地 GPU，也不纳入模型本地部署或训练。原始财报、索引、计算和运行记录保存在本地，模型调用仅发送本任务所需且允许外发的片段。云端 API 需要网络；受控运行限制资料范围与外部连接，现场是否允许模型联网仍需依据组委会环境说明核实。历史回放与在线重新运行明确区分，断网回放不能替代实时处理验收。
 
@@ -46,7 +46,7 @@
 └── submission/        # 初赛计划书、视频和决赛材料
 ```
 
-前端已有旧年度预检页面、请求客户端、类型和样式。创建页可以上传文本 PDF，上传成功后仍需另点创建旧预检。结果页可展示旧版 screening；历史记录未保存该字段时会明确提示。页面未接入 v2 报告；任务进度、v2 报告展示与导出入口尚未实现。后端按财报解析、检索、智能体、财务计算、核验和报告等职责划分，具体边界见架构文档。
+前端保留旧年度预检页面，并新增只读的 v2 年度报告与 Evidence Explorer 页面。旧创建页上传文本 PDF 后仍需另点创建预检；旧结果页可展示运行记录中的 screening。v2 页面读取归档报告并可查看服务端按独立核验证据生成的 PDF 页图；它不启动正式分析，也没有产品级报告导出。后端按财报解析、检索、智能体、财务计算、核验和报告等职责划分，具体边界见架构文档。
 
 ## 文件存放约定
 
@@ -90,9 +90,9 @@ tmp/ 按需创建，正式功能不能依赖其中的文件。已有 tmp/、任�
 
 北京和新加坡使用当前兼容文档推荐的工作空间专属域名。`{WorkspaceId}` 换成该地域的业务空间 ID，`MODEL_API_KEY` 必须属于同一地域。美国（弗吉尼亚）使用上表中的官方地址。
 
-连接器不会自动发送整份 PDF，也还没有接到智能体分析接口。测试使用本地模拟 HTTP，不访问上述云端地址。
+连接器不会自动发送整份 PDF。M3 调查图的代码会在 `scripts/analyze_annual.py` 显式指定 `--with-model` 时调用经审计连接器；默认确定性 CLI 与旧预检均不调用模型。当前环境没有安装可选 LangGraph 依赖，因此模拟模型集成测试被跳过；尚无真实在线模型调用。
 
-`audited_complete_chat(messages, settings, run_dir=..., evidence_refs=[{"document_id": "doc-1", "page": 12}], prompt_version="prompt-v1")` 包装上述连接器。`run_dir` 必须是本仓库 `artifacts/runs` 的直接子目录。每次调用新建 UUID 子目录，联网前写入 `request.json`（`status` 为 `started`），成功再写 `response.json`，失败写 `failure.json` 且只含安全类别。记录包含 UTC 起止时间。落盘字符串会去掉 `MODEL_API_KEY`，不写 `base_url`、请求头或异常原文。响应文件写失败会抛出 `AuditPersistError`，不返回成功。年度预检和智能体尚未调用它，云端实测仍未进行。
+`audited_complete_chat(messages, settings, run_dir=..., evidence_refs=[{"document_id": "doc-1", "page": 12}], prompt_version="prompt-v1")` 包装上述连接器。`run_dir` 必须是本仓库 `artifacts/runs` 的直接子目录。每次调用新建 UUID 子目录，联网前写入 `request.json`（`status` 为 `started`），成功再写 `response.json`，失败写 `failure.json` 且只含安全类别。记录包含 UTC 起止时间。落盘字符串会去掉 `MODEL_API_KEY`，不写 `base_url`、请求头或异常原文。响应文件写失败会抛出 `AuditPersistError`，不返回成功。M3 可选调查路径已接入该包装器；旧年度预检不调用它。当前没有真实在线模型调用。
 
 ## 已实现：文本型 PDF 逐页解析
 
@@ -102,20 +102,26 @@ tmp/ 按需创建，正式功能不能依赖其中的文件。已有 tmp/、任�
 
 空白页、只有图片或矢量图形的页、以及提取结果只有空白的页，状态为 `no_extractable_text`，文字块为空。本增量不执行 OCR，也不编造文字。页内同时有文字和图片时，只返回文字块，并注明图片未做 OCR。加密或损坏的 PDF 会报错，不会被当成空白页。
 
-在解析结果之上，旧流程可提取合并利润表营业收入、归属于母公司股东的净利润、合并现金流量表经营活动产生的现金流量净额，以及非经常性损益表的披露合计，并对同一指标的报告年和上一年做确定性同比。这不是通用财报抽取。字段提取命令本身不复核引用坐标里的原文金额。云端侧目前只有同步 Chat Completions 文本连接器，尚未接到分析流程。本地 FastAPI 年度预检在哈希一致后，从原始 PDF 的引用坐标重新读取金额，并独立复核单位换算：`POST /v1/annual-prechecks` 同步完成，`GET /v1/annual-prechecks/{run_id}` 只返回该次运行。本机页面展示旧流程预检及运行记录中可选的旧版 screening，不读取 v2 报告。另有 `POST /v1/text-pdf-uploads`：接收 multipart PDF、`company_id` 和 `report_year`，把原始字节存到新的 `data/raw/<company>/<year>/<document_id>/source.pdf`，解析 JSON 存到平行的 `data/processed` 路径，上限 32 MiB，分块读取。它不覆盖已有原始资料，不调用模型，也不直接做预检；返回的相对路径可交给已有预检接口。创建页用已填写的 company_id、report_year 和所选 PDF 调用该接口，成功后填入这两条相对路径，并显示 document_id、页数和 SHA256；用户再点击创建预检。v2 确定性年度分析由 `scripts/analyze_annual.py` 提供，自动完成抽取、独立事实与期间可比性核验、计算与 Claim 核验、筛查和报告归档；模型解释、检索和 LangGraph 仍未实现。
+在解析结果之上，旧流程可提取四项年度指标并做确定性同比；这不是通用财报抽取。字段提取命令本身不复核引用坐标里的原文金额。旧年度预检在哈希一致后从原始 PDF 引用坐标重读金额并复核单位换算：`POST /v1/annual-prechecks` 创建旧预检，`GET /v1/annual-prechecks/{run_id}` 读取旧预检。`POST /v1/text-pdf-uploads` 接收 multipart PDF、`company_id` 和 `report_year`，在新的 `data/raw/<company>/<year>/<document_id>/source.pdf` 保存原文，在平行 `data/processed` 路径保存解析 JSON，上限 32 MiB；它不覆盖已有资料、不调用模型，也不自动创建预检。
+
+v2 确定性年度分析由 `scripts/analyze_annual.py` 从原始 PDF 启动，自动完成抽取、独立事实与期间可比性核验、计算与 Claim 核验、筛查及报告归档。后端的 `GET /v1/annual-analyses/{run_id}` 只读取已归档报告；`GET /v1/annual-analyses/{run_id}/evidence/{evidence_id}/preview.png` 只生成报告中已核验事实引用的证据页图。当前没有创建或启动 v2 分析的 HTTP `POST` 接口。前端“年度分析”页集成上述只读接口；旧预检页面、类型及数据结构保持独立。M3 年报调查图、局部检索与经审计调用代码已实现，CLI 通过可选 `--with-model` 接入；因当前环境未安装 LangGraph，该流程的模拟集成测试跳过，尚未进行真实在线调用或完整运行验收。
 
 ### 安装、调用与测试
 
-运行依赖在 `backend/pyproject.toml` 中声明：PyMuPDF、FastAPI 和 Uvicorn。pytest 与 httpx 是可选测试依赖。仓库不代为安装。在仓库根目录执行：
+运行依赖在 `backend/pyproject.toml` 中声明：PyMuPDF、FastAPI 和 Uvicorn。pytest 与 httpx 是 `test` 可选依赖；LangGraph 是单独的 `agents` 可选依赖。仓库不代为安装。在仓库根目录执行：
 
 ```powershell
 python -m pip install -e ".\backend[test]"
 python -m pytest -c backend/pyproject.toml
 ```
 
-`backend[test]` 带上引号，是因为 PowerShell 会把方括号当成通配符。这个测试额外依赖同时包含 pytest 和 httpx；只安装 pytest 时，`TestClient` 测试无法运行。
+`backend[test]` 带上引号，是因为 PowerShell 会把方括号当成通配符。这个测试额外依赖同时包含 pytest 和 httpx；只安装 pytest 时，`TestClient` 测试无法运行。若要运行 M3 的模拟 LangGraph 集成测试，需另装 `agents` extra：
 
-该默认配置从单元与集成测试目录收集测试。也可以进入 `backend/` 后执行 `python -m pytest`。截至 2026-09-27，默认配置运行结果为 168 passed。未做可编辑安装时，测试配置会把 `backend/src` 加入导入路径；运行集成测试还需要本机的海天样例 PDF，缺失时相关测试会跳过。
+```powershell
+python -m pip install -e ".\backend[test,agents]"
+```
+
+该默认配置从单元与集成测试目录收集测试。也可以进入 `backend/` 后执行 `python -m pytest`。截至 2026-09-27，最近一次完整后端运行结果为 241 passed、1 skipped；唯一跳过的是 `tests/integration/test_annual_investigation_mock.py`，因为当前环境没有安装可选 LangGraph 依赖。未做可编辑安装时，测试配置会把 `backend/src` 加入导入路径；运行集成测试还需要本机的公开年报样例 PDF，缺失时相关测试会跳过。
 
 本地项目无用户注册、登录或账户管理，且不在当前项目范围。模型供应方的 API 密钥仍单独配置给 Chat Completions 连接器；预检接口不读取该密钥，也不把财报发到云端。FastAPI 应用本身不强制监听地址。按下面的启动命令，默认绑定 `127.0.0.1`。
 
@@ -144,11 +150,11 @@ npm install
 npm run dev
 ```
 
-Vite 按 `frontend/vite.config.ts` 只绑定 `127.0.0.1:5173`，且 `strictPort` 为 true。浏览器打开 http://127.0.0.1:5173 。页面请求 `/api/v1/annual-prechecks`；Vite 去掉 `/api` 前缀后转发到 http://127.0.0.1:8000 。浏览器不保存模型密钥，项目也没有用户账户。
+Vite 按 `frontend/vite.config.ts` 只绑定 `127.0.0.1:5173`，且 `strictPort` 为 true。浏览器打开 http://127.0.0.1:5173 。旧预检页请求 `/api/v1/annual-prechecks`；v2 年度报告页请求只读 `/api/v1/annual-analyses/...` 报告与证据预览路由；Vite 去掉 `/api` 前缀后转发到 http://127.0.0.1:8000 。浏览器不保存模型密钥，项目也没有用户账户。
 
-页面是浅蓝白仪表盘，左侧导航在首页、创建预检、预检结果和报告之间切换。首页标题为「让财务预检更清晰」。四张摘要卡和最近一次运行只根据当前已加载的预检记录计算；未加载时摘要为「—」。顶栏按 `run_id` 回看，不是搜索。创建页可以一键填入海天 2024 样例的相对路径，也可以手写 `data/processed` 与 `data/raw` 下的相对路径、`company_id` 和 `report_year`。结果展示旧预检事实、同比、引用页和原文金额复核，并可点选指标查看证据；有保存旧版 `screening` 的记录时也展示其候选线索，缺少该字段的历史记录会提示未保存。报告视图尚未接入 v2 报告模块，也没有正式报告生成与导出入口。没有登录。创建页可上传文本 PDF，但不会因此自动创建预检。样例 PDF 与解析 JSON 已在本机对应目录，但被 Git 忽略；克隆仓库后需要先准备这两份文件，页面不会下载它们。
+旧预检仪表盘在首页、创建预检、预检结果和旧报告四个视图间切换；创建页可上传文本 PDF，但不会自动创建预检。旧结果按旧响应展示事实、同比、引用页、金额复核和可选 screening。旧“报告”视图尚未接入 v2 报告，也没有旧预检报告生成与导出入口。单独的“年度分析”视图按 `run_id` 读取 v2 归档报告，展示事实、计算、主张、候选信号和待核查内容，并允许查看服务端生成的已核验证据 PDF 页图。该视图不启动正式分析，也没有产品级导出。样例 PDF 与解析 JSON 已在本机对应目录，但被 Git 忽略；克隆仓库后需要先准备这两份文件，页面不会下载它们。
 
-2026-09-23 在本机执行了 `npm run typecheck` 和 `npm run build`，二者通过。随后用已有 Playwright 打开 http://127.0.0.1:5173 。首页可以加载；填入海天 2024 样例并创建，得到 `annual-precheck-603288-2024-20260923-192840`，状态 `completed`，8 条事实、4 组同比，原文金额复核通过 8、未通过 0、弃权 0。按该 `run_id` 回看仍为这次记录。不存在的 `run_id` 显示 HTTP 404 `run_not_found`。空的解析路径会提示填写。这次验收没有覆盖上传、任务进度、报告导出、模型分析或完整核验。2026-09-25 再次执行 `npm run typecheck` 与 `npm run build`，二者通过。同一天在开发服务上检查了创建页上传：空文件、超过 32 MiB、非法公司或年度不会发送；非 PDF 与无文字 PDF 显示服务端错误；成功上传填入路径并显示 document_id、页数和 SHA256，且不会自动创建预检。这些浏览器检查只覆盖旧预检页面；v2 CLI 与正式归档在 2026-09-27 加入，旧 UI 仍不展示 v2 报告。重新加载页面后，控制台不再出现 `favicon.ico` 的 404；`/favicon.svg` 返回 200。直接请求 `/favicon.ico` 仍然是 404。浏览器日志在 `artifacts/runs/web-qa-20260923-200437/browser/`。页面没有单独的自动化测试套件。
+2026-09-23 与 2026-09-25 的浏览器验收记录覆盖旧预检创建、按 `run_id` 回看、错误提示和文本 PDF 上传。2026-09-27 的真实浏览器验收读取海天 2024 正式 v2 报告，并成功显示第 82 页已核验证据预览；这只验证归档读取与证据查看，不覆盖从页面启动正式分析或产品级导出。该日 `npm run build` 通过。此前旧流程构建/typecheck 记录与浏览器日志保留在 `artifacts/runs/web-qa-20260923-200437/browser/`。页面没有单独的自动化测试套件。
 
 ```python
 from pathlib import Path
@@ -182,6 +188,18 @@ python scripts/analyze_annual.py `
 ```
 
 运行记录和报告使用同一个 `run_id`，分别写入 `artifacts/runs/<run_id>/` 与 `artifacts/reports/<run_id>/`。海天样例正式运行是 `annual-analysis-ffcd6078-a1df-416b-88b8-6774ebe66d42`，来源 PDF SHA256 为 `5a97b13534438f5e85249752ef492fbd9e23af73e67845e47bad1ab7d92e20ee`。CLI 会在运行目录中保留输入 PDF 副本；该公开年报目前仅记录为本地开发使用，未确认再分发许可，不要把原文副本或生成归档当作可公开分发样例。
+
+M3 调查是显式可选路径。运行前需安装 `agents` extra、在当前进程配置三个 `MODEL_*` 环境变量，并为同一原文提供 `source.json`。启用 `--with-model` 后才会调用模型；这条命令尚未在当前环境完成验收，也没有真实在线调用：
+
+```powershell
+python scripts/analyze_annual.py `
+  --source-pdf data/raw/603288/2024/cninfo-1222994233/1222994233.PDF `
+  --company-id 603288 `
+  --report-year 2024 `
+  --document-id cninfo-1222994233 `
+  --with-model `
+  --source-record data/raw/603288/2024/cninfo-1222994233/source.json
+```
 
 ### 第三方依赖
 
@@ -221,11 +239,11 @@ python scripts/analyze_annual.py `
 - 文字块坐标在未旋转页面上。页宽和页高来自旋转后的 `page.rect`，旋转 90 或 270 度时两者不能混用。
 - 只记录 PDF 页序号，不识别印刷页码。
 - 整份文件会读入内存。
-- 旧年度预检是 HTTP 入口；v2 确定性分析目前由 CLI 启动，不提供 v2 HTTP API。按文档中的 Uvicorn 命令，预检服务默认绑定 `127.0.0.1`；应用本身不强制 host。本机页面仍只展示旧预检，尚无智能体编排入口。
+- 旧年度预检通过 HTTP 创建和读取；v2 正式分析由 CLI 启动。FastAPI 另提供只读的 v2 年度报告 `GET /v1/annual-analyses/{run_id}` 与已核验证据页图预览 `GET /v1/annual-analyses/{run_id}/evidence/{evidence_id}/preview.png`，没有用于启动 v2 分析的 `POST` 接口。前端可读取归档报告和证据页图，但不能从页面启动分析或导出产品级报告。M3 的可选调查代码接入 CLI `--with-model`，其 LangGraph 依赖未安装、模拟集成测试跳过且无真实在线调用。按文档中的 Uvicorn 命令，服务默认绑定 `127.0.0.1`；应用本身不强制 host。
 
 ## 公开样例
 
-已导入一份真实公开年报，用于文本解析、四项年度事实和同比验收。它不是人工构造数据，也不在 `data/samples/`。原始 PDF、解析 JSON 和运行摘要默认不纳入 Git。本机已有样例 PDF 和解析 JSON；克隆仓库后需要先准备这两份文件，预检页面的一键填充不会下载它们。
+已导入海天味业一份真实公开年报，用于文本解析、年度事实和分析验收；另有贵州茅台与五粮液两份真实公开年报作为跨公司事实参考。三份资料均不是人工构造数据，也不在 `data/samples/`。茅台与五粮液案例只整理四项财务披露事实，`evaluation/cases/` 中的值仍为 agent provisional、待人工复核，没有舞弊或异常标签，也未纳入 M4 人工 golden。原始 PDF、解析 JSON 和运行摘要默认不纳入 Git；来源和使用条件见 `docs/data-policy.md`。克隆仓库后需要自行准备所需原文。
 
 | 项目 | 内容 |
 | --- | --- |
@@ -257,6 +275,15 @@ python scripts/analyze_annual.py `
 
 以上表格和运行说明属于旧年度预检历史结果。约同比由 Decimal 同比率按当前计算精度换成两位百分比，是近似值。差额和原文金额的完整十进制仍在该运行产物和 `processing.md`；这不是 v2 独立原文核验，也不改变旧运行记录。
 
+### 跨公司 provisional 事实参考
+
+| 公司 | 案例文件与 CLI 归档 | 当前状态 |
+| --- | --- | --- |
+| 宜宾五粮液（000858） | `evaluation/cases/000858-2024-provisional.json`；`annual-analysis-a682b946-1733-48d1-bfd4-0ef2c8675e9c` | 年报事实参考值待人工复核；CLI 归档状态为 `completed_with_issues`，不构成确认的候选信号 |
+| 贵州茅台（600519） | `evaluation/cases/600519-2024-provisional.json`；`annual-analysis-10232970-a22b-498a-9a8b-4bde1b5bb8e6` | 年报事实参考值待人工复核；CLI 归档状态为 `completed_with_issues`，年度可比性不足，未确认计算或候选信号 |
+
+案例仅覆盖四项披露事实的数值、单位、期间列与报表口径，标签被标为仅供评测并从分析材料排除；没有人工审核结果，也不能据此声称跨公司泛化。五粮液 `0.00` 金额识别的提取代码已修正，但上述旧运行与案例尚未重新生成归档，不能用其证明修正后的结果。
+
 ### 旧预检限制
 
 - 只覆盖上述四个指标，不承诺其他报表项目或全部上市公司版式。
@@ -274,8 +301,8 @@ python scripts/analyze_annual.py `
 
 1. 文本型 PDF 的逐页文字与坐标已实现，并已对上述公开年报做过定位验收。
 2. 旧流程的四项年度事实、确定性同比，以及引用坐标内的原文金额与单位换算复核已实现。M1 海天样例与 M2 单样例确定性 Golden Path 已验收；正式 v2 CLI 已归档 8 条独立核验事实、8 项独立核验计算、16 条确定性 Claim 和 2 条候选信号。可比性 proof 只由当前 PDF 的第 116、163、197 页签发，序列化记录只用于审计，不是与此前已披露的 2023 年报独立勾稽；单一公司样例不代表泛化。
-3. 下一步接入 LangGraph、模型解释、年报检索和经审计的模型调用；待用户配置供应方与密钥后再做在线模型验收。随后推进 Evidence Explorer、多公司 golden 和对照评测。
-4. 本地年度预检接口和本机预检页面已在开发服务上验收。按文档先启动绑定 127.0.0.1:8000 的后端，再在 `frontend/` 安装依赖并执行 `npm run dev`。本机已生成 `frontend/package-lock.json`，类型检查与生产构建已通过，浏览器验收见上文。页面上传与预检是分开的两步。任务进度和报告导出仍未实现。项目不包含用户注册、登录或账户管理。
-5. 建立对照评测，并整理可复现说明。
+3. M3 调查图、候选线索的有限年报内检索、提示词、审计调用和可选 CLI 路径已编码；当前 LangGraph extra 未安装，模拟集成测试跳过，且没有真实在线调用，尚待本地模拟验收后再做在线验收。
+4. Evidence Explorer 与只读 v2 报告/证据预览接口已集成，并已用海天归档报告及第 82 页证据在真实浏览器验收；页面没有启动正式分析或产品级导出。下一步完成 3–5 家公司的人审 golden、五粮液修正后的重新归档，以及有/无独立核验的对照评测。
+5. 旧年度预检接口与页面仍单独保留并已验收。启动方式见上文；任务进度和报告导出仍未实现。项目不包含用户注册、登录或账户管理。
 
-当前有两条分开的本地流程：旧年度预检 API/页面继续使用旧事实与核验，页面可选展示旧版 screening；v2 确定性 Golden Path 由 `scripts/analyze_annual.py` 执行并已在海天 603288 的 2024 样例完成正式归档。该次运行有 8 条独立核验事实、8 项独立核验计算、16 条通过确定性检查的 Claim 和 2 条候选信号；M1 海天样例与 M2 单样例 Golden Path 已验收。可比性依据来自同一报告第 116、163、197 页，签发 proof 只在当前进程有效，序列化结果只供审计；没有独立勾稽此前已披露的 2023 年报。以上结论只覆盖一个公司年度样例。旧页面尚未接入 v2 报告。LangGraph、模型解释、Evidence Explorer、多公司 golden 和云端模型验收尚未完成；Chat Completions 连接器未接到智能体接口。默认 pytest 配置覆盖 unit 与 integration，截至 2026-09-27 有 168 项通过；前端类型检查、生产构建和历史预检浏览器验收另有既有记录，页面没有单独的自动化测试套件。
+当前有两条分开的本地流程：旧年度预检 API/页面继续使用旧事实与核验，页面可选展示旧版 screening；v2 确定性 Golden Path 由 `scripts/analyze_annual.py` 执行并已在海天 603288 的 2024 样例正式归档。该次运行有 8 条独立核验事实、8 项独立核验计算、16 条通过确定性检查的 Claim 和 2 条候选信号；M1 海天样例与 M2 单样例 Golden Path 已验收。后端只读 GET API 和前端 Evidence Explorer 已展示归档报告及已核验证据页图；没有从页面启动正式分析或产品级导出。M3 的调查代码与可选 CLI 已实现，但当前未安装 LangGraph、模拟集成测试跳过且无在线模型调用。茅台和五粮液案例仍是 provisional 事实参考；五粮液 `0.00` 修正后的运行尚未重新归档。M4 人工 golden 与消融评测未完成。可比性 proof 只由海天报告第 116、163、197 页签发，序列化结果只供审计；没有独立勾稽此前已披露的 2023 年报，也不代表跨公司泛化。最近完整后端结果为 241 passed、1 skipped；前端 `npm run build` 通过，真实浏览器验收通过海天报告和第 82 页证据预览。页面没有单独的自动化测试套件。

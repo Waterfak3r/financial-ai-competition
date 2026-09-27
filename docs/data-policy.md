@@ -2,7 +2,7 @@
 
 ## 1. 当前数据状态
 
-当前项目资料包含用户提供的比赛通知、方案大纲，以及一份公开年报原文。没有人工标注，没有可交付演示样例。旧年度预检已对这份年报做过文本解析，并生成四项年度事实和同比；旧流程继续保留其旧数据结构、可选 screening 与历史产物。另有独立 v2 确定性年度分析 CLI，已在这份年报上完成 M1/M2 单样例验收并归档运行和报告。
+当前项目资料包含用户提供的比赛通知、方案大纲，以及海天、茅台、五粮液三份公开 2024 年报原文。`data/samples/` 尚无可交付演示包；`evaluation/cases/` 有茅台和五粮液两份待人工审阅的 provisional 事实参考案例，没有人工 golden。海天旧年度预检及 v2 确定性年度分析 CLI 均已有正式归档；后两份年报用于跨公司事实定位和核验边界检查，不代表完成跨公司年度分析验收。
 
 已导入文件是巨潮资讯公开披露的《佛山市海天调味食品股份有限公司2024年年度报告》，不是人工构造数据。
 
@@ -22,7 +22,18 @@
 | 本地年度预检 | artifacts/runs/annual-precheck-603288-2024-20260925-105059/ 含 screening。较早的 104521、165111、164542、163707、163126 与 160938 仍保留 |
 | v2 正式年度分析 | artifacts/runs/annual-analysis-ffcd6078-a1df-416b-88b8-6774ebe66d42/；报告位于同 run_id 的 artifacts/reports/ 子目录 |
 
-该 PDF 有 208 页，解析后 208 页均有可提取文字。`annual-precheck-603288-2024-20260923-160938` 是较早的旧流程预检：completed，8 条事实、4 组同比、问题为 0，原始 SHA256 与 `source_sha256` 同为 `5a97b13534438f5e85249752ef492fbd9e23af73e67845e47bad1ab7d92e20ee`。它早于代码快照和原文金额复核，没有 `code` 与 `verification` 字段，保持原样。
+另外两份官方年报及其 provisional 案例如下。跨公司集成测试检查三份真实 PDF 的事实定位与核验边界；案例和历史 CLI 归档不是人工 golden。
+
+| 公司 / 报告 | 来源、原文路径与 SHA256 | 归档与当前可确认状态 |
+| --- | --- | --- |
+| 贵州茅台，600519，2024 年报；披露日 2025-04-08 | [官方 PDF](https://www.moutai.com.cn/mtgf/articleFileDir/2025-04/08/8055b7bed7db41bdbc617f4c9b9ec591.pdf)；`data/raw/600519/2024/moutai-2024-annual/8055b7bed7db41bdbc617f4c9b9ec591.pdf`；`5299f4940e2ce4e91084b73dc457d558b9d335fa76fbfee6227e4254eb7f4a30` | `evaluation/cases/600519-2024-provisional.json`；历史 CLI run `annual-analysis-10232970-a22b-498a-9a8b-4bde1b5bb8e6`。8 条事实独立核验为 `verified`，年度可比性证据不足，8 项计算均未确认。标签仍为 `agent_provisional_pending_human`。 |
+| 宜宾五粮液，000858，2024 年报；披露日 2025-04-26 | [巨潮资讯 PDF](https://static.cninfo.com.cn/finalpage/2025-04-26/1223311527.PDF)；`data/raw/000858/2024/cninfo-1223311527/1223311527.PDF`；`b737191a758994a35e9442d46847de771fe48b758feb9a7f35601def922435e7` | `evaluation/cases/000858-2024-provisional.json`；旧 CLI run `annual-analysis-a682b946-1733-48d1-bfd4-0ef2c8675e9c` 尚待修正后重新归档。年报表格定位到 8 条数值，但对应指标表未披露币种；当前代码与集成测试不确认事实或计算。案例与旧 run 中保存的 `conflict` 是修正前状态，不作为当前可比性结论；当前测试检查将可比性记为证据不足。标签仍为 `agent_provisional_pending_human`。 |
+
+两份年报均限本地开发与评测使用，未确认再分发许可。
+
+五粮液 `0.00` 被 Decimal 逻辑误判的代码已修复；修正后的正式运行和 provisional 案例尚未重跑、重新归档。两个案例只标注财务事实，不包含异常、舞弊或违规人工标签，也不算人工 golden。M4 的 3–5 家公司人工 golden、有无核验消融和可靠性统计尚未完成。
+
+海天年报 PDF 有 208 页，解析后 208 页均有可提取文字。`annual-precheck-603288-2024-20260923-160938` 是较早的旧流程预检：completed，8 条事实、4 组同比、问题为 0，原始 SHA256 与 `source_sha256` 同为 `5a97b13534438f5e85249752ef492fbd9e23af73e67845e47bad1ab7d92e20ee`。它早于代码快照和原文金额复核，没有 `code` 与 `verification` 字段，保持原样。
 
 正式复核运行是 `annual-precheck-603288-2024-20260923-165111`。哈希一致后，8 条事实全部在引用页的坐标内按完整金额 token 重新读到原始金额，同一行的空格、负号、括号和千分位参与边界判断，`raw_value × unit_multiplier` 与 `normalized_value` 一致，失败数和弃权数都是 0。这只是旧预检的原文金额与数值换算复核，未确认年度列、表头口径或完整财报事实；该历史记录的 `model_called` 与 `independently_verified` 均为 false，也不是舞弊结论。`annual-precheck-603288-2024-20260925-105059` 在同样复核通过的前提下写入旧版 `screening`：归母净利润差额与营业收入差额均为正、经营现金流差额为负，两条背离线索为 candidate，页码分别在 82 与 86；非经常性损益比值弃权。该次仍不是舞弊结论，也未把旧预检标成独立验证。`164542`、`163707` 与 `163126` 仍保留。
 
