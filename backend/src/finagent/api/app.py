@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 
 from finagent.api.annual_precheck import (
     HashMismatchError,
@@ -16,6 +17,10 @@ from finagent.api.annual_report_read import (
     AnnualReportReadError,
     load_annual_report,
     render_evidence_preview,
+)
+from finagent.api.annual_analysis_jobs import (
+    AnnualAnalysisJobError,
+    get_annual_analysis_job_service,
 )
 from finagent.core.safe_paths import PathBoundaryError
 from finagent.ingestion.errors import PdfInputError
@@ -29,10 +34,20 @@ class AnnualPrecheckRequest(BaseModel):
     report_year: int = Field(..., ge=1900, le=2100)
 
 
+class AnnualAnalysisJobRequest(BaseModel):
+    company_id: str
+    report_year: StrictInt = Field(..., ge=1900, le=2100)
+    document_id: str
+    source_pdf_path: str = Field(..., description="相对 data/raw 的 PDF 路径")
+    sha256: str
+    mode: Literal["deterministic", "m3_screening", "model_investigation"] = "deterministic"
+
+
 def create_app(project_root: Path | None = None) -> FastAPI:
     root = Path(project_root).resolve() if project_root is not None else Path(__file__).resolve().parents[4]
     app = FastAPI(title="finagent annual precheck", version="0.1.0")
     app.state.project_root = root
+    app.state.annual_analysis_jobs = get_annual_analysis_job_service(root)
 
     @app.post("/v1/text-pdf-uploads", status_code=201)
     def post_text_pdf_upload(
@@ -90,6 +105,26 @@ def create_app(project_root: Path | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=404,
                 detail={"code": "run_not_found", "message": "找不到该预检运行。"},
+            ) from None
+
+    @app.post("/v1/annual-analysis-jobs", status_code=202)
+    def post_annual_analysis_job(body: AnnualAnalysisJobRequest) -> dict:
+        try:
+            return app.state.annual_analysis_jobs.create(body.model_dump())
+        except AnnualAnalysisJobError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": exc.message},
+            ) from None
+
+    @app.get("/v1/annual-analysis-jobs/{job_id}")
+    def get_annual_analysis_job(job_id: str) -> dict:
+        try:
+            return app.state.annual_analysis_jobs.get(job_id)
+        except AnnualAnalysisJobError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": exc.message},
             ) from None
 
     @app.get("/v1/annual-analyses/{run_id}/evidence/{evidence_id}/preview.png")

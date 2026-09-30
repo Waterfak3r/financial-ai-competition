@@ -16,28 +16,44 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend" / "src"))
 
 from finagent.api.annual_analysis import analyze_annual_pdf  # noqa: E402
+from finagent.api.m3_annual import (  # noqa: E402
+    failed_m3_annual_screening,
+    run_m3_annual_screening,
+)
+from finagent.finance.m3_screening import RULE_VERSION as M3_RULE_VERSION  # noqa: E402
 from finagent.finance.v2_calculation import RULE_VERSION  # noqa: E402
 from finagent.reports.investigation_append import (  # noqa: E402
     attach_investigation_to_report,
     render_report_with_investigation,
     run_annual_investigation_appendix,
 )
+from finagent.reports.m3_annual_append import (  # noqa: E402
+    attach_m3_screening_to_report,
+    render_report_with_m3_screening,
+)
 
 _SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 _PROVENANCE_FILES = (
     "scripts/analyze_annual.py",
     "backend/src/finagent/api/annual_analysis.py",
+    "backend/src/finagent/api/m3_annual.py",
     "backend/src/finagent/ingestion/parse_text_pdf.py",
     "backend/src/finagent/ingestion/extract_annual_facts.py",
+    "backend/src/finagent/ingestion/v2_balance_sheet.py",
+    "backend/src/finagent/ingestion/v2_income_statement.py",
+    "backend/src/finagent/ingestion/v2_key_financial_data.py",
     "backend/src/finagent/schemas/financial_fact.py",
     "backend/src/finagent/schemas/financial_fact_v2.py",
     "backend/src/finagent/finance/v2_calculation.py",
     "backend/src/finagent/finance/v2_screening.py",
+    "backend/src/finagent/finance/m3_screening.py",
     "backend/src/finagent/verification/independent_fact.py",
     "backend/src/finagent/verification/comparability.py",
+    "backend/src/finagent/verification/m3_semantic_mapping.py",
     "backend/src/finagent/verification/independent_calculation.py",
     "backend/src/finagent/verification/claim.py",
     "backend/src/finagent/reports/annual_report.py",
+    "backend/src/finagent/reports/m3_annual_append.py",
     "backend/src/finagent/reports/investigation_append.py",
     "backend/src/finagent/agents/annual_investigation.py",
     "backend/src/finagent/retrieval/annual_context.py",
@@ -55,6 +71,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--with-model 需要同时提供 --source-record。")
     if args.source_record is not None and not args.with_model:
         parser.error("--source-record 仅能与 --with-model 一起使用。")
+    if args.with_model and _m3_requested(args):
+        parser.error("--with-model 与 --with-m3-screening 暂不支持同次运行；请分别运行。")
     try:
         return _run(args)
     except (OSError, ValueError) as exc:
@@ -92,6 +110,11 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="绑定当前 PDF 的 source.json；仅与 --with-model 一起使用",
     )
+    parser.add_argument(
+        "--with-m3-screening",
+        action="store_true",
+        help="显式运行 M3 五字段独立核验与四条确定性规则；不调用模型",
+    )
     return parser
 
 
@@ -109,6 +132,8 @@ def _run(args: argparse.Namespace) -> int:
         raise ValueError("--with-model 需要同时提供 --source-record。")
     if args.source_record is not None and not args.with_model:
         raise ValueError("--source-record 仅能与 --with-model 一起使用。")
+    if args.with_model and _m3_requested(args):
+        raise ValueError("--with-model 与 --with-m3-screening 暂不支持同次运行；请分别运行。")
 
     artifacts_root = _safe_artifacts_root(args.artifacts_root)
     source_sha256 = _sha256(source_pdf)
@@ -117,6 +142,7 @@ def _run(args: argparse.Namespace) -> int:
     created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     actual_copy_sha256: str | None = None
     investigation: dict[str, object] | None = None
+    m3_screening: dict[str, object] | None = None
     result = None
     try:
         actual_copy_sha256 = _copy_and_hash_new(source_pdf, input_copy)
@@ -161,6 +187,29 @@ def _run(args: argparse.Namespace) -> int:
                 investigation_path=investigation_path,
             )
             markdown = render_report_with_investigation(report_payload, investigation)
+        elif _m3_requested(args):
+            try:
+                m3_screening = run_m3_annual_screening(
+                    input_copy,
+                    result.parsed_pdf,
+                    company_id=args.company_id,
+                    report_year=args.report_year,
+                    annual_facts=result.facts,
+                    annual_evidences=result.evidences,
+                    annual_verifications=result.fact_verifications,
+                )
+            except Exception as exc:
+                m3_screening = failed_m3_annual_screening(
+                    company_id=args.company_id,
+                    report_year=args.report_year,
+                    document_id=args.document_id,
+                    source_sha256=actual_copy_sha256,
+                    error=exc,
+                )
+            _write_json_new(run_dir / "m3_screening.json", m3_screening)
+            analysis_payload["m3_screening"] = m3_screening
+            report_payload = attach_m3_screening_to_report(report_payload, m3_screening)
+            markdown = render_report_with_m3_screening(markdown, m3_screening)
 
         _write_json_new(run_dir / "parsed_text_pdf.json", result.parsed_pdf.to_dict())
         _write_json_new(run_dir / "analysis.json", analysis_payload)
@@ -168,6 +217,8 @@ def _run(args: argparse.Namespace) -> int:
         _write_text_new(report_dir / "report.md", markdown)
         completed_status = result.status
         if investigation is not None and investigation.get("status") != "completed":
+            completed_status = "completed_with_issues"
+        if m3_screening is not None and m3_screening.get("status") != "completed":
             completed_status = "completed_with_issues"
         manifest = _manifest(
             status=completed_status,
@@ -181,6 +232,7 @@ def _run(args: argparse.Namespace) -> int:
             report_dir=report_dir,
             rule_version=RULE_VERSION,
             error=None,
+            m3_screening=m3_screening,
         )
         if investigation is not None:
             _add_investigation_manifest(
@@ -190,6 +242,8 @@ def _run(args: argparse.Namespace) -> int:
                 artifacts_root=artifacts_root,
                 run_dir=run_dir,
             )
+        if m3_screening is not None:
+            _add_m3_manifest(manifest, m3_screening, artifacts_root=artifacts_root, run_dir=run_dir)
         _write_json_new(run_dir / "manifest.json", manifest)
         confirmed_facts = len(result.report["confirmed"]["metrics"])
         confirmed_calculations = len(result.report["confirmed"]["analyses"])
@@ -205,10 +259,31 @@ def _run(args: argparse.Namespace) -> int:
                 f"model_called={str(bool(investigation.get('model_called'))).lower()} "
                 f"path={_relative_or_absolute(run_dir / 'investigation.json', artifacts_root)}"
             )
+        if m3_screening is not None:
+            print(
+                f"m3_screening={m3_screening.get('status')} "
+                f"score={m3_screening.get('screening', {}).get('total_score')} "
+                f"path={_relative_or_absolute(run_dir / 'm3_screening.json', artifacts_root)}"
+            )
         print(f"run_dir={run_dir}")
         print(f"report_dir={report_dir}")
-        return 2 if investigation is not None and investigation.get("status") != "completed" else 0
+        return 2 if (
+            (investigation is not None and investigation.get("status") != "completed")
+            or (m3_screening is not None and m3_screening.get("status") != "completed")
+        ) else 0
     except Exception as exc:
+        if _m3_requested(args) and m3_screening is None:
+            m3_screening = failed_m3_annual_screening(
+                company_id=args.company_id,
+                report_year=args.report_year,
+                document_id=args.document_id,
+                source_sha256=actual_copy_sha256 or source_sha256,
+                error=exc,
+            )
+            try:
+                _write_json_new(run_dir / "m3_screening.json", m3_screening)
+            except OSError:
+                pass
         deterministic_archived = (run_dir / "analysis.json").is_file() and (
             report_dir / "report.json"
         ).is_file()
@@ -246,6 +321,11 @@ def _run(args: argparse.Namespace) -> int:
             "source_sha256": actual_copy_sha256 or source_sha256,
             "expected_sha256": args.expected_sha256,
         }
+        if m3_screening is not None:
+            failure["m3_screening_status"] = m3_screening.get("status")
+            failure["m3_screening_path"] = _relative_or_absolute(
+                run_dir / "m3_screening.json", artifacts_root
+            )
         if investigation is not None:
             failure["model_investigation_status"] = investigation.get("status")
             failure["investigation_path"] = _relative_or_absolute(
@@ -266,6 +346,7 @@ def _run(args: argparse.Namespace) -> int:
                 report_dir=report_dir,
                 rule_version=RULE_VERSION,
                 error=str(exc),
+                m3_screening=m3_screening,
             )
             if investigation is not None:
                 _add_investigation_manifest(
@@ -275,6 +356,8 @@ def _run(args: argparse.Namespace) -> int:
                     artifacts_root=artifacts_root,
                     run_dir=run_dir,
                 )
+            if m3_screening is not None:
+                _add_m3_manifest(failure_manifest, m3_screening, artifacts_root=artifacts_root, run_dir=run_dir)
             _write_json_new(run_dir / "manifest.json", failure_manifest)
         except OSError as archive_exc:
             print(
@@ -356,6 +439,7 @@ def _manifest(
     report_dir: Path,
     rule_version: str,
     error: str | None,
+    m3_screening: dict[str, object] | None = None,
 ) -> dict[str, object]:
     head, dirty = _git_state()
     source_hashes: dict[str, str | None] = {}
@@ -392,7 +476,47 @@ def _manifest(
     }
     if error is not None:
         payload["failure_reason"] = error
+    if m3_screening is not None:
+        payload["rules"]["m3_screening_version"] = M3_RULE_VERSION
+        payload["outputs"]["m3_screening_json"] = _relative_or_absolute(
+            run_dir / "m3_screening.json", artifacts_root
+        )
+        payload["m3_screening"] = {
+            "requested": True,
+            "status": m3_screening.get("status"),
+            "total_score": m3_screening.get("screening", {}).get("total_score"),
+            "maximum_score": m3_screening.get("screening", {}).get("maximum_score"),
+            "model_called": False,
+            "output_path": _relative_or_absolute(run_dir / "m3_screening.json", artifacts_root),
+        }
     return payload
+
+
+def _add_m3_manifest(
+    manifest: dict[str, object],
+    m3_screening: dict[str, object],
+    *,
+    artifacts_root: Path,
+    run_dir: Path,
+) -> None:
+    outputs = manifest["outputs"]
+    if isinstance(outputs, dict):
+        outputs["m3_screening_json"] = _relative_or_absolute(
+            run_dir / "m3_screening.json", artifacts_root
+        )
+    manifest["m3_screening"] = {
+        "requested": True,
+        "status": m3_screening.get("status"),
+        "total_score": m3_screening.get("screening", {}).get("total_score"),
+        "maximum_score": m3_screening.get("screening", {}).get("maximum_score"),
+        "model_called": False,
+        "output_path": _relative_or_absolute(run_dir / "m3_screening.json", artifacts_root),
+    }
+
+
+def _m3_requested(args: argparse.Namespace) -> bool:
+    # 老测试或旧调用方可能直接传入构造好的 Namespace，没有新字段。
+    return bool(getattr(args, "with_m3_screening", False))
 
 
 def _add_investigation_manifest(

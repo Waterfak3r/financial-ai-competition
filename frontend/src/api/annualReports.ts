@@ -8,6 +8,8 @@ import type {
   ConfirmedMetric,
   ClaimVerification,
   MetricVerification,
+  M3AnnualScreening,
+  M3AnnualScreeningRule,
   PdfBox,
   VerificationEvidence,
   VerifiedClaim,
@@ -209,6 +211,9 @@ function readReport(value: Record<string, unknown>, path: string): AnnualAnalysi
   const scope = requireRecord(value.scope, path + ".scope");
   const confirmed = requireRecord(value.confirmed, path + ".confirmed");
   const pendingReview = requireRecord(value.pending_review, path + ".pending_review");
+  const companyId = requireString(value.company_id, path + ".company_id");
+  const reportYear = requireInteger(value.report_year, path + ".report_year");
+  const sourceDocumentId = requireString(value.source_document_id, path + ".source_document_id");
   const comparabilityValue = value.comparability;
   const comparability =
     comparabilityValue === null
@@ -218,9 +223,9 @@ function readReport(value: Record<string, unknown>, path: string): AnnualAnalysi
     kind: "fintrace_annual_analysis_report",
     title: optionalString(value.title) ?? undefined,
     run_id: requireString(value.run_id, path + ".run_id"),
-    company_id: requireString(value.company_id, path + ".company_id"),
-    report_year: requireInteger(value.report_year, path + ".report_year"),
-    source_document_id: requireString(value.source_document_id, path + ".source_document_id"),
+    company_id: companyId,
+    report_year: reportYear,
+    source_document_id: sourceDocumentId,
     source_sha256: sourceSha256.toLowerCase(),
     fraud_conclusion: nullableString(value.fraud_conclusion, path + ".fraud_conclusion"),
     scope: {
@@ -250,12 +255,85 @@ function readReport(value: Record<string, unknown>, path: string): AnnualAnalysi
     },
     limitations: readStringArray(value.limitations, path + ".limitations"),
     model_called: requireBoolean(value.model_called, path + ".model_called"),
+    m3_screening:
+      value.m3_screening === undefined
+        ? undefined
+        : value.m3_screening === null
+          ? null
+          : readM3AnnualScreening(
+              requireRecord(value.m3_screening, path + ".m3_screening"),
+              path + ".m3_screening",
+              companyId,
+              reportYear,
+              sourceDocumentId,
+              sourceSha256,
+            ),
     model_investigation:
       value.model_investigation === undefined
         ? undefined
         : value.model_investigation === null
           ? null
           : requireRecord(value.model_investigation, path + ".model_investigation"),
+  };
+}
+
+function readM3AnnualScreening(
+  value: Record<string, unknown>,
+  path: string,
+  companyId: string,
+  reportYear: number,
+  sourceDocumentId: string,
+  sourceSha256: string,
+): M3AnnualScreening {
+  const nested = requireRecord(value.screening, path + ".screening");
+  const screeningYear = requireInteger(nested.report_year, path + ".screening.report_year");
+  if (
+    requireString(value.company_id, path + ".company_id") !== companyId ||
+    screeningYear !== reportYear ||
+    requireString(value.source_document_id, path + ".source_document_id") !== sourceDocumentId ||
+    requireString(value.source_sha256, path + ".source_sha256").toLowerCase() !== sourceSha256.toLowerCase()
+  ) {
+    throw invalidResponse(path + " source binding");
+  }
+  const screeningSourceSha256 = requireString(value.source_sha256, path + ".source_sha256");
+  if (!SHA256_PATTERN.test(screeningSourceSha256)) {
+    throw invalidResponse(path + ".source_sha256");
+  }
+  return {
+    kind: requireString(value.kind, path + ".kind"),
+    rule_version: requireString(nested.rule_version, path + ".screening.rule_version"),
+    status: requireString(value.status, path + ".status"),
+    screening_status: requireString(nested.status, path + ".screening.status"),
+    total_score: nested.total_score === null ? null : requireInteger(nested.total_score, path + ".screening.total_score"),
+    maximum_score: requireInteger(nested.maximum_score, path + ".screening.maximum_score"),
+    rules: requireArray(nested.rules, path + ".screening.rules").map((item, index) =>
+      readM3AnnualScreeningRule(item, path + ".screening.rules[" + index + "]"),
+    ),
+    limitations: readStringArray(nested.limitations, path + ".screening.limitations"),
+  };
+}
+
+function readM3AnnualScreeningRule(value: unknown, path: string): M3AnnualScreeningRule {
+  const record = requireRecord(value, path);
+  const triggeredValue = record.triggered;
+  if (triggeredValue !== null && typeof triggeredValue !== "boolean") {
+    throw invalidResponse(path + ".triggered");
+  }
+  const pointsValue = record.points;
+  if (pointsValue !== null && (typeof pointsValue !== "number" || !Number.isInteger(pointsValue))) {
+    throw invalidResponse(path + ".points");
+  }
+  return {
+    rule_id: requireString(record.rule_id, path + ".rule_id"),
+    rule_version: requireString(record.rule_version, path + ".rule_version"),
+    formula: requireString(record.formula, path + ".formula"),
+    threshold: nullableString(record.threshold, path + ".threshold"),
+    points_if_triggered: requireInteger(record.points_if_triggered, path + ".points_if_triggered"),
+    points: pointsValue as number | null,
+    status: requireString(record.status, path + ".status"),
+    triggered: triggeredValue,
+    calculated_value: nullableString(record.calculated_value, path + ".calculated_value"),
+    issues: readStringArray(record.issues, path + ".issues"),
   };
 }
 

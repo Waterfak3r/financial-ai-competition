@@ -42,8 +42,7 @@ interface FieldErrors {
 }
 
 type RequestPhase = "idle" | "uploading" | "creating" | "loading";
-type AppView = "home" | "create" | "result" | "report" | "annual-analysis";
-type ReportSection = "status" | "scope" | "record";
+type AppView = "home" | "create" | "result" | "annual-analysis";
 
 export function AnnualPrecheckPage() {
   const [parsedPath, setParsedPath] = useState("");
@@ -51,13 +50,13 @@ export function AnnualPrecheckPage() {
   const [companyId, setCompanyId] = useState("");
   const [reportYear, setReportYear] = useState("");
   const [runId, setRunId] = useState("");
+  const [pdfFileName, setPdfFileName] = useState("");
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [phase, setPhase] = useState<RequestPhase>("idle");
   const [requestError, setRequestError] = useState<string | null>(null);
   const [record, setRecord] = useState<AnnualPrecheckRecord | null>(null);
-  const [view, setView] = useState<AppView>("home");
+  const [view, setView] = useState<AppView>("annual-analysis");
   const [selectedIndicator, setSelectedIndicator] = useState<string | null>(null);
-  const [reportSection, setReportSection] = useState<ReportSection>("status");
   const [uploadReceipt, setUploadReceipt] = useState<TextPdfUploadReceipt | null>(null);
   const requestLock = useRef(false);
   const pdfInputRef = useRef<HTMLInputElement>(null);
@@ -205,8 +204,8 @@ export function AnnualPrecheckPage() {
     const runError = validateRunId(nextRunId);
     setFieldErrors((current) => ({ ...current, runId: runError }));
     if (runError !== undefined) {
-      setView("create");
-      document.getElementById("run-id")?.focus();
+      setView("result");
+      window.setTimeout(() => document.getElementById("run-id")?.focus(), 0);
       return;
     }
     requestLock.current = true;
@@ -236,69 +235,72 @@ export function AnnualPrecheckPage() {
           <span className="brand-mark" aria-hidden="true" />
           财务智析
         </p>
-        <nav aria-label="年度分析与预检">
+        <nav className="primary-navigation" aria-label="分析流程">
           <ul className="nav-list">
             <li>
-              <NavButton view="home" current={view} onSelect={setView} icon={<HomeIcon />} label="首页" />
-            </li>
-            <li>
-              <NavButton view="create" current={view} onSelect={setView} icon={<FormIcon />} label="创建预检" />
-            </li>
-            <li>
-              <NavButton view="result" current={view} onSelect={setView} icon={<TableIcon />} label="预检结果" />
-            </li>
-            <li>
-              <NavButton view="report" current={view} onSelect={setView} icon={<DocIcon />} label="报告" />
-            </li>
-            <li>
-              <NavButton view="annual-analysis" current={view} onSelect={setView} icon={<DocIcon />} label="年度分析" />
+              <NavButton view="annual-analysis" current={view} onSelect={setView} icon={<DocIcon />} label="分析年报" />
             </li>
           </ul>
+          <details className="legacy-navigation" open={view === "home" || view === "create" || view === "result"}>
+            <summary>基础预检（旧流程）</summary>
+            <ul className="nav-list legacy-nav-list">
+              <li>
+                <NavButton view="home" current={view} onSelect={setView} icon={<HomeIcon />} label="预检说明" />
+              </li>
+              <li>
+                <NavButton view="create" current={view} onSelect={setView} icon={<FormIcon />} label="新建基础预检" />
+              </li>
+              <li>
+                <NavButton view="result" current={view} onSelect={setView} icon={<TableIcon />} label="查看预检结果" />
+              </li>
+            </ul>
+          </details>
         </nav>
       </aside>
       <div className="workspace">
         <header className="topbar">
-          {view === "annual-analysis" ? null : (
-            <form className="lookup" onSubmit={onLoad} noValidate>
-              <label htmlFor="run-id">运行 ID</label>
-              <input
-                id="run-id"
-                value={runId}
-                disabled={busy}
-                autoComplete="off"
-                spellCheck={false}
-                aria-invalid={fieldErrors.runId !== undefined}
-                aria-describedby={fieldErrors.runId === undefined ? undefined : "run-id-help"}
-                placeholder="输入 run_id 回看"
-                onChange={(event) => setRunId(event.target.value)}
-              />
-              <button type="submit" disabled={busy}>
-                回看
-              </button>
-            </form>
-          )}
           <p className="top-note">
-            {view === "annual-analysis" ? "本地年度报告 · 只读归档" : "本地预检 · 无账户"}
+            {view === "annual-analysis" ? "本地分析 · 结果与证据可追溯" : "基础预检仅作原文金额与年度对比参考"}
           </p>
+          {view === "annual-analysis" ? null : (
+            <details className="legacy-run-lookup" open={fieldErrors.runId !== undefined}>
+              <summary>高级：按编号回看已有预检</summary>
+              <form className="legacy-run-lookup-form" onSubmit={onLoad} noValidate>
+                <label htmlFor="run-id">预检记录编号</label>
+                <div className="legacy-run-lookup-row">
+                  <input
+                    id="run-id"
+                    value={runId}
+                    disabled={busy}
+                    autoComplete="off"
+                    spellCheck={false}
+                    aria-invalid={fieldErrors.runId !== undefined}
+                    aria-describedby={fieldErrors.runId === undefined ? undefined : "run-id-help"}
+                    placeholder="粘贴已有预检编号"
+                    onChange={(event) => setRunId(event.target.value)}
+                  />
+                  <button type="submit" disabled={busy}>读取记录</button>
+                </div>
+                {fieldErrors.runId === undefined ? null : (
+                  <span id="run-id-help" className="field-error" role="alert">{fieldErrors.runId}</span>
+                )}
+              </form>
+            </details>
+          )}
         </header>
         <main className="content" aria-busy={busy}>
           {view === "annual-analysis" || phase === "idle" ? null : (
             <p role="status" className="status-line">
               {phase === "creating"
-                ? "正在创建预检。接口同步返回，页面没有单独的任务进度。"
+                ? "正在生成基础预检结果…"
                 : phase === "uploading"
-                  ? "正在上传并解析文本 PDF。完成后仍需点击创建预检，页面不会自动开始。"
-                  : "正在读取该次运行。"}
+                  ? "正在上传并读取年报 PDF；完成后请点击“开始基础预检”。"
+                  : "正在读取预检结果…"}
             </p>
           )}
           {view !== "annual-analysis" && requestError !== null ? (
             <p role="alert" className="alert">
               {requestError}
-            </p>
-          ) : null}
-          {view !== "annual-analysis" && fieldErrors.runId !== undefined ? (
-            <p id="run-id-help" className="field-error">
-              {fieldErrors.runId}
             </p>
           ) : null}
           {view === "home" ? (
@@ -318,6 +320,8 @@ export function AnnualPrecheckPage() {
               fieldErrors={fieldErrors}
               busy={busy}
               uploadReceipt={uploadReceipt}
+              pdfFileName={pdfFileName}
+              onPdfFileName={setPdfFileName}
               pdfInputRef={pdfInputRef}
               onParsedPath={changeParsedPath}
               onSourcePdfPath={changeSourcePdfPath}
@@ -336,14 +340,6 @@ export function AnnualPrecheckPage() {
               selectedIndicator={selectedIndicator}
               onSelectIndicator={setSelectedIndicator}
               onCreate={() => setView("create")}
-            />
-          ) : null}
-          {view === "report" ? (
-            <ReportView
-              record={record}
-              section={reportSection}
-              onSection={setReportSection}
-              onResult={() => setView("result")}
             />
           ) : null}
           {view === "annual-analysis" ? <AnnualAnalysisPage /> : null}
@@ -394,43 +390,42 @@ function HomeView({
     <>
       <section className="hero">
         <div className="hero-copy">
-          <h1>让财务预检更清晰</h1>
+          <p className="eyebrow">基础预检（旧流程）</p>
+          <h1>快速查看年报数据</h1>
           <p className="lede">
-            这是本地年度预检。页面展示已加载记录中的财务事实、同比、引用页和原文金额复核，不调用云端模型，也不给出风险或舞弊结论。
+            这是保留的旧版本地流程，可查看财务数据、年度变化和原文金额核对。它不等同于正式年度分析，筛查提示也不代表已确认异常。
           </p>
           <div className="hero-actions">
             <button type="button" className="primary hero-cta" onClick={onCreate}>
-              去创建
+              新建基础预检
             </button>
             <button type="button" className="secondary hero-cta" onClick={onResult}>
-              去回看
+              查看已有结果
             </button>
           </div>
         </div>
         <HeroArt />
       </section>
       <section className="card-grid" aria-label="当前记录摘要">
-        <SummaryCard tone="facts" label="事实条数" value={summary.facts} icon={<TableIcon />} />
-        <SummaryCard tone="changes" label="同比组数" value={summary.changes} icon={<BarsIcon />} />
-        <SummaryCard tone="passed" label="金额复核通过数" value={summary.passed} icon={<CheckIcon />} />
-        <SummaryCard tone="issues" label="问题条数" value={summary.issues} icon={<AlertIcon />} />
+        <SummaryCard tone="facts" label="读取到的财务数据" value={summary.facts} icon={<TableIcon />} />
+        <SummaryCard tone="changes" label="年度变化对比" value={summary.changes} icon={<BarsIcon />} />
+        <SummaryCard tone="passed" label="原文金额核对通过" value={summary.passed} icon={<CheckIcon />} />
+        <SummaryCard tone="issues" label="需要留意的项目" value={summary.issues} icon={<AlertIcon />} />
       </section>
       <section className="panel">
-        <h2>最近一次运行</h2>
+        <h2>当前预检记录</h2>
         {record === null ? (
-          <p className="empty">尚未加载预检记录。创建或按运行 ID 回看后，这里显示该次 run_id 与状态。</p>
+          <p className="empty">还没有可显示的基础预检记录。可以新建一次预检，也可以使用高级选项读取本机已有记录。</p>
         ) : (
           <>
-            <dl className="meta">
-              <dt>run_id</dt>
-              <dd>
-                <code>{record.run_id}</code>
-              </dd>
-              <dt>状态</dt>
-              <dd>
-                {statusText(record.status)}（{record.status}）
-              </dd>
-            </dl>
+            <p>最近一次基础预检：{statusText(record.status)}</p>
+            <details className="legacy-technical-details">
+              <summary>技术记录：预检编号与内部状态</summary>
+              <dl className="meta">
+                <dt>预检编号</dt><dd><code>{record.run_id}</code></dd>
+                <dt>内部状态</dt><dd>{statusText(record.status)}（{record.status}）</dd>
+              </dl>
+            </details>
             <div className="inline-actions">
               <button type="button" className="secondary" onClick={onResult}>
                 打开这次结果
@@ -476,6 +471,8 @@ function CreateView({
   fieldErrors,
   busy,
   uploadReceipt,
+  pdfFileName,
+  onPdfFileName,
   pdfInputRef,
   onParsedPath,
   onSourcePdfPath,
@@ -492,6 +489,8 @@ function CreateView({
   fieldErrors: FieldErrors;
   busy: boolean;
   uploadReceipt: TextPdfUploadReceipt | null;
+  pdfFileName: string;
+  onPdfFileName: (name: string) => void;
   pdfInputRef: RefObject<HTMLInputElement | null>;
   onParsedPath: (value: string) => void;
   onSourcePdfPath: (value: string) => void;
@@ -504,44 +503,50 @@ function CreateView({
   const fileHelpId = "pdf-file-help";
   const fileErrorId = "pdf-file-error";
   return (
-    <form className="panel" onSubmit={onSubmit} noValidate>
-      <h2>创建预检</h2>
-      <p id="sample-help">
-        上传和预检是两步。填写 company_id 与 report_year 后选择文本型 PDF 并上传；成功后才会填入相对路径。再点击创建预检才会开始预检。也可以不上传，直接填写已有路径，或一键填入海天味业（603288）2024 年公开年报的相对路径。样例文件需要已经在本机 data/processed 与 data/raw 中。
-      </p>
+    <form className="panel precheck-create-form" onSubmit={onSubmit} noValidate>
+      <p className="eyebrow">基础预检（旧流程）</p>
+      <h1>新建基础预检</h1>
+      <p className="lede">选择年报 PDF，填写公司代码和报告年份，再上传并开始预检。上传和开始预检是两个步骤。</p>
       <div className="form-grid">
         <TextField
           id="company-id"
-          label="company_id"
+          label="公司代码"
           value={companyId}
-          help="公司标识，海天样例为 603288。"
+          help="例如海天味业的公司代码为 603288。"
           error={fieldErrors.companyId}
           disabled={busy}
           onChange={onCompanyId}
         />
         <TextField
           id="report-year"
-          label="report_year"
+          label="年报年份"
           value={reportYear}
-          help="报告年度，1900 到 2100 的整数。"
+          help="填写年报对应的年份，例如 2024。"
           error={fieldErrors.reportYear}
           disabled={busy}
           inputMode="numeric"
           onChange={onReportYear}
         />
         <div className="field field-span">
-          <label htmlFor="pdf-file">文本型 PDF</label>
+          <label id="pdf-file-title" htmlFor="pdf-file">年报 PDF 文件</label>
+          <div className="precheck-file-picker">
           <input
             id="pdf-file"
             ref={pdfInputRef}
+            className="precheck-file-input"
             type="file"
             accept="application/pdf,.pdf"
             disabled={busy}
+            aria-labelledby="pdf-file-title"
             aria-invalid={fieldErrors.pdfFile !== undefined}
             aria-describedby={fieldErrors.pdfFile === undefined ? fileHelpId : `${fileHelpId} ${fileErrorId}`}
+            onChange={(event) => onPdfFileName(event.target.files?.[0]?.name ?? "")}
           />
+          <label className="precheck-file-button" htmlFor="pdf-file">选择 PDF 文件</label>
+          <span className="precheck-file-name" aria-live="polite">{pdfFileName || "尚未选择文件"}</span>
+          </div>
           <p id={fileHelpId} className="help">
-            选择后点击上传。空文件和超过 32 MiB 的文件不会发送。没有可提取文字的 PDF 由服务端拒绝。
+            仅支持可提取文字的 PDF，文件不超过 32 MiB。扫描版图片 PDF 暂不支持。
           </p>
           {fieldErrors.pdfFile !== undefined ? (
             <p id={fileErrorId} className="field-error">
@@ -552,52 +557,61 @@ function CreateView({
       </div>
       <div className="actions">
         <button type="button" className="secondary" onClick={onUpload} disabled={busy}>
-          上传文本 PDF
+          上传年报 PDF
         </button>
       </div>
       {uploadReceipt !== null ? (
         <div className="upload-note" role="status">
-          <p>文本 PDF 已保存并解析。请核对下面三项，再点击创建预检。页面没有自动开始预检。</p>
+          <p>年报已上传并读取。请继续点击“开始基础预检”。</p>
+          <p>已读取页数：{uploadReceipt.page_count}</p>
+          <details className="legacy-technical-details">
+            <summary>技术记录：来源文件编号与校验值</summary>
           <dl className="meta">
-            <dt>document_id</dt>
+            <dt>来源文件编号</dt>
             <dd>
               <code>{uploadReceipt.document_id}</code>
             </dd>
-            <dt>页数</dt>
-            <dd>{uploadReceipt.page_count}</dd>
-            <dt>SHA256</dt>
+            <dt>文件校验值（SHA256）</dt>
             <dd>
               <code>{uploadReceipt.sha256}</code>
             </dd>
           </dl>
+          </details>
         </div>
       ) : null}
-      <div className="form-grid">
-        <TextField
-          id="parsed-path"
-          label="解析结果相对路径（相对 data/processed）"
-          value={parsedPath}
-          help="例如 603288/2024/cninfo-1222994233/text_pdf.json"
-          error={fieldErrors.parsedPath}
-          disabled={busy}
-          onChange={onParsedPath}
-        />
-        <TextField
-          id="source-pdf-path"
-          label="原始 PDF 相对路径（相对 data/raw）"
-          value={sourcePdfPath}
-          help="例如 603288/2024/cninfo-1222994233/1222994233.PDF"
-          error={fieldErrors.sourcePdfPath}
-          disabled={busy}
-          onChange={onSourcePdfPath}
-        />
-      </div>
-      <div className="actions">
+      <details
+        className="legacy-advanced-fields"
+        open={fieldErrors.parsedPath !== undefined || fieldErrors.sourcePdfPath !== undefined}
+      >
+        <summary>高级选项：使用本机已保存的年报</summary>
+        <p className="help">通常无需填写。仅当年报已存在本机目录中时，才使用以下位置；样例按钮会填入海天味业 2024 年报的位置。</p>
+        <div className="form-grid">
+          <TextField
+            id="parsed-path"
+            label="已读取的报告位置"
+            value={parsedPath}
+            help="这是项目内部位置；仅用于高级用户读取已保存资料。"
+            error={fieldErrors.parsedPath}
+            disabled={busy}
+            onChange={onParsedPath}
+          />
+          <TextField
+            id="source-pdf-path"
+            label="原始 PDF 的本机位置"
+            value={sourcePdfPath}
+            help="项目内部位置；通常通过上方的 PDF 上传自动填写。"
+            error={fieldErrors.sourcePdfPath}
+            disabled={busy}
+            onChange={onSourcePdfPath}
+          />
+        </div>
         <button type="button" className="secondary" onClick={onFill} disabled={busy}>
-          填入海天 2024 样例
+          填入海天味业 2024 年报样例
         </button>
+      </details>
+      <div className="actions">
         <button type="submit" className="primary" disabled={busy}>
-          创建预检
+          开始基础预检
         </button>
       </div>
     </form>
@@ -622,90 +636,23 @@ function ResultView({
   if (record === null) {
     return (
       <section className="panel">
-        <h2>预检结果</h2>
+        <h2>基础预检结果</h2>
         <p className="empty">
           {requestError !== null
             ? "这次请求没有得到预检记录。"
             : phase === "idle"
-              ? "尚未创建或读取预检。到创建页填写路径，或在顶栏输入 run_id 回看。"
+              ? "还没有加载预检结果。可以新建基础预检，或使用上方高级选项读取已有记录。"
               : phase === "uploading"
                 ? "正在上传文本 PDF，预检尚未开始。"
                 : "正在等待预检记录。"}
         </p>
         <button type="button" className="secondary" onClick={onCreate}>
-          去创建
+          新建基础预检
         </button>
       </section>
     );
   }
   return <PrecheckResult record={record} selectedIndicator={selectedIndicator} onSelectIndicator={onSelectIndicator} />;
-}
-
-function ReportView({
-  record,
-  section,
-  onSection,
-  onResult,
-}: {
-  record: AnnualPrecheckRecord | null;
-  section: ReportSection;
-  onSection: (section: ReportSection) => void;
-  onResult: () => void;
-}) {
-  return (
-    <div className="report-layout">
-      <nav className="panel toc" aria-label="报告目录">
-        <h2>目录</h2>
-        <button type="button" aria-current={section === "status" ? "true" : undefined} onClick={() => onSection("status")}>
-          生成状态
-        </button>
-        <button type="button" aria-current={section === "scope" ? "true" : undefined} onClick={() => onSection("scope")}>
-          未实现范围
-        </button>
-        <button type="button" aria-current={section === "record" ? "true" : undefined} onClick={() => onSection("record")}>
-          已加载记录
-        </button>
-      </nav>
-      <section className="panel report-body">
-        <p className="lede">报告生成与导出尚未实现。本页不编写分析结论。</p>
-        <div>
-          {section === "status" ? (
-            <>
-              <h3 className="section-title">生成状态</h3>
-              <p>报告生成与导出尚未实现。这里没有报告正文，也没有下载文件。</p>
-            </>
-          ) : null}
-          {section === "scope" ? (
-            <>
-              <h3 className="section-title">未实现范围</h3>
-              <p>
-                创建页可以上传文本 PDF，上传成功后仍需另行点击创建预检。任务进度、模型分析、LangGraph
-                编排、完整核验和报告导出都还未接到这个页面。
-              </p>
-            </>
-          ) : null}
-          {section === "record" ? (
-            <>
-              <h3 className="section-title">已加载记录</h3>
-              {record === null ? (
-                <p>当前没有已加载的预检记录。这不是一份生成的报告。</p>
-              ) : (
-                <>
-                  <p>
-                    当前只保留已加载预检的标识，供对照。run_id <code>{record.run_id}</code>，状态{" "}
-                    {statusText(record.status)}（{record.status}）。
-                  </p>
-                  <button type="button" className="secondary" onClick={onResult}>
-                    查看预检结果
-                  </button>
-                </>
-              )}
-            </>
-          ) : null}
-        </div>
-      </section>
-    </div>
-  );
 }
 
 function HeroArt() {
@@ -793,16 +740,16 @@ function PrecheckResult({
     verification?.results.filter((item) => item.indicator_name === activeName) ?? [];
   return (
     <section className="result" aria-live="polite">
-      <h2 className="section-title">预检结果</h2>
+      <h1 className="section-title">基础预检结果</h1>
       <div className="card-grid">
-        <SummaryCard tone="facts" label="事实条数" value={summary.facts} icon={<TableIcon />} />
-        <SummaryCard tone="changes" label="同比组数" value={summary.changes} icon={<BarsIcon />} />
-        <SummaryCard tone="passed" label="金额复核通过数" value={summary.passed} icon={<CheckIcon />} />
-        <SummaryCard tone="issues" label="问题条数" value={summary.issues} icon={<AlertIcon />} />
+        <SummaryCard tone="facts" label="读取到的财务数据" value={summary.facts} icon={<TableIcon />} />
+        <SummaryCard tone="changes" label="年度变化对比" value={summary.changes} icon={<BarsIcon />} />
+        <SummaryCard tone="passed" label="原文金额核对通过" value={summary.passed} icon={<CheckIcon />} />
+        <SummaryCard tone="issues" label="需要留意的项目" value={summary.issues} icon={<AlertIcon />} />
       </div>
       <div className="split">
         <div className="detail-pane">
-          <h3>指标</h3>
+          <h3>财务项目</h3>
           {groups.length === 0 ? (
             <p className="empty">这次预检没有提取到财务事实。</p>
           ) : (
@@ -822,33 +769,33 @@ function PrecheckResult({
           )}
         </div>
         <div className="detail-pane">
-          <h3>证据详情</h3>
+          <h3>数据与原文位置</h3>
           {activeName === null ? (
-            <p className="empty">选择左侧指标后，这里显示该指标的事实、同比和复核证据。</p>
+            <p className="empty">选择左侧财务项目后，这里显示对应数据、年度变化和原文位置。</p>
           ) : (
             <IndicatorDetail name={activeName} facts={activeFacts} change={activeChange} checks={activeChecks} />
           )}
         </div>
       </div>
 
-      <div className="panel">
-        <h3>运行信息</h3>
+      <details className="panel legacy-technical-details">
+        <summary>技术记录：编号、来源与核对状态</summary>
         <dl className="meta">
-          <dt>run_id</dt>
-          <dd>
-            <code>{record.run_id}</code>
-          </dd>
-          <dt>status</dt>
+          <dt>预检编号</dt>
+            <dd>
+              <code>{record.run_id}</code>
+            </dd>
+          <dt>处理状态</dt>
           <dd>
             {statusText(record.status)}（{record.status}）
           </dd>
           <dt>创建时间</dt>
           <dd>{record.created_at}</dd>
-          <dt>company_id</dt>
+          <dt>公司代码</dt>
           <dd>{record.inputs.company_id}</dd>
-          <dt>report_year</dt>
+          <dt>报告年份</dt>
           <dd>{record.inputs.report_year}</dd>
-          <dt>document_id</dt>
+          <dt>来源文件编号</dt>
           <dd>{record.inputs.document_id}</dd>
           <dt>解析结果路径</dt>
           <dd>{record.inputs.parsed_path}</dd>
@@ -864,12 +811,12 @@ function PrecheckResult({
           </dd>
           <dt>原始 SHA 匹配</dt>
           <dd>{record.inputs.hashes_match ? "一致" : "不一致"}</dd>
-          <dt>model_called</dt>
-          <dd>{record.model_called ? "true" : "false"}</dd>
-          <dt>independently_verified</dt>
-          <dd>{record.independently_verified ? "true" : "false"}</dd>
+          <dt>是否调用模型</dt>
+          <dd>{record.model_called ? "是" : "否"}</dd>
+          <dt>独立金额核对</dt>
+          <dd>{record.independently_verified ? "已完成" : "未完成"}</dd>
         </dl>
-      </div>
+      </details>
 
       <div className="panel">
         <h3>财务事实</h3>
@@ -1520,31 +1467,31 @@ function validateRelativePath(value: string, label: string): string | undefined 
 
 function validateCompanyId(value: string): string | undefined {
   if (value === "" || value === "." || value === "..") {
-    return "请填写 company_id。";
+    return "请填写公司代码。";
   }
   if (value.includes("/") || value.includes("\\")) {
-    return "company_id 不能包含斜杠。";
+    return "公司代码不能包含斜杠。";
   }
   return undefined;
 }
 
 function validateReportYear(value: string): string | undefined {
   if (!/^\d+$/.test(value)) {
-    return "report_year 需要是 1900 到 2100 的整数。";
+    return "年报年份需填写 1900 到 2100 之间的整数。";
   }
   const year = Number(value);
   if (!Number.isInteger(year) || year < 1900 || year > 2100) {
-    return "report_year 需要是 1900 到 2100 的整数。";
+    return "年报年份需填写 1900 到 2100 之间的整数。";
   }
   return undefined;
 }
 
 function validateRunId(value: string): string | undefined {
   if (value === "") {
-    return "请填写 run_id。";
+    return "请填写预检记录编号。";
   }
   if (!RUN_ID_PATTERN.test(value) || value.includes("..")) {
-    return "run_id 需以字母或数字开头，后续只能包含字母、数字、点、下划线或连字符。";
+    return "编号格式不正确，请检查输入后重试。";
   }
   return undefined;
 }

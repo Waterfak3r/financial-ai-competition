@@ -1,0 +1,170 @@
+{
+  "protocol_id": "m4-independent-verification-ablation-v1",
+  "protocol_version": "1.0.0",
+  "evaluation_type": "paired_document_grounded_error_injection",
+  "created_for": "M4 ablation baseline; not a human-golden evaluation",
+  "primary_reference": {
+    "company_id": "603288",
+    "company_name": "佛山市海天调味食品股份有限公司",
+    "report_year": 2024,
+    "document_id": "cninfo-1222994233",
+    "source_path": "data/raw/603288/2024/cninfo-1222994233/1222994233.PDF",
+    "source_sha256": "5a97b13534438f5e85249752ef492fbd9e23af73e67845e47bad1ab7d92e20ee",
+    "analysis_run_id": "annual-analysis-ffcd6078-a1df-416b-88b8-6774ebe66d42",
+    "clean_fact_id": "cninfo-1222994233:revenue:2024:current",
+    "pdf_page": 81,
+    "printed_page": 81,
+    "table_title": "合并利润表",
+    "row_label": "其中：营业收入",
+    "column_label": "2024年度",
+    "value_raw": "26,900,977,516.70",
+    "value_normalized": "26900977516.70",
+    "unit": "元",
+    "currency": "人民币",
+    "reference_basis": "由 agent 直接读取原始年报 PDF 第 81 页的合并利润表行、2024 年度列与金额；不是从本次核验器结果生成真值。该转录尚未经第二位审核者确认，因此只标为文档直接参考，不称为人工 golden。",
+    "human_golden_status": "not_human_reviewed"
+  },
+  "branches": {
+    "without_independent_verification": {
+      "name": "schema_and_self_report_only",
+      "rule": "FinancialFactV2 只要已通过其结构化构造校验即接受；Claim 只要已通过结构化构造校验且自报 verification_status=verified、并自报至少一个事实 ID 和 evidence ID 即接受。该分支不打开 PDF、不检查行列金额、不比对引用关系，也不调用独立核验器。"
+    },
+    "with_independent_verification": {
+      "name": "current_project_verifiers",
+      "rule": "事实输入逐案调用 finagent.verification.independent_fact.verify_financial_fact。Claim 输入先真实调用该事实核验器，再将其本次直接返回的 verified 状态和 evidence ID 交给 finagent.verification.claim.verify_claim；不从归档 JSON 重建核验结果。verified 为 accepted，conflict 为 rejected，insufficient_evidence 为 abstained。Claim 的 interpretation 状态按未核实解释记为 abstained。"
+    }
+  },
+  "known_cases": [
+    {
+      "case_id": "haitian_revenue_2024_clean",
+      "kind": "fact",
+      "expected_disposition": "accepted",
+      "source_fact_id": "cninfo-1222994233:revenue:2024:current",
+      "mutation": null,
+      "notes": "外部 PDF 表格行列金额为已知参考值，保留 schema v2 事实元数据与 PDF 来源绑定。"
+    },
+    {
+      "case_id": "inject_wrong_amount",
+      "kind": "fact",
+      "expected_disposition": "rejected",
+      "source_fact_id": "cninfo-1222994233:revenue:2024:current",
+      "mutation": {
+        "raw_value": "26,900,977,516.71",
+        "normalized_value": "26900977516.71"
+      },
+      "error_family": "wrong_amount",
+      "notes": "只把规范金额末位改大 0.01；原始 PDF 外部参考值保持 26,900,977,516.70。"
+    },
+    {
+      "case_id": "inject_wrong_unit",
+      "kind": "fact",
+      "expected_disposition": "rejected",
+      "source_fact_id": "cninfo-1222994233:revenue:2024:current",
+      "mutation": {
+        "unit": "万元"
+      },
+      "error_family": "wrong_unit",
+      "notes": "PDF 表头披露单位为元、币种为人民币；输入将单位字段改为万元。"
+    },
+    {
+      "case_id": "inject_wrong_year_column",
+      "kind": "fact",
+      "expected_disposition": "rejected",
+      "source_fact_id": "cninfo-1222994233:revenue:2024:current",
+      "mutation": {
+        "raw_value": "24,559,312,356.59",
+        "normalized_value": "24559312356.59"
+      },
+      "error_family": "wrong_year_column_or_period",
+      "notes": "注入值确实出现在同一行的 2023 年度比较列，却被输入声明为 2024 current；这与单纯编造金额分开计类。"
+    },
+    {
+      "case_id": "inject_wrong_statement_scope",
+      "kind": "fact",
+      "expected_disposition": "rejected",
+      "source_fact_id": "cninfo-1222994233:revenue:2024:current",
+      "mutation": {
+        "scope": "parent"
+      },
+      "error_family": "wrong_statement_scope",
+      "notes": "原表题是合并利润表，事实被错误标为母公司口径。"
+    },
+    {
+      "case_id": "haitian_revenue_claim_supported_control",
+      "kind": "claim",
+      "expected_disposition": "accepted",
+      "source_fact_id": "cninfo-1222994233:revenue:2024:current",
+      "claim": {
+        "claim_id": "claim:fact:cninfo-1222994233:revenue:2024:current",
+        "claim_type": "fact",
+        "text": "营业收入（2024-12-31）规范值为 26900977516.70；币种 人民币；单位 未记录；单位倍率 1。",
+        "supporting_fact_ids": ["cninfo-1222994233:revenue:2024:current"],
+        "supporting_evidence_ids": ["ind-cninfo-1222994233:revenue:2024:current"],
+        "calculation_ids": [],
+        "verification_status": "verified",
+        "limitations": [],
+        "alternative_explanations": [],
+        "follow_up_items": []
+      },
+      "mutation": null,
+      "notes": "结构、文本、事实 ID 和来源 evidence ID 均取自已归档海天分析，用于配对测量正确接受。"
+    },
+    {
+      "case_id": "inject_unsupported_claim_text",
+      "kind": "claim",
+      "expected_disposition": "rejected",
+      "source_fact_id": "cninfo-1222994233:revenue:2024:current",
+      "claim": {
+        "claim_id": "claim:unsupported:haitian-revenue-fraud-assertion",
+        "claim_type": "fact",
+        "text": "2024 年营业收入证明公司存在财务造假。",
+        "supporting_fact_ids": ["cninfo-1222994233:revenue:2024:current"],
+        "supporting_evidence_ids": ["ind-cninfo-1222994233:revenue:2024:current"],
+        "calculation_ids": [],
+        "verification_status": "verified",
+        "limitations": [],
+        "alternative_explanations": [],
+        "follow_up_items": []
+      },
+      "error_family": "unsupported_claim",
+      "notes": "Claim 通过 schema 校验，自报 verified，并引用真实 fact/evidence ID；陈述却把收入值解释为舞弊证明，原文不支持。专门检验无核验分支对自报状态的信任。"
+    }
+  ],
+  "provisional_cross_company_comparisons": [
+    {
+      "case_id": "moutai_2024_provisional_status_only",
+      "company_id": "600519",
+      "source_case_id": "600519-2024-provisional-financial-facts",
+      "case_path": "evaluation/cases/600519-2024-provisional.json",
+      "analysis_run_id": "annual-analysis-10232970-a22b-498a-9a8b-4bde1b5bb8e6",
+      "source_path": "data/raw/600519/2024/moutai-2024-annual/8055b7bed7db41bdbc617f4c9b9ec591.pdf",
+      "source_sha256": "5299f4940e2ce4e91084b73dc457d558b9d335fa76fbfee6227e4254eb7f4a30",
+      "metric_id": "revenue",
+      "period_end": "2024-12-31",
+      "human_review_status": "pending",
+      "metric_label_status": "provisional_unknown",
+      "notes": "真实年报只读状态对照；agent provisional 财务事实参考，不作为正确/错误标签，也不进入已知对错分母。"
+    },
+    {
+      "case_id": "wuliangye_2024_provisional_status_only",
+      "company_id": "000858",
+      "source_case_id": "000858-2024-provisional-financial-facts",
+      "case_path": "evaluation/cases/000858-2024-provisional.json",
+      "analysis_run_id": "annual-analysis-956db60d-6595-4d7c-8277-07d1d7e21326",
+      "source_path": "data/raw/000858/2024/cninfo-1223311527/1223311527.PDF",
+      "source_sha256": "b737191a758994a35e9442d46847de771fe48b758feb9a7f35601def922435e7",
+      "metric_id": "revenue",
+      "period_end": "2024-12-31",
+      "human_review_status": "pending",
+      "metric_label_status": "provisional_unknown",
+      "notes": "真实年报只读状态对照；币种披露不足导致财务事实未确认，仍不作为错误真值，也不进入已知对错分母。"
+    }
+  ],
+  "metric_denominators": {
+    "known_case_accuracy": "Only the seven document-grounded clean/injected cases are scored. Expected acceptance count is two (clean fact, supported claim); expected rejection count is five injected errors. Provisional cross-company cases are excluded.",
+    "error_acceptance": "Accepted injected errors divided by the five injected cases; abstentions are reported separately and are not counted as accepted.",
+    "error_blocked": "Rejected plus abstained injected errors divided by five.",
+    "decision_coverage": "Accepted plus rejected known cases divided by all seven known cases; abstained cases lower coverage.",
+    "provisional_state": "Report verifier states and reasons descriptively only; do not include in any accuracy, error-acceptance, or coverage denominator."
+  }
+}

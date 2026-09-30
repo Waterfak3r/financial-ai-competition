@@ -50,6 +50,8 @@ Desktop.ini
 !/artifacts/runs/.gitkeep
 /artifacts/reports/*
 !/artifacts/reports/.gitkeep
+/artifacts/annual-analysis-jobs/*
+!/artifacts/annual-analysis-jobs/.gitkeep
 /artifacts/evaluations/*
 !/artifacts/evaluations/.gitkeep
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import subprocess
 from pathlib import Path
 
@@ -49,9 +50,16 @@ def test_upload_saves_hash_and_precheck_can_use_paths(tmp_path: Path) -> None:
     assert body["source_pdf_path"].endswith("/source.pdf")
     assert body["parsed_path"].endswith("/text_pdf.json")
     raw = tmp_path / "data" / "raw" / body["source_pdf_path"]
+    source_record = json.loads((raw.parent / "source.json").read_text(encoding="utf-8"))
     parsed = tmp_path / "data" / "processed" / body["parsed_path"]
     assert raw.read_bytes() == payload
     assert body["sha256"] in parsed.read_text(encoding="utf-8")
+    assert source_record["document_id"] == body["document_id"]
+    assert source_record["company_id"] == "603288"
+    assert source_record["report_period"] == "2024-12-31"
+    assert source_record["local_path"] == f"data/raw/{body['source_pdf_path']}"
+    assert source_record["sha256"] == body["sha256"]
+    assert "未独立核实" in source_record["nature"]
     precheck = client.post(
         "/v1/annual-prechecks",
         json={

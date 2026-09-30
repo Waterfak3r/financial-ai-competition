@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import uuid
 from pathlib import Path
@@ -61,6 +62,7 @@ def save_text_pdf_upload(
     raw_dir = _inside(raw_root, Path(company) / str(year) / document_id)
     processed_dir = _inside(processed_root, Path(company) / str(year) / document_id)
     source_file = raw_dir / "source.pdf"
+    source_record_file = raw_dir / "source.json"
     parsed_file = processed_dir / "text_pdf.json"
     note_file = processed_dir / "processing.md"
     created: list[Path] = []
@@ -81,6 +83,17 @@ def save_text_pdf_upload(
                 "unsupported_text_pdf",
                 "这份 PDF 没有可提取文字，不能作为文本型 PDF 接受。",
             )
+        _write_new(
+            source_record_file,
+            _source_record(
+                company_id=company,
+                report_year=year,
+                document_id=document_id,
+                local_path=f"data/raw/{relative_dir}/source.pdf",
+                sha256=digest,
+            ),
+            created,
+        )
         _ensure_root(processed_root, created)
         _mkdir_new(processed_dir, processed_root, created)
         _write_new(parsed_file, (parsed.to_json(indent=2) + "\n").encode("utf-8"), created)
@@ -221,6 +234,30 @@ def _processing_note(
         )
     )
     return text.encode("utf-8")
+
+
+def _source_record(
+    *,
+    company_id: str,
+    report_year: int,
+    document_id: str,
+    local_path: str,
+    sha256: str,
+) -> bytes:
+    """保存上传请求绑定的来源元数据，并明确其未核实文件语义。"""
+
+    record = {
+        "document_id": document_id,
+        "company_id": company_id,
+        "report_type": "用户上传的年度报告材料（未核实）",
+        "report_period": f"{report_year}-12-31",
+        "local_path": local_path,
+        "sha256": sha256,
+        "metadata_origin": "upload_request",
+        "nature": "用户上传的文本型 PDF；公司和报告年度来自上传请求，未独立核实 PDF 内容。",
+        "use_condition": "用户上传；使用权限未由系统核实。",
+    }
+    return (json.dumps(record, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
 
 
 def _write_new(path: Path, payload: bytes, created: list[Path]) -> None:

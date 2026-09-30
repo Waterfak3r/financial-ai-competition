@@ -805,6 +805,516 @@ ul {
   margin: 0;
 }
 
+.annual-analysis-intro {
+  grid-template-columns: 1fr;
+  align-items: start;
+  padding: 1.2rem 1.35rem;
+}
+
+.annual-job-create {
+  margin-top: 0.9rem;
+}
+
+.annual-job-create h2,
+.annual-job-status-panel h2 {
+  margin: 0.2rem 0 0;
+  line-height: 1.25;
+}
+
+.annual-job-intro {
+  max-width: 70rem;
+  margin: 0.5rem 0 1rem;
+  color: var(--muted);
+}
+
+.annual-job-form {
+  display: grid;
+  gap: 1rem;
+}
+
+.annual-job-fields {
+  display: grid;
+  grid-template-columns: minmax(11rem, 0.65fr) minmax(10rem, 0.55fr) minmax(16rem, 1.4fr);
+  gap: 0.9rem;
+}
+
+.annual-job-fields label {
+  display: grid;
+  align-content: start;
+  gap: 0.4rem;
+  min-width: 0;
+  font-weight: 650;
+}
+
+.annual-job-fields input:not([type="file"]) {
+  width: 100%;
+  min-height: 2.7rem;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid #c5daf0;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.annual-job-file-field {
+  display: grid;
+  align-content: start;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.annual-job-file-title {
+  font-weight: 650;
+}
+
+.annual-file-picker {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  min-height: 2.7rem;
+}
+
+.annual-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.annual-job-fields .annual-file-picker-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  gap: 0;
+  min-width: auto;
+  min-height: 2.7rem;
+  padding: 0.45rem 0.8rem;
+  border: 1px solid #a9c8e6;
+  border-radius: 9px 0 0 9px;
+  background: #f1f7fd;
+  color: #174e89;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.annual-job-fields .annual-file-picker-button:hover {
+  background: #e4f0fc;
+}
+
+.annual-file-input:focus-visible + .annual-file-picker-button {
+  outline: 3px solid #1d6adf;
+  outline-offset: 2px;
+}
+
+.annual-file-name {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0.45rem 0.7rem;
+  overflow-wrap: anywhere;
+  border: 1px solid #a9c8e6;
+  border-left: 0;
+  border-radius: 0 9px 9px 0;
+  background: #f8fbfe;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 400;
+}
+
+.annual-job-fields .help,
+.annual-job-fields .field-error {
+  margin: 0;
+  font-size: 0.84rem;
+  font-weight: 400;
+}
+
+.annual-job-mode {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.annual-job-mode legend {
+  margin-bottom: 0.5rem;
+  font-weight: 700;
+}
+
+.annual-job-mode-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  min-width: 0;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid #d6e3ef;
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.annual-job-mode-option.selected {
+  border-color: #74a9de;
+  background: #f3f8fd;
+  box-shadow: inset 0 0 0 1px #b4d2ed;
+}
+
+.annual-job-mode-option input {
+  flex: 0 0 auto;
+  margin: 0.22rem 0 0;
+  accent-color: var(--blue);
+}
+
+.annual-job-mode-option span {
+  display: grid;
+  gap: 0.18rem;
+}
+
+.annual-job-mode-option small {
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 400;
+}
+
+.annual-job-mode-experimental {
+  border-color: #e5cfad;
+  background: #fffdf9;
+}
+
+.annual-job-mode-experimental.selected {
+  border-color: #d1a767;
+  background: #fff9ed;
+  box-shadow: inset 0 0 0 1px #ecd3aa;
+}
+
+.annual-job-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.annual-job-actions .primary,
+.annual-job-actions .secondary {
+  min-height: 2.65rem;
+  padding-inline: 1rem;
+}
+
+.annual-job-actions .primary {
+  font-weight: 700;
+}
+
+.annual-job-actions .help {
+  margin: 0;
+}
+
+.annual-upload-receipt,
+.annual-archive-lookup,
+.annual-job-source-details {
+  margin-top: 0.85rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid #d8e5f1;
+  border-radius: 10px;
+  background: #f9fcff;
+}
+
+.annual-upload-receipt summary,
+.annual-archive-lookup summary,
+.annual-job-source-details summary {
+  color: #285a87;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.annual-upload-receipt dl,
+.annual-job-source-details dl {
+  display: grid;
+  grid-template-columns: minmax(8rem, 0.35fr) minmax(0, 1fr);
+  gap: 0.35rem 0.75rem;
+  margin: 0.75rem 0 0;
+}
+
+.annual-upload-receipt dd,
+.annual-job-source-details dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.annual-upload-receipt .help {
+  margin: 0.65rem 0 0;
+}
+
+.annual-archive-lookup {
+  margin-top: 0.9rem;
+  background: #fff;
+}
+
+.annual-archive-lookup > .help {
+  margin: 0.65rem 0;
+}
+
+.annual-archive-lookup .annual-analysis-lookup {
+  max-width: 42rem;
+  margin-top: 0.5rem;
+  background: #f8fbfe;
+}
+
+.annual-job-status-panel {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.9rem;
+  border-left: 4px solid #8bb5dc;
+}
+
+.annual-job-status-panel .annual-section-heading {
+  align-items: center;
+}
+
+.annual-job-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.85rem;
+  padding: 0.2rem 0.7rem;
+  border-radius: 999px;
+  background: #edf4fa;
+  color: #31536f;
+  font-size: 0.84rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.annual-job-status-running,
+.annual-job-status-queued {
+  background: #e8f3ff;
+  color: #1658aa;
+}
+
+.annual-job-status-completed {
+  background: #e8f5ee;
+  color: #216b43;
+}
+
+.annual-job-status-completed_with_issues {
+  background: #fff4df;
+  color: #845917;
+}
+
+.annual-job-status-failed,
+.annual-job-status-interrupted {
+  background: #fff0ed;
+  color: #9a3527;
+}
+
+.annual-job-stage {
+  margin: 0.15rem 0 0;
+  font-size: 1.06rem;
+  font-weight: 700;
+}
+
+.annual-job-status-note {
+  margin: 0;
+  color: var(--muted);
+}
+
+.annual-job-error {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.7rem 0.8rem;
+  border-radius: 9px;
+  background: #fff3ef;
+  color: #7c3026;
+}
+
+.annual-job-error span {
+  font-size: 0.85rem;
+}
+
+.annual-job-poll-error {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.annual-job-status-actions {
+  margin-top: 0.15rem;
+}
+
+.annual-job-source-details {
+  margin-top: 0.2rem;
+  background: #fbfdff;
+}
+
+.annual-job-alert {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.annual-m3-screening {
+  display: grid;
+  gap: 0.75rem;
+  border-top: 3px solid #d3a14d;
+}
+
+.annual-m3-screening .annual-candidate-warning {
+  margin: 0;
+}
+
+.annual-m3-abstained {
+  background: #fff2dd;
+  color: #875a12;
+}
+
+.annual-m3-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+}
+
+.annual-m3-summary > div {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 9rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: 9px;
+  background: #faf6ee;
+}
+
+.annual-m3-summary span {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.annual-m3-summary strong {
+  font-size: 1.12rem;
+}
+
+.annual-m3-summary code,
+.annual-m3-rule-meta code {
+  overflow-wrap: anywhere;
+}
+
+.annual-m3-note {
+  margin: 0;
+}
+
+.annual-m3-rules {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+
+.annual-m3-rule {
+  min-width: 0;
+  padding: 0.8rem;
+  border: 1px solid #e7dcc9;
+  border-radius: 10px;
+  background: #fffdfa;
+}
+
+.annual-m3-rule-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.7rem;
+}
+
+.annual-m3-rule-heading h4 {
+  margin: 0;
+  font-size: 0.98rem;
+}
+
+.annual-m3-rule-heading p {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.annual-m3-triggered {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.annual-m3-rule-chip {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-height: 1.7rem;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  background: #eef2f5;
+  color: #42586b;
+  font-size: 0.82rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.annual-m3-triggered {
+  background: #fff1df;
+  color: #8b4e17;
+}
+
+.annual-m3-rule-meta {
+  display: grid;
+  grid-template-columns: minmax(5rem, 0.3fr) minmax(0, 1fr);
+  gap: 0.3rem 0.6rem;
+  margin: 0.7rem 0 0;
+  font-size: 0.85rem;
+}
+
+.annual-m3-rule-meta dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.annual-m3-issue {
+  margin: 0.55rem 0 0;
+  padding-left: 1.15rem;
+  color: #8b3c2f;
+  font-size: 0.86rem;
+}
+
+.annual-m3-raw-value {
+  margin-top: 0.4rem;
+}
+
+.annual-m3-raw-value summary {
+  color: #315f85;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.annual-m3-raw-value code {
+  display: block;
+  max-height: 7rem;
+  margin-top: 0.3rem;
+  overflow: auto;
+  padding: 0.4rem;
+  border-radius: 6px;
+  background: #f1f4f7;
+  font-size: 0.76rem;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.annual-m3-limitations {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
 .annual-report {
   display: grid;
   gap: 0.9rem;
@@ -1013,6 +1523,7 @@ ul {
 .annual-evidence-preview {
   margin-top: 0;
   border-color: #c7d9ea;
+  scroll-margin-top: 1rem;
 }
 
 .annual-evidence-preview .help {
@@ -1027,6 +1538,12 @@ ul {
   border: 1px solid #dce5ee;
   border-radius: 8px;
   background: #f5f7fa;
+}
+
+#annual-evidence-preview-heading:focus,
+#annual-evidence-preview-error:focus {
+  outline: 3px solid var(--blue);
+  outline-offset: 3px;
 }
 
 .annual-claim-list {
@@ -1081,6 +1598,77 @@ ul {
   background: #fffefa;
 }
 
+.annual-source-locations {
+  min-width: 0;
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 0.7rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid #e4ebf2;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.annual-source-locations h5 {
+  margin: 0;
+  color: #49647d;
+  font-size: 0.88rem;
+}
+
+.annual-source-locations > ul,
+.annual-location-pages {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.annual-source-locations > ul > li {
+  min-width: 0;
+}
+
+.annual-location-metric {
+  display: block;
+  overflow-wrap: anywhere;
+  font-weight: 650;
+}
+
+.annual-location-pages {
+  margin-top: 0.2rem;
+}
+
+.annual-location-pages > li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem 0.7rem;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.annual-location-preview-button {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.84rem;
+  overflow-wrap: anywhere;
+}
+
+.annual-location-empty,
+.annual-location-unlocated {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.annual-location-unlocated {
+  color: #72510d;
+}
+
 .annual-pending-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1106,6 +1694,13 @@ ul {
 .annual-pending-summary {
   display: grid;
   gap: 0.25rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.annual-pending-summary > * {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .annual-pending-summary > ul {
@@ -1388,5 +1983,597 @@ ul {
   .annual-claim summary {
     flex-direction: column;
     gap: 0.25rem;
+  }
+}
+
+@media (max-width: 860px) {
+  .annual-job-fields,
+  .annual-job-mode,
+  .annual-m3-rules {
+    grid-template-columns: 1fr;
+  }
+
+  .annual-job-status-panel .annual-section-heading,
+  .annual-m3-rule-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .annual-job-source-details dl,
+  .annual-upload-receipt dl {
+    grid-template-columns: 1fr;
+    gap: 0.12rem;
+  }
+
+  .annual-job-source-details dd,
+  .annual-upload-receipt dd {
+    margin-bottom: 0.45rem;
+  }
+}
+
+@media (max-width: 520px) {
+  .annual-job-actions,
+  .annual-job-status-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .annual-file-picker {
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+
+  .annual-job-fields .annual-file-picker-button,
+  .annual-file-name {
+    min-height: 2.7rem;
+    border: 1px solid #a9c8e6;
+    border-radius: 9px;
+  }
+
+  .annual-file-name {
+    flex-basis: 100%;
+  }
+
+  .annual-job-actions > button {
+    width: 100%;
+  }
+
+  .annual-job-poll-error {
+    grid-template-columns: 1fr;
+  }
+
+  .annual-job-mode-option {
+    padding: 0.68rem;
+  }
+}
+
+/* User-facing analysis and progressive disclosure */
+.content {
+  width: 100%;
+  max-width: 100rem;
+  margin-inline: auto;
+}
+
+button:not(:disabled),
+.precheck-file-button {
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.primary:hover:not(:disabled) {
+  border-color: #174f9f;
+  background: #174f9f;
+}
+
+.secondary:hover:not(:disabled),
+.ghost:hover:not(:disabled),
+.lookup button:hover:not(:disabled) {
+  border-color: #7fa9d3;
+  background: #f1f7fc;
+}
+
+button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+summary {
+  cursor: pointer;
+}
+
+summary:focus-visible {
+  border-radius: 4px;
+  outline: 3px solid #1d6adf;
+  outline-offset: 4px;
+}
+
+.primary-navigation > .nav-list {
+  margin-bottom: 0.9rem;
+}
+
+.primary-navigation > .nav-list .nav-item {
+  min-height: 3rem;
+  font-weight: 700;
+}
+
+.legacy-navigation {
+  padding: 0.35rem 0.45rem 0.45rem;
+  border-top: 1px solid var(--line);
+}
+
+.legacy-navigation > summary {
+  padding: 0.65rem 0.5rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.legacy-nav-list {
+  gap: 0.2rem;
+  padding-left: 0.2rem;
+}
+
+.legacy-nav-list .nav-item {
+  min-height: 2.55rem;
+  padding-block: 0.35rem;
+  font-size: 0.92rem;
+}
+
+.legacy-run-lookup {
+  max-width: min(100%, 30rem);
+  padding: 0.35rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fbfdff;
+}
+
+.legacy-run-lookup > summary,
+.legacy-advanced-fields > summary,
+.annual-job-advanced-mode > summary,
+.annual-start-another > summary {
+  color: #285a87;
+  font-weight: 650;
+}
+
+.legacy-run-lookup-form {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0.55rem 0 0.35rem;
+}
+
+.legacy-run-lookup-row {
+  display: flex;
+  gap: 0.45rem;
+}
+
+.legacy-run-lookup-row input {
+  flex: 1;
+  min-width: 0;
+  min-height: 2.55rem;
+  padding: 0.4rem 0.65rem;
+  border: 1px solid #c5d4e4;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.precheck-create-form h1 {
+  margin: 0.2rem 0 0.5rem;
+  font-size: clamp(1.7rem, 3vw, 2.25rem);
+  letter-spacing: -0.025em;
+  line-height: 1.2;
+}
+
+.precheck-create-form > .lede {
+  max-width: 52rem;
+}
+
+.precheck-file-picker {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 0.4rem;
+}
+
+.precheck-create-form .precheck-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.precheck-file-button {
+  display: inline-flex;
+  min-height: 2.55rem;
+  align-items: center;
+  justify-content: center;
+  padding: 0.45rem 0.85rem;
+  border: 1px solid #b9d4f2;
+  border-radius: 8px;
+  background: #fff;
+  color: #1456b8;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.precheck-file-button:hover {
+  border-color: #7fa9d3;
+  background: #f1f7fc;
+}
+
+.precheck-file-input:focus-visible + .precheck-file-button {
+  outline: 3px solid #1d6adf;
+  outline-offset: 3px;
+}
+
+.precheck-file-name {
+  min-width: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.legacy-advanced-fields,
+.legacy-technical-details,
+.annual-technical-record,
+.annual-job-advanced-mode,
+.annual-archive-lookup,
+.annual-start-another {
+  margin-top: 0.85rem;
+}
+
+.legacy-advanced-fields,
+.legacy-technical-details,
+.annual-technical-record,
+.annual-job-advanced-mode,
+.annual-archive-lookup,
+.annual-start-another {
+  min-width: 0;
+}
+
+.legacy-advanced-fields,
+.legacy-technical-details,
+.annual-technical-record,
+.annual-job-advanced-mode,
+.annual-archive-lookup {
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fbfdff;
+}
+
+.legacy-advanced-fields[open] > .form-grid,
+.legacy-advanced-fields[open] > .help,
+.legacy-technical-details[open] > dl,
+.annual-technical-record[open] > dl,
+.annual-technical-record[open] > code,
+.annual-job-advanced-mode[open] > label,
+.annual-job-advanced-mode[open] > .help,
+.annual-archive-lookup[open] > .help,
+.annual-archive-lookup[open] > form {
+  margin-top: 0.7rem;
+}
+
+.legacy-advanced-fields > .form-grid {
+  margin-bottom: 0.7rem;
+}
+
+.annual-start-another > summary {
+  display: block;
+  margin: 0 0 0.65rem;
+  padding: 0.5rem 0.1rem;
+}
+
+.annual-start-another:not([open]) {
+  padding: 0.55rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.annual-start-another:not([open]) > summary {
+  margin: 0;
+}
+
+.annual-job-default-mode {
+  margin: 0;
+  padding: 0.7rem 0.8rem;
+  border-left: 3px solid #7aa58a;
+  background: #f5faf6;
+}
+
+.annual-job-advanced-mode {
+  margin-top: 0.5rem;
+}
+
+.annual-job-advanced-mode .annual-job-mode-option {
+  border: 0;
+  padding: 0.35rem 0.15rem;
+}
+
+.annual-report-summary {
+  max-width: 76rem;
+  margin: 0;
+  padding: 0.9rem 1rem;
+  border-left: 4px solid #7aa58a;
+  border-radius: 0 9px 9px 0;
+  background: #f4f8f4;
+  line-height: 1.7;
+}
+
+.annual-report-summary strong {
+  font-weight: 700;
+}
+
+.annual-summary-tile strong,
+.annual-value,
+.annual-m3-summary strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.annual-candidate-overview {
+  border-left: 4px solid #caa45c;
+}
+
+.annual-candidate-overview > .annual-candidate-warning {
+  margin-bottom: 0.75rem;
+}
+
+.annual-progressive-section {
+  padding: 0.9rem 1rem;
+}
+
+.annual-progressive-summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.8rem 1.25rem;
+  list-style: none;
+  cursor: pointer;
+}
+
+.annual-progressive-summary::-webkit-details-marker {
+  display: none;
+}
+
+.annual-progressive-summary::before {
+  content: "+";
+  flex: 0 0 auto;
+  color: #49647d;
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
+.annual-progressive-summary > span {
+  flex: 1 1 auto;
+  font-size: 1.05rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.annual-progressive-summary > small {
+  color: var(--muted);
+  font-size: 0.88rem;
+  text-align: right;
+}
+
+.annual-progressive-section[open] > .annual-progressive-summary::before {
+  content: "−";
+}
+
+.annual-progressive-summary:focus-visible {
+  border-radius: 5px;
+  outline: 3px solid #1d6adf;
+  outline-offset: 3px;
+}
+
+.annual-progressive-help {
+  margin: 0 0 0.75rem;
+}
+
+.annual-candidate-description {
+  max-width: 48rem;
+  margin: 0.65rem 0 0;
+  line-height: 1.65;
+}
+
+.annual-candidate-reminder {
+  margin: 0.45rem 0 0;
+  color: #70561d;
+  font-size: 0.88rem;
+}
+
+.annual-comparability {
+  margin-top: 0;
+  padding: 0.65rem 0.75rem;
+  border-radius: 8px;
+  background: #f5f8fb;
+  color: #354e65;
+}
+
+.annual-pending-summary {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.annual-pending-technical-record {
+  margin-top: 0.35rem;
+  padding: 0.35rem 0.45rem;
+  border: 1px solid #e2ebf3;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.annual-pending-technical-record summary,
+.annual-technical-record summary {
+  color: #49647d;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.annual-m3-technical-record {
+  margin-top: 0.6rem;
+}
+
+.annual-m3-technical-record .annual-m3-rule-meta {
+  margin-bottom: 0;
+}
+
+.annual-evidence-preview .annual-technical-record {
+  margin-top: 0.7rem;
+}
+
+.annual-model-investigation .eyebrow {
+  color: var(--muted);
+}
+
+.annual-model-item > .annual-technical-record {
+  margin-top: 0.6rem;
+}
+
+.annual-report-heading:focus {
+  outline: 3px solid var(--blue);
+  outline-offset: 2px;
+}
+
+.annual-scope-summary {
+  margin: 0 0 0.6rem;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.annual-scope-original {
+  margin: 0 0 0.8rem;
+}
+
+.annual-scope-original summary {
+  color: #49647d;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.annual-scope-original > p {
+  margin: 0.45rem 0 0;
+  padding: 0.65rem 0.75rem;
+  border-radius: 8px;
+  background: #f5f8fb;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.annual-m3-rule-description {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.annual-m3-rule-result {
+  margin: 0.55rem 0 0;
+  color: #72510d;
+  font-size: 0.9rem;
+}
+
+.annual-m3-limitations-details {
+  margin-top: 0.75rem;
+}
+
+.annual-m3-limitations-details > summary {
+  color: #49647d;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+@media (max-width: 860px) {
+  .content {
+    padding-inline: 1rem;
+  }
+
+  .topbar {
+    align-items: flex-start;
+  }
+
+  .legacy-run-lookup {
+    width: 100%;
+    max-width: none;
+  }
+}
+
+@media (max-width: 520px) {
+  .content {
+    padding: 0.85rem 0.75rem 2rem;
+  }
+
+  .annual-report-heading h2,
+  .annual-section-heading h3 {
+    overflow-wrap: anywhere;
+  }
+
+  .annual-summary-tile {
+    padding: 0.7rem 0.75rem;
+  }
+
+  .annual-summary-tile strong {
+    font-size: 1.45rem;
+  }
+
+  .legacy-run-lookup-row {
+    flex-direction: column;
+  }
+
+  .legacy-run-lookup-row button,
+  .precheck-file-button {
+    width: 100%;
+  }
+
+  .precheck-file-name {
+    flex-basis: 100%;
+  }
+
+  .annual-job-mode-option {
+    align-items: flex-start;
+  }
+
+  .annual-location-pages > li {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .annual-location-preview-button {
+    align-self: flex-start;
+  }
+
+  .annual-progressive-summary {
+    align-items: flex-start;
+    gap: 0.35rem 0.65rem;
+  }
+
+  .annual-progressive-summary > small {
+    flex-basis: 100%;
+    margin-left: 1.5rem;
+    text-align: left;
+  }
+
+  .annual-m3-rule-heading {
+    display: grid;
+  }
+
+  .annual-technical-record,
+  .annual-source-panel,
+  .annual-record-card,
+  .annual-m3-rule {
+    overflow-wrap: anywhere;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
   }
 }

@@ -342,15 +342,27 @@
     }
   ],
   "cli_run": {
-    "run_id": "annual-analysis-a682b946-1733-48d1-bfd4-0ef2c8675e9c",
+    "run_id": "annual-analysis-956db60d-6595-4d7c-8277-07d1d7e21326",
     "status": "completed_with_issues",
     "facts_extracted": 8,
     "facts_confirmed": 0,
     "calculations_generated": 8,
     "calculations_confirmed": 0,
     "candidate_signals": 0,
+    "screening_abstentions": 2,
     "model_called": false,
-    "comparability_status": "conflict",
+    "comparability_status": "insufficient_evidence",
+    "comparability_restatement_status": "unknown",
+    "source_sha256": "b737191a758994a35e9442d46847de771fe48b758feb9a7f35601def922435e7",
+    "manifest_path": "artifacts/runs/annual-analysis-956db60d-6595-4d7c-8277-07d1d7e21326/manifest.json",
+    "analysis_path": "artifacts/runs/annual-analysis-956db60d-6595-4d7c-8277-07d1d7e21326/analysis.json",
+    "report_json_path": "artifacts/reports/annual-analysis-956db60d-6595-4d7c-8277-07d1d7e21326/report.json",
+    "report_markdown_path": "artifacts/reports/annual-analysis-956db60d-6595-4d7c-8277-07d1d7e21326/report.md",
+    "code_version": {
+      "git_head": "f6d07758db8814feda57c864c8b1d6a5541e4098",
+      "git_dirty": true,
+      "source_file_hashes_recorded_in_manifest": true
+    },
     "issues": [
       {
         "code": "missing_currency",
@@ -358,11 +370,11 @@
         "reason": "对应表头只披露单位，未明确币种；8 条事实保留“未披露”状态，未推定人民币，独立核验均弃权。"
       },
       {
-        "code": "comparability_conflict",
+        "code": "comparability_insufficient_evidence",
         "indicator": "年度可比性",
-        "reason": "可比性核验发现冲突；8 项计算未获确认，2 条筛查线索均弃权。"
+        "reason": "可比性为 insufficient_evidence、追溯状态为 unknown，且没有 conflict；第 116 页调整影响披露缺少报告年份抬头，其他可比性事项也缺少足够的可定位证据。8 项计算未确认，2 条筛查线索均弃权。"
       }
     ],
-    "abstentions": "8 条事实的币种均未披露，8 条独立核验与 8 项计算均未确认；筛查未形成候选线索。"
+    "abstentions": "8 条事实的币种均未明确，事实核验均为 insufficient_evidence；可比性为 insufficient_evidence；8 项计算未确认，2 条筛查线索均弃权。"
   }
 }

@@ -201,6 +201,8 @@ def _run(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     server: _MockServer,
+    *,
+    report: dict[str, Any] = REPORT,
 ) -> tuple[annual_investigation.AnnualInvestigationResult, Path]:
     runs_root = tmp_path / "artifacts" / "runs"
     run_dir = runs_root / RUN_ID
@@ -214,7 +216,7 @@ def _run(
         timeout_seconds=3,
     )
     result = annual_investigation.run_annual_investigation(
-        REPORT,
+        report,
         tmp_path / "source.pdf",
         SOURCE_RECORD,
         settings,
@@ -236,6 +238,14 @@ def test_graph_uses_local_http_and_audits_two_candidate_interpretations(
     assert payload["model_call_count"] == 2
     assert payload["model_call_attempt_count"] == 2
     assert [item["status"] for item in payload["items"]] == ["interpretation", "interpretation"]
+    assert [item["explanation"] for item in payload["items"]] == [
+        "原因无法确认：当前片段没有披露背离形成原因。",
+        "原因无法确认：当前片段没有披露背离形成原因。",
+    ]
+    assert [item["narrative_evidence_ids"] for item in payload["items"]] == [
+        ["nctx-profit-p15"],
+        ["nctx-revenue-p21"],
+    ]
     assert all(item["verification_status"] == "unverified" for item in payload["items"])
     assert payload["fraud_conclusion"] is None
     assert retrieval_calls == [4]
@@ -254,7 +264,73 @@ def test_graph_uses_local_http_and_audits_two_candidate_interpretations(
         assert "test-local-secret" not in (audit_dir / "request.json").read_text(encoding="utf-8")
 
 
-def test_graph_allows_one_expansion_and_abstains_after_second_call_budget(
+def test_graph_reserves_one_call_for_each_candidate_before_supplementary_context(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    retrieval_calls = _install_retrieval(monkeypatch, include_supplement=True)
+    first = json.dumps(
+        {
+            "signal_id": "profit_up_cash_down",
+            "explanation": "原因无法确认：现有片段没有披露形成原因。",
+            "alternative_explanations": [],
+            "limitations": ["仅检索了本年度报告中的有限片段。"],
+            "narrative_evidence_ids": ["nctx-profit-p15"],
+            "request_more_context": True,
+        },
+        ensure_ascii=False,
+    )
+
+    with _MockServer([(200, first), (200, _answer_from_request)]) as server:
+        result, _ = _run(monkeypatch, tmp_path, server)
+
+    items = result.to_dict()["items"]
+    assert result.model_call_count == 2
+    assert result.model_call_attempt_count == 2
+    assert result.supplementary_retrieval_used is False
+    assert retrieval_calls == [4]
+    assert [item["status"] for item in items] == ["interpretation", "interpretation"]
+    assert items[0]["narrative_evidence_ids"] == ["nctx-profit-p15"]
+    assert any("预算已到上限" in item for item in items[0]["limitations"])
+    assert items[1]["narrative_evidence_ids"] == ["nctx-revenue-p21"]
+    assert [
+        json.loads(request["messages"][1]["content"])["candidate"]["signal_id"]
+        for request in server.requests
+    ] == ["profit_up_cash_down", "revenue_up_cash_down"]
+
+
+def test_graph_abstains_without_valid_citation_and_reserves_the_next_candidate_call(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    retrieval_calls = _install_retrieval(monkeypatch, include_supplement=True)
+    uncited = json.dumps(
+        {
+            "signal_id": "profit_up_cash_down",
+            "explanation": "原因无法确认。",
+            "alternative_explanations": [],
+            "limitations": ["当前回答没有可绑定的原文片段。"],
+            "narrative_evidence_ids": [],
+            "request_more_context": True,
+        },
+        ensure_ascii=False,
+    )
+
+    with _MockServer([(200, uncited), (200, _answer_from_request)]) as server:
+        result, _ = _run(monkeypatch, tmp_path, server)
+
+    payload = result.to_dict()
+    items = payload["items"]
+    assert payload["model_call_count"] == payload["model_call_attempt_count"] == 2
+    assert retrieval_calls == [4]
+    assert items[0]["status"] == "abstained"
+    assert items[0]["reason"] == "model_call_budget_exhausted_before_supplement"
+    assert items[0]["narrative_evidence_ids"] == []
+    assert items[1]["status"] == "interpretation"
+    assert items[1]["narrative_evidence_ids"] == ["nctx-revenue-p21"]
+
+
+def test_graph_accepts_valid_same_source_citation_after_supplement_without_new_id_requirement(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -270,32 +346,37 @@ def test_graph_allows_one_expansion_and_abstains_after_second_call_budget(
         },
         ensure_ascii=False,
     )
+    second = json.dumps(
+        {
+            "signal_id": "profit_up_cash_down",
+            "explanation": "原因无法确认：现金流片段未披露背离形成原因。",
+            "alternative_explanations": [],
+            "limitations": ["补充检索后仍只有有限的同源原文片段。"],
+            "narrative_evidence_ids": ["nctx-profit-p15"],
+            "request_more_context": False,
+        },
+        ensure_ascii=False,
+    )
+    report = dict(REPORT)
+    report["pending_review"] = {
+        "candidate_signals": [REPORT["pending_review"]["candidate_signals"][0]]
+    }
 
-    def second_answer(request: dict[str, Any]) -> str:
-        payload = json.loads(request["messages"][1]["content"])
-        return json.dumps(
-            {
-                "signal_id": payload["candidate"]["signal_id"],
-                "explanation": "原因无法确认：补充片段仍没有说明形成原因。",
-                "alternative_explanations": [],
-                "limitations": ["补充片段是标题，未提供因果解释。"],
-                "narrative_evidence_ids": ["nctx-profit-p172"],
-                "request_more_context": False,
-            },
-            ensure_ascii=False,
-        )
+    with _MockServer([(200, first), (200, second)]) as server:
+        result, _ = _run(monkeypatch, tmp_path, server, report=report)
 
-    with _MockServer([(200, first), (200, second_answer)]) as server:
-        result, _ = _run(monkeypatch, tmp_path, server)
-
-    items = result.to_dict()["items"]
-    assert result.model_call_count == 2
-    assert result.model_call_attempt_count == 2
-    assert result.supplementary_retrieval_used is True
+    payload = result.to_dict()
+    assert payload["model_call_count"] == payload["model_call_attempt_count"] == 2
+    assert payload["supplementary_retrieval_used"] is True
     assert retrieval_calls == [4, 8]
-    assert [item["status"] for item in items] == ["interpretation", "abstained"]
-    assert items[0]["narrative_evidence_ids"] == ["nctx-profit-p172"]
-    assert items[1]["reason"] == "model_call_budget_exhausted"
+    assert len(server.requests) == 2
+    supplemental_payload = json.loads(server.requests[1]["messages"][1]["content"])
+    assert "nctx-profit-p172" in {
+        evidence["evidence_id"] for evidence in supplemental_payload["narrative_evidence"]
+    }
+    assert payload["items"][0]["status"] == "interpretation"
+    assert payload["items"][0]["narrative_evidence_ids"] == ["nctx-profit-p15"]
+    assert payload["items"][0]["verification_status"] == "unverified"
 
 
 def test_graph_keeps_audited_http_failure_path_and_can_continue_to_next_candidate(

@@ -172,8 +172,10 @@ class AnnualInvestigationState(TypedDict, total=False):
     context_snippets: list[NarrativeSnippet]
     current_candidate: dict[str, object] | None
     current_snippets: list[NarrativeSnippet]
+    current_citations_valid: bool
     supplementary_evidence_ids: list[str]
     parsed_interpretation: _ParsedInterpretation | None
+    response_text: str
     response_error: str | None
     pending_reason: str | None
     request_supplement: bool
@@ -333,6 +335,7 @@ def _select_candidate_node(state: AnnualInvestigationState) -> dict[str, object]
     return {
         "current_candidate": candidate,
         "current_snippets": snippets,
+        "current_citations_valid": False,
         "supplementary_evidence_ids": [],
         "parsed_interpretation": None,
         "response_error": None,
@@ -400,10 +403,20 @@ def _call_model_node(state: AnnualInvestigationState) -> dict[str, object]:
 def _parse_response_node(state: AnnualInvestigationState) -> dict[str, object]:
     error = state.get("response_error")
     if error is not None:
-        return {"pending_reason": error, "request_supplement": False}
+        return {
+            "parsed_interpretation": None,
+            "current_citations_valid": False,
+            "pending_reason": error,
+            "request_supplement": False,
+        }
     candidate = state.get("current_candidate")
     if candidate is None:
-        return {"pending_reason": "candidate_missing", "request_supplement": False}
+        return {
+            "parsed_interpretation": None,
+            "current_citations_valid": False,
+            "pending_reason": "candidate_missing",
+            "request_supplement": False,
+        }
     try:
         parsed = parse_model_interpretation(
             state.get("response_text", ""),
@@ -412,6 +425,7 @@ def _parse_response_node(state: AnnualInvestigationState) -> dict[str, object]:
     except ValueError as exc:
         return {
             "parsed_interpretation": None,
+            "current_citations_valid": False,
             "pending_reason": _parse_error_reason(str(exc)),
             "request_supplement": False,
         }
@@ -419,21 +433,20 @@ def _parse_response_node(state: AnnualInvestigationState) -> dict[str, object]:
     eligible_ids = {item.evidence_id for item in state.get("current_snippets", [])}
     citation_ids = set(parsed.narrative_evidence_ids)
     has_valid_citations = bool(citation_ids) and citation_ids.issubset(eligible_ids)
-    if state.get("supplementary_retrieval_used", False):
-        new_ids = set(state.get("supplementary_evidence_ids", []))
-        has_valid_citations = has_valid_citations and bool(citation_ids & new_ids)
-
     needs_supplement = parsed.request_more_context or not has_valid_citations
-    if needs_supplement:
-        if (
-            not state.get("supplementary_retrieval_used", False)
-            and state.get("model_call_attempt_count", 0) < MAX_MODEL_CALLS
-        ):
-            return {
-                "parsed_interpretation": parsed,
-                "pending_reason": "model_requested_more_context" if parsed.request_more_context else "no_valid_same_source_citation",
-                "request_supplement": True,
-            }
+    if needs_supplement and _supplementary_call_budget_available(state):
+        return {
+            "parsed_interpretation": parsed,
+            "current_citations_valid": has_valid_citations,
+            "pending_reason": (
+                "model_requested_more_context"
+                if parsed.request_more_context
+                else "no_valid_same_source_citation"
+            ),
+            "request_supplement": True,
+        }
+
+    if not has_valid_citations:
         exhausted_reason = (
             "supplementary_retrieval_exhausted"
             if state.get("supplementary_retrieval_used", False)
@@ -441,15 +454,33 @@ def _parse_response_node(state: AnnualInvestigationState) -> dict[str, object]:
         )
         return {
             "parsed_interpretation": None,
+            "current_citations_valid": False,
             "pending_reason": exhausted_reason,
             "request_supplement": False,
         }
 
+    # A request for more context is advisory once valid same-source citations
+    # support the interpretation and the bounded workflow cannot expand again.
     return {
         "parsed_interpretation": parsed,
+        "current_citations_valid": True,
         "pending_reason": None,
         "request_supplement": False,
     }
+
+
+def _supplementary_call_budget_available(state: AnnualInvestigationState) -> bool:
+    if state.get("supplementary_retrieval_used", False):
+        return False
+    attempts = state.get("model_call_attempt_count", 0)
+    if attempts >= MAX_MODEL_CALLS:
+        return False
+    remaining_candidates = max(
+        0,
+        len(state.get("candidate_signals", [])) - state.get("current_index", 0) - 1,
+    )
+    remaining_calls = MAX_MODEL_CALLS - attempts
+    return remaining_calls > remaining_candidates
 
 
 def _after_parse_response(state: AnnualInvestigationState) -> str:
@@ -526,13 +557,31 @@ def _advance_candidate_node(state: AnnualInvestigationState) -> dict[str, object
     parsed = state.get("parsed_interpretation")
     reason = state.get("pending_reason")
     item: InvestigationItem
-    if parsed is not None and reason is None:
+    preserve_reason = reason in {
+        None,
+        "supplementary_retrieval_exhausted",
+        "supplementary_retrieval_failed",
+    }
+    if (
+        parsed is not None
+        and state.get("current_citations_valid", False)
+        and preserve_reason
+    ):
+        limitations = list(parsed.limitations)
+        if parsed.request_more_context:
+            if reason == "supplementary_retrieval_failed":
+                limit = "模型请求更多同源上下文，但补充检索未能取得更多原文；当前解释仍属未核实。"
+            elif reason == "supplementary_retrieval_exhausted":
+                limit = "模型请求更多同源上下文，但年报检索没有找到新增相关片段；当前解释仍属未核实。"
+            else:
+                limit = "模型请求更多同源上下文；本次有限检索或调用预算已到上限，当前解释仍属未核实。"
+            limitations.append(limit)
         item = InvestigationItem(
             signal_id=signal_id,
             status="interpretation",
             explanation=parsed.explanation,
             alternative_explanations=parsed.alternative_explanations,
-            limitations=parsed.limitations,
+            limitations=tuple(limitations),
             narrative_evidence_ids=parsed.narrative_evidence_ids,
         )
     else:
@@ -550,6 +599,7 @@ def _advance_candidate_node(state: AnnualInvestigationState) -> dict[str, object
         "current_index": state.get("current_index", 0) + 1,
         "current_candidate": None,
         "current_snippets": [],
+        "current_citations_valid": False,
         "supplementary_evidence_ids": [],
         "parsed_interpretation": None,
         "response_error": None,

@@ -124,6 +124,30 @@ export interface CandidateSignal {
   placement_reasons: string[];
 }
 
+export interface M3AnnualScreeningRule {
+  rule_id: string;
+  rule_version: string;
+  formula: string;
+  threshold: string | null;
+  points_if_triggered: number;
+  points: number | null;
+  status: string;
+  triggered: boolean | null;
+  calculated_value: string | null;
+  issues: string[];
+}
+
+export interface M3AnnualScreening {
+  kind: string;
+  rule_version: string;
+  status: string;
+  screening_status: string;
+  total_score: number | null;
+  maximum_score: number;
+  rules: M3AnnualScreeningRule[];
+  limitations: string[];
+}
+
 export interface AnnualAnalysisReport {
   kind: "fintrace_annual_analysis_report";
   title?: string;
@@ -156,6 +180,7 @@ export interface AnnualAnalysisReport {
   };
   limitations: string[];
   model_called: boolean;
+  m3_screening?: M3AnnualScreening | null;
   model_investigation?: AnnualReportRecord | null;
 }
 
