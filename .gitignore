@@ -1,4 +1,4 @@
-# Local environment files; example configurations may be tracked.
+# Local environment files, including the app-specific .env.model and its atomic-write files.
 .env
 .env.*
 !.env.example

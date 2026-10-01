@@ -1,5 +1,6 @@
 import type {
   AnnualAnalysisManifest,
+  AnnualAnalysisModelReview,
   AnnualAnalysisReport,
   AnnualAnalysisResponse,
   AnnualReportRecord,
@@ -214,15 +215,26 @@ function readReport(value: Record<string, unknown>, path: string): AnnualAnalysi
   const companyId = requireString(value.company_id, path + ".company_id");
   const reportYear = requireInteger(value.report_year, path + ".report_year");
   const sourceDocumentId = requireString(value.source_document_id, path + ".source_document_id");
+  const runId = requireString(value.run_id, path + ".run_id");
   const comparabilityValue = value.comparability;
   const comparability =
     comparabilityValue === null
       ? null
       : readComparability(requireRecord(comparabilityValue, path + ".comparability"), path + ".comparability");
+  const modelReview =
+    value.model_review === undefined
+      ? undefined
+      : value.model_review === null
+        ? null
+        : readModelReview(
+            requireRecord(value.model_review, path + ".model_review"),
+            path + ".model_review",
+            { runId, companyId, reportYear, sourceDocumentId, sourceSha256 },
+          );
   return {
     kind: "fintrace_annual_analysis_report",
     title: optionalString(value.title) ?? undefined,
-    run_id: requireString(value.run_id, path + ".run_id"),
+    run_id: runId,
     company_id: companyId,
     report_year: reportYear,
     source_document_id: sourceDocumentId,
@@ -274,6 +286,91 @@ function readReport(value: Record<string, unknown>, path: string): AnnualAnalysi
         : value.model_investigation === null
           ? null
           : requireRecord(value.model_investigation, path + ".model_investigation"),
+    model_review: modelReview,
+  };
+}
+
+function readModelReview(
+  value: Record<string, unknown>,
+  path: string,
+  expected: {
+    runId: string;
+    companyId: string;
+    reportYear: number;
+    sourceDocumentId: string;
+    sourceSha256: string;
+  },
+): AnnualAnalysisModelReview {
+  const status = requireString(value.status, path + ".status");
+  if (status !== "completed" && status !== "failed" && status !== "not_called") {
+    throw invalidResponse(path + ".status");
+  }
+  const assessmentValue = nullableString(value.assessment, path + ".assessment");
+  const assessments = new Set([
+    "prioritize_review",
+    "no_priority_issue_identified_within_scope",
+    "insufficient_evidence",
+  ]);
+  if ((assessmentValue !== null && !assessments.has(assessmentValue)) || (status === "completed") !== (assessmentValue !== null)) {
+    throw invalidResponse(path + ".assessment");
+  }
+  const assessment = assessmentValue as AnnualAnalysisModelReview["assessment"];
+  const summary = nullableString(value.summary, path + ".summary");
+  const modelCalled = requireBoolean(value.model_called, path + ".model_called");
+  const callCount = requireInteger(value.call_count, path + ".call_count");
+  const callAttemptCount = requireInteger(value.call_attempt_count, path + ".call_attempt_count");
+  const reason = nullableString(value.reason, path + ".reason");
+  const identity = requireRecord(value.source_identity, path + ".source_identity");
+  const sourceIdentity = {
+    run_id: requireString(identity.run_id, path + ".source_identity.run_id"),
+    company_id: requireString(identity.company_id, path + ".source_identity.company_id"),
+    report_year: requireInteger(identity.report_year, path + ".source_identity.report_year"),
+    source_document_id: requireString(identity.source_document_id, path + ".source_identity.source_document_id"),
+    source_sha256: requireString(identity.source_sha256, path + ".source_identity.source_sha256"),
+  };
+  if (
+    sourceIdentity.run_id !== expected.runId ||
+    sourceIdentity.company_id !== expected.companyId ||
+    sourceIdentity.report_year !== expected.reportYear ||
+    sourceIdentity.source_document_id !== expected.sourceDocumentId ||
+    !SHA256_PATTERN.test(sourceIdentity.source_sha256) ||
+    sourceIdentity.source_sha256.toLowerCase() !== expected.sourceSha256.toLowerCase() ||
+    callCount < 0 ||
+    callAttemptCount < callCount ||
+    (status === "completed" && (!modelCalled || summary === null || summary.trim() === "")) ||
+    (status !== "completed" && reason === null) ||
+    (status === "not_called" && modelCalled)
+  ) {
+    throw invalidResponse(path);
+  }
+  const reasons = requireArray(value.reasons, path + ".reasons").map((item, index) => {
+    const entry = requireRecord(item, path + ".reasons[" + index + "]");
+    return {
+      text: requireString(entry.text, path + ".reasons[" + index + "].text"),
+      evidence_ids: readStringArray(entry.evidence_ids, path + ".reasons[" + index + "].evidence_ids"),
+    };
+  });
+  const followUpItems = requireArray(value.follow_up_items, path + ".follow_up_items").map((item, index) => {
+    const entry = requireRecord(item, path + ".follow_up_items[" + index + "]");
+    return {
+      object: requireString(entry.object, path + ".follow_up_items[" + index + "].object"),
+      action: requireString(entry.action, path + ".follow_up_items[" + index + "].action"),
+      evidence_ids: readStringArray(entry.evidence_ids, path + ".follow_up_items[" + index + "].evidence_ids"),
+    };
+  });
+  return {
+    status,
+    reason,
+    assessment,
+    summary,
+    reasons,
+    follow_up_items: followUpItems,
+    limitations: readStringArray(value.limitations, path + ".limitations"),
+    model_called: modelCalled,
+    call_count: callCount,
+    call_attempt_count: callAttemptCount,
+    audit_artifacts: readRecordArray(value.audit_artifacts, path + ".audit_artifacts"),
+    source_identity: sourceIdentity,
   };
 }
 
@@ -457,6 +554,7 @@ function readCalculationVerification(value: unknown, path: string) {
   const record = requireRecord(value, path);
   return {
     status: requireString(record.status, path + ".status"),
+    calculation_id: record.calculation_id === undefined ? undefined : requireString(record.calculation_id, path + ".calculation_id"),
     recomputed_value: nullableScalar(record.recomputed_value, path + ".recomputed_value"),
     reason: nullableString(record.reason, path + ".reason"),
     checks: record.checks === undefined ? undefined : readStringArray(record.checks, path + ".checks"),

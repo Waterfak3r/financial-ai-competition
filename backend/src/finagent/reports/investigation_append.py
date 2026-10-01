@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from finagent.core.model_settings import ModelConfigError, ModelSettings, load_model_settings
+from finagent.agents.annual_review import not_called_model_review
 
 
 def run_annual_investigation_appendix(
@@ -43,6 +44,20 @@ def run_annual_investigation_appendix(
             "audit_artifacts": [],
             "fraud_conclusion": None,
             "reason": "annual_report_identity_invalid",
+            "final_review": {
+                "status": "not_called",
+                "reason": "annual_report_identity_invalid",
+                "assessment": None,
+                "summary": None,
+                "reasons": [],
+                "follow_up_items": [],
+                "limitations": [],
+                "model_called": False,
+                "call_count": 0,
+                "call_attempt_count": 0,
+                "audit_artifacts": [],
+                "source_identity": None,
+            },
             "archive_path": _relative_or_absolute(run_dir / "investigation.json", artifacts_root),
         }
     archive_path = _relative_or_absolute(run_dir / "investigation.json", artifacts_root)
@@ -58,11 +73,13 @@ def run_annual_investigation_appendix(
         "audit_artifacts": [],
         "fraud_conclusion": None,
         "archive_path": archive_path,
+        "final_review": not_called_model_review(report, "model_review_not_started"),
     }
 
     formal_runs_root = (_repository_root() / "artifacts" / "runs").resolve()
     if run_dir.resolve().parent != formal_runs_root:
         state.update(status="failed", reason="model_requires_repository_artifacts_root")
+        state["final_review"] = not_called_model_review(report, "model_requires_repository_artifacts_root")
         return state
 
     try:
@@ -78,9 +95,11 @@ def run_annual_investigation_appendix(
         state["source_binding"] = binding
     except _SourceBindingError as exc:
         state.update(status="failed", reason=exc.code)
+        state["final_review"] = not_called_model_review(report, exc.code)
         return state
     except Exception:
         state.update(status="failed", reason="source_binding_validation_failed")
+        state["final_review"] = not_called_model_review(report, "source_binding_validation_failed")
         return state
 
     try:
@@ -91,6 +110,7 @@ def run_annual_investigation_appendix(
             reason="langgraph_unavailable",
             reason_detail="年度调查图需要可选依赖 langgraph>=1.2,<1.3；本机未安装该依赖。",
         )
+        state["final_review"] = not_called_model_review(report, "langgraph_unavailable")
         return state
 
     try:
@@ -101,9 +121,11 @@ def run_annual_investigation_appendix(
             reason="model_configuration_unavailable",
             reason_detail=str(exc),
         )
+        state["final_review"] = not_called_model_review(report, "model_configuration_unavailable")
         return state
     except Exception:
         state.update(status="failed", reason="model_configuration_load_failed")
+        state["final_review"] = not_called_model_review(report, "model_configuration_load_failed")
         return state
 
     state["model_name"] = settings.model
@@ -128,7 +150,6 @@ def run_annual_investigation_appendix(
             source_binding=binding,
             model_name=settings.model,
         )
-        return payload
     except Exception as exc:
         audits, attempts, calls = _discover_new_audits(run_dir, before, artifacts_root)
         error_name = type(exc).__name__
@@ -146,7 +167,63 @@ def run_annual_investigation_appendix(
             model_call_attempt_count=attempts,
             audit_artifacts=audits,
         )
-        return state
+        payload = state
+
+    try:
+        review = _invoke_review(
+            report,
+            payload,
+            settings=settings,
+            run_dir=run_dir,
+            artifacts_root=artifacts_root,
+        )
+    except Exception:
+        review = not_called_model_review(report, "model_review_call_failed")
+        review["status"] = "failed"
+    return _attach_review_outcome(payload, review)
+
+
+def _invoke_review(
+    report: Mapping[str, Any],
+    investigation: Mapping[str, Any],
+    *,
+    settings: ModelSettings,
+    run_dir: Path,
+    artifacts_root: Path,
+) -> dict[str, Any]:
+    agent = importlib.import_module("finagent.agents.annual_review")
+    return agent.run_annual_model_review(
+        report,
+        investigation,
+        settings,
+        run_dir=run_dir,
+        artifacts_root=artifacts_root,
+    )
+
+
+def _attach_review_outcome(
+    investigation: Mapping[str, Any], review: Mapping[str, Any]
+) -> dict[str, Any]:
+    payload = dict(investigation)
+    base_calls = _nonnegative_int(payload.get("model_call_count"))
+    base_attempts = _nonnegative_int(payload.get("model_call_attempt_count"))
+    review_calls = _nonnegative_int(review.get("call_count"))
+    review_attempts = _nonnegative_int(review.get("call_attempt_count"))
+    payload["investigation_call_count"] = base_calls
+    payload["investigation_call_attempt_count"] = base_attempts
+    payload["model_review_call_count"] = review_calls
+    payload["model_review_call_attempt_count"] = review_attempts
+    payload["model_call_count"] = base_calls + review_calls
+    payload["model_call_attempt_count"] = base_attempts + review_attempts
+    payload["model_called"] = payload["model_call_count"] > 0
+    audits = payload.get("audit_artifacts")
+    review_audits = review.get("audit_artifacts")
+    payload["audit_artifacts"] = [
+        *(audits if isinstance(audits, list) else []),
+        *(review_audits if isinstance(review_audits, list) else []),
+    ]
+    payload["final_review"] = dict(review)
+    return payload
 
 
 def attach_investigation_to_report(
@@ -165,10 +242,15 @@ def attach_investigation_to_report(
     updated_report["scope"] = scope
     updated_report["model_called"] = bool(investigation.get("model_called"))
     updated_report["model_investigation"] = dict(investigation)
+    final_review = investigation.get("final_review")
+    if isinstance(final_review, Mapping):
+        updated_report["model_review"] = dict(final_review)
 
     updated_analysis = dict(analysis)
     updated_analysis["model_called"] = bool(investigation.get("model_called"))
     updated_analysis["scope"] = {"note": scope["note"]}
+    if isinstance(final_review, Mapping):
+        updated_analysis["model_review"] = dict(final_review)
     updated_analysis["investigation"] = {
         "status": investigation.get("status"),
         "model_called": bool(investigation.get("model_called")),
@@ -190,6 +272,26 @@ def render_investigation_markdown(investigation: Mapping[str, Any]) -> str:
         lines.append(f"- 状态说明：`{investigation['reason']}`")
     if investigation.get("reason_detail"):
         lines.append(f"- 详情：{investigation['reason_detail']}")
+
+    review = investigation.get("final_review")
+    if isinstance(review, Mapping):
+        lines.extend(["", "## M3 最终评审（模型观点，未独立核验）", ""])
+        lines.append(f"- 评审状态：`{review.get('status', 'failed')}`")
+        lines.append(f"- 实际模型调用：{'是' if review.get('model_called') else '否'}")
+        if review.get("reason"):
+            lines.append(f"- 状态说明：`{review['reason']}`")
+        if review.get("assessment"):
+            lines.append(f"- 评审意见：`{review['assessment']}`")
+        if review.get("summary"):
+            lines.extend(["", str(review["summary"])])
+        for item in review.get("reasons", []) if isinstance(review.get("reasons"), list) else []:
+            if isinstance(item, Mapping):
+                lines.append(f"- 理由：{item.get('text', '')}（依据：{', '.join(item.get('evidence_ids', []))}）")
+        for item in review.get("follow_up_items", []) if isinstance(review.get("follow_up_items"), list) else []:
+            if isinstance(item, Mapping):
+                lines.append(f"- 后续核查：{item.get('object', '')}；{item.get('action', '')}；依据：{', '.join(item.get('evidence_ids', []))}")
+        for item in review.get("limitations", []) if isinstance(review.get("limitations"), list) else []:
+            lines.append(f"- 评审限制：{item}")
 
     items = investigation.get("items")
     if not isinstance(items, list) or not items:
@@ -446,8 +548,8 @@ def _is_matching_period(value: str, year: int) -> bool:
 
 def _model_scope_note(note: str) -> str:
     sentence = (
-        "显式启用的 M3 年报调查只使用同一来源年报的限长片段提出未核实解释或弃权，"
-        "不参与事实、计算和主张核验，也不确认舞弊。"
+        "显式启用的 M3 年报调查与最终评审会调用模型：调查只提出未核实解释或弃权，"
+        "最终评审只提供模型观点；两者都不参与事实、计算和主张核验，也不确认或排除舞弊。"
     )
     for original in ("报告不调用模型，也不确认舞弊。", "报告不调用模型。"):
         if original in note:

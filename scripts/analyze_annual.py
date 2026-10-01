@@ -56,11 +56,13 @@ _PROVENANCE_FILES = (
     "backend/src/finagent/reports/m3_annual_append.py",
     "backend/src/finagent/reports/investigation_append.py",
     "backend/src/finagent/agents/annual_investigation.py",
+    "backend/src/finagent/agents/annual_review.py",
     "backend/src/finagent/retrieval/annual_context.py",
     "backend/src/finagent/audit/audited_chat.py",
     "backend/src/finagent/core/model_settings.py",
     "backend/src/finagent/llm/chat_completion.py",
     "config/prompts/annual_investigation_v1.md",
+    "config/prompts/annual_review_v1.md",
 )
 
 
@@ -102,7 +104,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--with-model",
         action="store_true",
-        help="显式启用 M3 年报调查；仅此选项会读取 MODEL_* 环境变量",
+        help="显式启用 M3 年报调查和最终模型评审；仅此选项会读取 MODEL_* 环境变量",
     )
     parser.add_argument(
         "--source-record",
@@ -216,7 +218,9 @@ def _run(args: argparse.Namespace) -> int:
         _write_json_new(report_dir / "report.json", report_payload)
         _write_text_new(report_dir / "report.md", markdown)
         completed_status = result.status
-        if investigation is not None and investigation.get("status") != "completed":
+        if investigation is not None and _investigation_has_issue(investigation):
+            completed_status = "completed_with_issues"
+        if investigation is not None and investigation.get("final_review", {}).get("status") != "completed":
             completed_status = "completed_with_issues"
         if m3_screening is not None and m3_screening.get("status") != "completed":
             completed_status = "completed_with_issues"
@@ -268,7 +272,8 @@ def _run(args: argparse.Namespace) -> int:
         print(f"run_dir={run_dir}")
         print(f"report_dir={report_dir}")
         return 2 if (
-            (investigation is not None and investigation.get("status") != "completed")
+            (investigation is not None and _investigation_has_issue(investigation))
+            or (investigation is not None and investigation.get("final_review", {}).get("status") != "completed")
             or (m3_screening is not None and m3_screening.get("status") != "completed")
         ) else 0
     except Exception as exc:
@@ -550,6 +555,29 @@ def _add_investigation_manifest(
         "source_record_path": _relative_or_absolute(source_record_path, ROOT),
         "source_record_sha256": source_record_sha256,
     }
+    final_review = investigation.get("final_review")
+    if isinstance(final_review, dict):
+        manifest["model_review_status"] = final_review.get("status")
+        manifest["model_review"] = {
+            "status": final_review.get("status"),
+            "reason": final_review.get("reason"),
+            "model_called": bool(final_review.get("model_called")),
+            "call_count": final_review.get("call_count", 0),
+            "call_attempt_count": final_review.get("call_attempt_count", 0),
+            "source_identity": final_review.get("source_identity"),
+        }
+
+
+def _investigation_has_issue(investigation: dict[str, object]) -> bool:
+    if investigation.get("status") == "completed":
+        return False
+    final_review = investigation.get("final_review")
+    return not (
+        investigation.get("status") == "abstained"
+        and investigation.get("reason") == "no_supported_candidate_signal"
+        and isinstance(final_review, dict)
+        and final_review.get("status") == "completed"
+    )
 
 
 def _git_state() -> tuple[str, bool | None]:

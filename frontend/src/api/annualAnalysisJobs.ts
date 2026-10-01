@@ -17,7 +17,7 @@ const STATUSES = new Set<AnnualAnalysisJobStatus>([
   "failed",
   "interrupted",
 ]);
-const MODES = new Set<AnnualAnalysisJobMode>(["deterministic", "m3_screening"]);
+const MODES = new Set<AnnualAnalysisJobMode>(["deterministic", "m3_screening", "model_investigation"]);
 
 export class AnnualAnalysisJobApiError extends Error {
   readonly status: number | null;

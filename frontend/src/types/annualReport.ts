@@ -74,6 +74,7 @@ export interface ConfirmedMetric {
 
 export interface CalculationVerification {
   status: string;
+  calculation_id?: string;
   recomputed_value?: string | number | null;
   reason?: string | null;
   checks?: string[];
@@ -148,6 +149,44 @@ export interface M3AnnualScreening {
   limitations: string[];
 }
 
+export type ModelReviewStatus = "completed" | "failed" | "not_called";
+export type ModelReviewAssessment =
+  | "prioritize_review"
+  | "no_priority_issue_identified_within_scope"
+  | "insufficient_evidence";
+
+export interface ModelReviewEvidenceReference {
+  text: string;
+  evidence_ids: string[];
+}
+
+export interface ModelReviewFollowUpItem {
+  object: string;
+  action: string;
+  evidence_ids: string[];
+}
+
+export interface AnnualAnalysisModelReview {
+  status: ModelReviewStatus;
+  reason: string | null;
+  assessment: ModelReviewAssessment | null;
+  summary: string | null;
+  reasons: ModelReviewEvidenceReference[];
+  follow_up_items: ModelReviewFollowUpItem[];
+  limitations: string[];
+  model_called: boolean;
+  call_count: number;
+  call_attempt_count: number;
+  audit_artifacts: AnnualReportRecord[];
+  source_identity: {
+    run_id: string;
+    company_id: string;
+    report_year: number;
+    source_document_id: string;
+    source_sha256: string;
+  };
+}
+
 export interface AnnualAnalysisReport {
   kind: "fintrace_annual_analysis_report";
   title?: string;
@@ -182,6 +221,7 @@ export interface AnnualAnalysisReport {
   model_called: boolean;
   m3_screening?: M3AnnualScreening | null;
   model_investigation?: AnnualReportRecord | null;
+  model_review?: AnnualAnalysisModelReview | null;
 }
 
 export interface AnnualAnalysisResponse {

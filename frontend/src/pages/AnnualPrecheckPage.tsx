@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import type { FormEvent, ReactNode, RefObject } from "react";
 import { AnnualAnalysisPage } from "./AnnualAnalysisPage";
+import { SettingsPage } from "./SettingsPage";
 import {
   createAnnualPrecheck,
   loadAnnualPrecheck,
@@ -42,7 +43,7 @@ interface FieldErrors {
 }
 
 type RequestPhase = "idle" | "uploading" | "creating" | "loading";
-type AppView = "home" | "create" | "result" | "annual-analysis";
+type AppView = "home" | "create" | "result" | "annual-analysis" | "settings";
 
 export function AnnualPrecheckPage() {
   const [parsedPath, setParsedPath] = useState("");
@@ -56,11 +57,13 @@ export function AnnualPrecheckPage() {
   const [requestError, setRequestError] = useState<string | null>(null);
   const [record, setRecord] = useState<AnnualPrecheckRecord | null>(null);
   const [view, setView] = useState<AppView>("annual-analysis");
+  const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
   const [selectedIndicator, setSelectedIndicator] = useState<string | null>(null);
   const [uploadReceipt, setUploadReceipt] = useState<TextPdfUploadReceipt | null>(null);
   const requestLock = useRef(false);
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const busy = phase !== "idle" || requestLock.current;
+  const isAnnualWorkspace = view === "annual-analysis" || view === "settings";
 
   function fillHaitianSample() {
     setParsedPath(HAITIAN_2024.parsedPath);
@@ -95,6 +98,33 @@ export function AnnualPrecheckPage() {
   function changeSourcePdfPath(value: string) {
     setSourcePdfPath(value);
     setUploadReceipt(null);
+  }
+
+  function focusAnnualAnalysisTarget(targetId: string, detailsSelector?: string) {
+    const focusTarget = () => {
+      if (detailsSelector !== undefined) {
+        const details = document.querySelector(detailsSelector);
+        if (details instanceof HTMLDetailsElement) {
+          details.open = true;
+        }
+      }
+      const target = document.getElementById(targetId);
+      if (target === null) {
+        return;
+      }
+      target.scrollIntoView({
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+        block: "center",
+      });
+      target.focus({ preventScroll: true });
+    };
+
+    if (view !== "annual-analysis") {
+      setView("annual-analysis");
+      window.requestAnimationFrame(() => window.requestAnimationFrame(focusTarget));
+      return;
+    }
+    focusTarget();
   }
 
   async function onUpload() {
@@ -230,15 +260,37 @@ export function AnnualPrecheckPage() {
 
   return (
     <div className="shell">
+      <a className="skip-link" href="#main-content">跳到主要内容</a>
       <aside className="sidebar">
         <p className="brand">
-          <span className="brand-mark" aria-hidden="true" />
+          <svg className="brand-mark" viewBox="0 0 40 36" aria-hidden="true" focusable="false">
+            <rect x="2" y="21" width="9" height="13" rx="3" />
+            <rect x="15" y="12" width="9" height="22" rx="3" />
+            <rect x="28" y="2" width="9" height="32" rx="3" />
+          </svg>
           财务智析
         </p>
         <nav className="primary-navigation" aria-label="分析流程">
           <ul className="nav-list">
             <li>
               <NavButton view="annual-analysis" current={view} onSelect={setView} icon={<DocIcon />} label="分析年报" />
+            </li>
+            <li>
+              <NavActionButton
+                icon={<FormIcon />}
+                label="上传年报"
+                onSelect={() => focusAnnualAnalysisTarget("annual-job-pdf-file", ".annual-start-another")}
+              />
+            </li>
+            <li>
+              <NavActionButton
+                icon={<TableIcon />}
+                label="回看归档"
+                onSelect={() => focusAnnualAnalysisTarget("annual-analysis-run-id", ".annual-archive-lookup")}
+              />
+            </li>
+            <li>
+              <NavButton view="settings" current={view} onSelect={setView} icon={<SettingsIcon />} label="设置" />
             </li>
           </ul>
           <details className="legacy-navigation" open={view === "home" || view === "create" || view === "result"}>
@@ -259,10 +311,42 @@ export function AnnualPrecheckPage() {
       </aside>
       <div className="workspace">
         <header className="topbar">
-          <p className="top-note">
-            {view === "annual-analysis" ? "本地分析 · 结果与证据可追溯" : "基础预检仅作原文金额与年度对比参考"}
-          </p>
-          {view === "annual-analysis" ? null : (
+          <div className="topbar-identity">
+            <p className="topbar-title">{view === "annual-analysis" ? "年度分析工作区" : view === "settings" ? "模型服务设置" : "基础预检（旧流程）"}</p>
+            <p className="top-note">
+              {view === "annual-analysis"
+                ? "本机工作区 · 结果、核验状态与原文页按报告归档"
+                : view === "settings"
+                  ? "模型连接配置 · 保存后供新启动的 AI 分析与评审使用"
+                  : "旧流程仅作原文金额与年度对比参考"}
+            </p>
+          </div>
+          {view === "annual-analysis" ? (
+            <div className="topbar-actions">
+              <span className="local-workspace-mark"><span aria-hidden="true" />本机工作区</span>
+              <button
+                type="button"
+                className="topbar-action"
+                onClick={() => focusAnnualAnalysisTarget("annual-job-pdf-file", ".annual-start-another")}
+              >
+                上传年报
+              </button>
+              <button
+                type="button"
+                className="topbar-action topbar-action-primary"
+                onClick={() => focusAnnualAnalysisTarget("annual-analysis-run-id", ".annual-archive-lookup")}
+              >
+                回看归档
+              </button>
+            </div>
+          ) : view === "settings" ? (
+            <div className="topbar-actions">
+              <span className="local-workspace-mark"><span aria-hidden="true" />本机工作区</span>
+              <button type="button" className="topbar-action topbar-action-primary" onClick={() => setView("annual-analysis")}>
+                返回分析年报
+              </button>
+            </div>
+          ) : (
             <details className="legacy-run-lookup" open={fieldErrors.runId !== undefined}>
               <summary>高级：按编号回看已有预检</summary>
               <form className="legacy-run-lookup-form" onSubmit={onLoad} noValidate>
@@ -288,8 +372,14 @@ export function AnnualPrecheckPage() {
             </details>
           )}
         </header>
-        <main className="content" aria-busy={busy}>
-          {view === "annual-analysis" || phase === "idle" ? null : (
+        <main id="main-content" className="content" aria-busy={busy}>
+          {view === "annual-analysis" && settingsNotice !== null ? (
+            <p className="settings-return-notice" role="status">
+              <span>{settingsNotice}</span>
+              <button type="button" className="text-button" aria-label="关闭提示" onClick={() => setSettingsNotice(null)}>关闭</button>
+            </p>
+          ) : null}
+          {isAnnualWorkspace || phase === "idle" ? null : (
             <p role="status" className="status-line">
               {phase === "creating"
                 ? "正在生成基础预检结果…"
@@ -298,7 +388,7 @@ export function AnnualPrecheckPage() {
                   : "正在读取预检结果…"}
             </p>
           )}
-          {view !== "annual-analysis" && requestError !== null ? (
+          {!isAnnualWorkspace && requestError !== null ? (
             <p role="alert" className="alert">
               {requestError}
             </p>
@@ -342,7 +432,16 @@ export function AnnualPrecheckPage() {
               onCreate={() => setView("create")}
             />
           ) : null}
-          {view === "annual-analysis" ? <AnnualAnalysisPage /> : null}
+          {view === "annual-analysis" ? <AnnualAnalysisPage onOpenSettings={() => setView("settings")} /> : null}
+          {view === "settings" ? (
+            <SettingsPage
+              onBack={() => setView("annual-analysis")}
+              onSaved={(message) => {
+                setSettingsNotice(message);
+                setView("annual-analysis");
+              }}
+            />
+          ) : null}
         </main>
       </div>
     </div>
@@ -369,6 +468,23 @@ function NavButton({
       aria-current={current === view ? "page" : undefined}
       onClick={() => onSelect(view)}
     >
+      {icon}
+      {label}
+    </button>
+  );
+}
+
+function NavActionButton({
+  icon,
+  label,
+  onSelect,
+}: {
+  icon: ReactNode;
+  label: string;
+  onSelect: () => void;
+}) {
+  return (
+    <button type="button" className="nav-item nav-action-item" onClick={onSelect}>
       {icon}
       {label}
     </button>
@@ -1585,6 +1701,15 @@ function DocIcon() {
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
       <path d="M7 3.5h7l5 5V20a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1z" />
       <path d="M14 3.5V9h5.5M8.5 13h7M8.5 16.5h7" />
+    </svg>
+  );
+}
+
+function SettingsIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+      <circle cx="12" cy="12" r="3" />
+      <path d="m19.4 15 .1.1 1.4 1.1-1.5 2.6-1.7-.7a7.8 7.8 0 0 1-1.7 1l-.3 1.8h-3l-.3-1.8a7.8 7.8 0 0 1-1.7-1l-1.7.7-1.5-2.6L7 15a8 8 0 0 1 0-2l-1.5-1.1L7 9.3l1.7.7a7.8 7.8 0 0 1 1.7-1l.3-1.8h3l.3 1.8a7.8 7.8 0 0 1 1.7 1l1.7-.7 1.5 2.6L19.5 13a8 8 0 0 1-.1 2Z" strokeLinejoin="round" />
     </svg>
   );
 }

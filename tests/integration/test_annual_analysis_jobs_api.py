@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 import finagent.api.annual_analysis_jobs as jobs_module
 from finagent.api.annual_analysis_jobs import CliResult
 from finagent.api.app import create_app
+from finagent.core.model_settings_store import save_local_settings
 
 
 def _make_source(root: Path, *, document_id: str = "doc-1") -> dict[str, object]:
@@ -188,8 +189,15 @@ def test_source_file_symlink_is_rejected(tmp_path: Path) -> None:
     assert response.json()["detail"]["code"] == "source_path_invalid"
 
 
-def test_model_investigation_is_explicitly_unsupported(tmp_path: Path) -> None:
+def test_model_investigation_requires_server_configuration_before_creating_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     source = _make_source(tmp_path)
+    monkeypatch.setattr(
+        jobs_module,
+        "get_annual_analysis_capabilities",
+        lambda _project_root=None: {"model_investigation": {"available": False, "status": "not_configured"}},
+    )
     client = TestClient(create_app(tmp_path))
 
     response = client.post(
@@ -197,9 +205,26 @@ def test_model_investigation_is_explicitly_unsupported(tmp_path: Path) -> None:
         json=_request(source, mode="model_investigation"),
     )
 
-    assert response.status_code == 501
-    assert response.json()["detail"]["code"] == "mode_unsupported"
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "model_configuration_unavailable"
     assert not (tmp_path / "artifacts" / "annual-analysis-jobs").exists()
+
+
+def test_capabilities_endpoint_returns_only_stable_readiness_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MODEL_API_KEY", "mock-secret-value")
+    monkeypatch.setenv("MODEL_BASE_URL", "https://private.example.invalid/v1")
+    expected = {"model_investigation": {"available": False, "status": "not_configured"}}
+    monkeypatch.setattr(jobs_module, "get_annual_analysis_capabilities", lambda _project_root=None: expected)
+    client = TestClient(create_app(tmp_path))
+
+    response = client.get("/v1/annual-analysis-capabilities")
+
+    assert response.status_code == 200
+    assert response.json() == expected
+    assert "mock-secret-value" not in response.text
+    assert "private.example.invalid" not in response.text
 
 
 def test_failed_cli_archive_is_persisted_as_failed_job(tmp_path: Path, monkeypatch) -> None:
@@ -283,6 +308,91 @@ def test_cli_timeout_is_capped_configurable_and_credentials_are_removed(tmp_path
     assert observed["timeout"] == 120
     assert "MODEL_API_KEY" not in observed["env"]
     assert "test-secret" not in json.dumps(result.__dict__ if hasattr(result, "__dict__") else result.stdout)
+
+
+def test_model_cli_receives_only_explicit_model_mode_and_adjacent_source_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _make_source(tmp_path)
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "analyze_annual.py").write_text("# mock cli", encoding="utf-8")
+    monkeypatch.setenv("MODEL_BASE_URL", "http://127.0.0.1:9999/v1")
+    monkeypatch.setenv("MODEL_API_KEY", "mock-api-key")
+    monkeypatch.setenv("MODEL_NAME", "mock-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-provider-secret")
+    observed: dict[str, object] = {}
+
+    def fake_run(command, *, cwd, env, timeout, **kwargs):
+        observed.update(command=command, cwd=cwd, timeout=timeout, env=env)
+        return SimpleNamespace(returncode=0, stdout="run_id=annual-analysis-00000000-0000-0000-0000-000000000000", stderr="")
+
+    monkeypatch.setattr(jobs_module.subprocess, "run", fake_run)
+
+    result = jobs_module._invoke_cli(
+        tmp_path,
+        tmp_path / "artifacts",
+        _request(source, mode="model_investigation"),
+    )
+
+    command = observed["command"]
+    environment = observed["env"]
+    assert result.returncode == 0
+    assert "--with-model" in command
+    source_record_index = command.index("--source-record") + 1
+    assert Path(command[source_record_index]) == (
+        tmp_path / "data" / "raw" / str(source["source_pdf_path"])
+    ).parent / "source.json"
+    assert environment["MODEL_BASE_URL"] == "http://127.0.0.1:9999/v1"
+    assert environment["MODEL_API_KEY"] == "mock-api-key"
+    assert environment["MODEL_NAME"] == "mock-model"
+    assert "OPENAI_API_KEY" not in environment
+    assert "unrelated-provider-secret" not in json.dumps(environment)
+
+
+def test_model_cli_uses_saved_settings_snapshot_and_screening_drops_all_model_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _make_source(tmp_path)
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "analyze_annual.py").write_text("# mock cli", encoding="utf-8")
+    save_local_settings(
+        tmp_path,
+        base_url="https://saved.example.invalid/v1",
+        model_name="saved-model",
+        api_key="saved-private-key",
+    )
+    monkeypatch.setenv("MODEL_BASE_URL", "https://environment.example.invalid/v1")
+    monkeypatch.setenv("MODEL_API_KEY", "environment-private-key")
+    monkeypatch.setenv("MODEL_NAME", "environment-model")
+    observed: list[dict[str, object]] = []
+
+    def fake_run(command, *, cwd, env, timeout, **kwargs):
+        observed.append({"command": command, "cwd": cwd, "timeout": timeout, "env": env})
+        return SimpleNamespace(returncode=0, stdout="run_id=annual-analysis-00000000-0000-0000-0000-000000000000", stderr="")
+
+    monkeypatch.setattr(jobs_module.subprocess, "run", fake_run)
+    model_result = jobs_module._invoke_cli(
+        tmp_path,
+        tmp_path / "artifacts",
+        _request(source, mode="model_investigation"),
+    )
+    deterministic_result = jobs_module._invoke_cli(
+        tmp_path,
+        tmp_path / "artifacts",
+        _request(source, mode="deterministic"),
+    )
+
+    model_environment = observed[0]["env"]
+    deterministic_environment = observed[1]["env"]
+    assert model_result.returncode == deterministic_result.returncode == 0
+    assert model_environment["MODEL_BASE_URL"] == "https://saved.example.invalid/v1"
+    assert model_environment["MODEL_API_KEY"] == "saved-private-key"
+    assert model_environment["MODEL_NAME"] == "saved-model"
+    assert "saved-private-key" not in json.dumps(observed[0]["command"])
+    assert "environment-private-key" not in json.dumps(model_environment)
+    assert not any(key.startswith("MODEL_") for key in deterministic_environment)
 
 
 def test_invalid_cli_timeout_configuration_fails_closed(monkeypatch) -> None:

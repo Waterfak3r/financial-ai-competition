@@ -1,4 +1,4 @@
-export type AnnualAnalysisJobMode = "deterministic" | "m3_screening";
+export type AnnualAnalysisJobMode = "deterministic" | "m3_screening" | "model_investigation";
 
 export type AnnualAnalysisJobStatus =
   | "queued"

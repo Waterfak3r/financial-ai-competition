@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FormEvent, ReactNode } from "react";
+import type { FormEvent, MouseEvent, ReactNode } from "react";
+import { loadAnnualAnalysisCapabilities } from "../api/annualAnalysisCapabilities";
 import { AnnualReportApiError, loadAnnualAnalysis, loadVerificationEvidencePreview } from "../api/annualReports";
 import { createAnnualAnalysisJob, loadAnnualAnalysisJob } from "../api/annualAnalysisJobs";
 import { textPdfUploadIssues, uploadTextPdf } from "../api/prechecks";
 import type {
   AnnualAnalysisResponse,
+  AnnualAnalysisModelReview,
   AnnualReportRecord,
   CandidateSignal,
   ConfirmedCalculation,
@@ -28,6 +30,12 @@ const HAITIAN_SAMPLE_REQUEST = {
   source_pdf_path: "603288/2024/cninfo-1222994233/1222994233.PDF",
   sha256: "5a97b13534438f5e85249752ef492fbd9e23af73e67845e47bad1ab7d92e20ee",
 } as const;
+const CORE_METRICS = [
+  { metricId: "revenue", label: "营业收入", tone: "blue" },
+  { metricId: "net_profit_parent", label: "归属于母公司股东的净利润", tone: "green" },
+  { metricId: "operating_cash_flow", label: "经营活动产生的现金流量净额", tone: "orange" },
+  { metricId: "non_recurring_total", label: "披露的非经常性损益合计", tone: "violet" },
+] as const;
 
 type JobAction = "uploading" | "starting" | "retrying" | "refreshing" | null;
 interface JobFormErrors {
@@ -68,12 +76,15 @@ interface SourceLocationResult {
   unlocatedCount: number;
 }
 
-export function AnnualAnalysisPage() {
+export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [runId, setRunId] = useState(SAMPLE_RUN_ID);
   const [companyId, setCompanyId] = useState("");
   const [reportYear, setReportYear] = useState("");
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [mode, setMode] = useState<AnnualAnalysisJobMode>("deterministic");
+  const [modelCapability, setModelCapability] = useState<"ready" | "not_configured" | "dependency_unavailable" | null>(null);
+  const [modelCapabilityLoading, setModelCapabilityLoading] = useState(false);
+  const [modelCapabilityError, setModelCapabilityError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<JobFormErrors>({});
   const [uploadReceipt, setUploadReceipt] = useState<TextPdfUploadReceipt | null>(null);
   const [uploadedFileContext, setUploadedFileContext] = useState<UploadedFileContext | null>(null);
@@ -96,6 +107,24 @@ export function AnnualAnalysisPage() {
   const reportRequest = useRef(0);
   const taskGeneration = useRef(0);
   const previewRequest = useRef(0);
+
+  const refreshModelCapability = useCallback(async () => {
+    setModelCapabilityLoading(true);
+    setModelCapabilityError(null);
+    try {
+      const capabilities = await loadAnnualAnalysisCapabilities();
+      setModelCapability(capabilities.model_investigation.status);
+    } catch {
+      setModelCapability(null);
+      setModelCapabilityError("暂时无法确认 AI 服务状态。确定性分析仍可使用。");
+    } finally {
+      setModelCapabilityLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshModelCapability();
+  }, [refreshModelCapability]);
 
   const loadReportForJob = useCallback(async (completedJob: AnnualAnalysisJob, generation: number) => {
     if (!isSuccessfulJob(completedJob) || completedJob.run_id === null) {
@@ -296,6 +325,16 @@ export function AnnualAnalysisPage() {
     if (jobSubmitLock.current || jobRefreshLock.current) {
       return;
     }
+    if (mode === "model_investigation" && modelCapability !== "ready") {
+      setJobError(
+        modelCapability === "not_configured"
+          ? "AI 分析不可用：后端尚未配置云端模型。标准分析仍可单独运行。"
+          : modelCapability === "dependency_unavailable"
+            ? "AI 分析不可用：后端缺少所需依赖。标准分析仍可单独运行。"
+            : "暂时无法确认 AI 服务状态。确定性分析仍可使用。",
+      );
+      return;
+    }
     jobSubmitLock.current = true;
     const previousJob = job;
     const generation = taskGeneration.current + 1;
@@ -441,12 +480,11 @@ export function AnnualAnalysisPage() {
     }
   }
 
-  async function onLoad(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function loadReportByRunId(value: string) {
     if (requestLock.current) {
       return;
     }
-    const checkedRunId = runId.trim();
+    const checkedRunId = value.trim();
     setRunId(checkedRunId);
     if (!RUN_ID_PATTERN.test(checkedRunId)) {
       setRunIdError("run_id 只能包含字母、数字、点、下划线和短横线，长度不超过 121 个字符。");
@@ -478,6 +516,24 @@ export function AnnualAnalysisPage() {
         setLoading(false);
       }
     }
+  }
+
+  async function onLoad(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await loadReportByRunId(runId);
+  }
+
+  async function onViewArchivedSample() {
+    await loadReportByRunId(SAMPLE_RUN_ID);
+  }
+
+  function focusUploadForm() {
+    const upload = document.getElementById("annual-job-pdf-file");
+    upload?.scrollIntoView({
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+      block: "center",
+    });
+    upload?.focus({ preventScroll: true });
   }
 
   async function onPreview(evidenceId: string) {
@@ -521,30 +577,46 @@ export function AnnualAnalysisPage() {
 
   return (
     <>
-      <section className="annual-analysis-intro">
-        <div>
-          <p className="eyebrow">FINTRACE / 年度财报</p>
-          <h1>分析年报</h1>
-          <p className="lede">
-            上传年报后开始本地分析。完成后会显示已核对的数据、需要进一步核查的线索，以及可查看的原文页。
-          </p>
-        </div>
-      </section>
+      {response === null ? (
+        <section className="annual-analysis-intro" aria-labelledby="annual-analysis-title">
+          <div className="annual-analysis-copy">
+            <p className="eyebrow">FINTRACE / 年度财报</p>
+            <h1 id="annual-analysis-title">让年报分析更清晰</h1>
+            <p className="lede">
+              从财务数据、计算到原文出处，逐项呈现核验结果与需要继续查看的线索。
+            </p>
+            <div className="annual-intro-actions">
+              <button type="button" className="primary" onClick={focusUploadForm}>
+                选择年报开始分析
+              </button>
+              <button type="button" className="secondary" disabled={loading} onClick={onViewArchivedSample}>
+                {loading ? "正在读取归档…" : "查看海天 2024 已归档结果"}
+              </button>
+            </div>
+            <ul className="annual-intro-points" aria-label="分析内容">
+              <li>财务数据与计算分别核对</li>
+              <li>保留报告页码与证据来源</li>
+              <li>候选线索始终保持待核查状态</li>
+            </ul>
+          </div>
+          <AnnualAnalysisIllustration />
+        </section>
+      ) : null}
 
       <details className="annual-start-another" open={response === null}>
-      <summary>{response === null ? "开始分析年报" : "分析另一份年报"}</summary>
-      <section className="panel annual-job-create" aria-labelledby="annual-job-create-title">
-        <div className="annual-section-heading">
-          <div>
-            <p className="eyebrow">开始分析</p>
-            <h2 id="annual-job-create-title">选择年报并开始分析</h2>
+        <summary>{response === null ? "上传年报并启动分析" : "分析另一份年报"}</summary>
+        <section id="annual-job-create" className="panel annual-job-create" aria-labelledby="annual-job-create-title">
+          <div className="annual-section-heading">
+            <div>
+              <p className="eyebrow">开始分析</p>
+              <h2 id="annual-job-create-title">选择年报并开始分析</h2>
+            </div>
+            <span className="sub">标准分析默认开启</span>
           </div>
-          <span className="sub">默认使用标准分析</span>
-        </div>
-        <p className="annual-job-intro">
-          选择公司代码、年报年份和 PDF 文件，然后开始分析。页面只接受可读取文字的 PDF；原始文件保存在本机，不会覆盖已有文件。
-        </p>
-        <form className="annual-job-form" onSubmit={onUploadAndStart} noValidate>
+          <p className="annual-job-intro">
+            填写公司代码与年份后选择可读取文字的 PDF。原始文件保存在本机，不会覆盖已有资料。
+          </p>
+          <form className="annual-job-form" onSubmit={onUploadAndStart} noValidate>
           <div className="annual-job-fields">
             <label>
               公司代码
@@ -613,45 +685,85 @@ export function AnnualAnalysisPage() {
 
           <fieldset className="annual-job-mode">
             <legend>分析方式</legend>
-            <p className="annual-job-default-mode">标准分析默认开启：核对年报中的数据、计算和引用。</p>
-            <details className="annual-job-advanced-mode">
-              <summary>高级选项：增加试行筛查规则</summary>
-              <label className="annual-job-mode-option annual-job-mode-experimental">
+            <div className="annual-job-mode-options">
+              <label className={`annual-job-mode-option${mode === "deterministic" ? " selected" : ""}`}>
                 <input
-                  type="checkbox"
-                  name="annual-analysis-extra-screening"
-                  checked={mode === "m3_screening"}
-                  onChange={(event) => setMode(event.target.checked ? "m3_screening" : "deterministic")}
+                  type="radio"
+                  name="annual-analysis-mode"
+                  value="deterministic"
+                  checked={mode === "deterministic"}
+                  onChange={() => setMode("deterministic")}
                 />
-                <span><strong>运行四项试行筛查</strong><small>用尚未校准的规则提示可进一步核对的数据组合。筛查结果不是已核实事实，也不判断是否存在问题。</small></span>
+                <span><strong>标准分析</strong><small>核对年报中的数据、计算和原文引用。</small></span>
               </label>
-              <p className="help">标准分析始终会运行；此选项只会额外增加试行筛查。</p>
-            </details>
+              <label className={`annual-job-mode-option annual-job-mode-experimental${mode === "m3_screening" ? " selected" : ""}`}>
+                <input
+                  type="radio"
+                  name="annual-analysis-mode"
+                  value="m3_screening"
+                  checked={mode === "m3_screening"}
+                  onChange={() => setMode("m3_screening")}
+                />
+                <span><strong>标准分析 + 四项试行筛查</strong><small>另用尚未校准的规则提示可继续核对的数据组合；不判断是否存在异常。</small></span>
+              </label>
+              <label className={`annual-job-mode-option annual-job-mode-ai${mode === "model_investigation" ? " selected" : ""}${modelCapability !== "ready" ? " is-unavailable" : ""}`}>
+                <input
+                  type="radio"
+                  name="annual-analysis-mode"
+                  value="model_investigation"
+                  checked={mode === "model_investigation"}
+                  disabled={modelCapability !== "ready"}
+                  onChange={() => setMode("model_investigation")}
+                />
+                <span><strong>AI 分析与评审</strong><small>使用云端模型分析本次年报的相关片段，给出判断、依据和建议核查事项。</small></span>
+              </label>
+            </div>
+            <p className={`annual-job-capability${modelCapability === "ready" ? " is-ready" : ""}`} role="status">
+              {modelCapabilityLoading
+                ? "正在检查 AI 服务状态…"
+                : modelCapability === "ready"
+                  ? "模型连接信息已配置。选择该方式后，相关年报片段会发送给已配置的云端模型。"
+                  : modelCapability === "not_configured"
+                    ? "当前不可用：后端尚未配置云端模型。标准分析和试行筛查仍可使用。"
+                    : modelCapability === "dependency_unavailable"
+                      ? "当前不可用：后端缺少 AI 分析所需依赖。标准分析和试行筛查仍可使用。"
+                      : modelCapabilityError ?? "正在确认 AI 服务状态；确认前不能启动 AI 分析。"}
+              {modelCapabilityError !== null ? (
+                <button type="button" className="text-button annual-capability-retry" onClick={() => void refreshModelCapability()} disabled={modelCapabilityLoading}>
+                  {modelCapabilityLoading ? "检测中…" : "重新检测"}
+                </button>
+              ) : null}
+              {modelCapability === "not_configured" ? (
+                <button type="button" className="text-button annual-capability-settings" onClick={onOpenSettings}>
+                  去设置
+                </button>
+              ) : null}
+            </p>
           </fieldset>
 
-          <div className="annual-job-actions">
-            <button type="submit" className="primary" disabled={jobAction !== null}>
-              {jobAction === "uploading" ? "正在上传并启动…" : jobAction === "starting" ? "正在启动…" : "上传并开始分析"}
-            </button>
-            <button type="button" className="secondary" disabled={jobAction !== null} onClick={onRunHaitianSample}>
-              {jobAction === "starting" ? "正在启动…" : "一键运行海天 2024 样例"}
-            </button>
-            <span className="help">样例直接使用本机已保存的 PDF；文件缺失时会显示可读错误。</span>
-          </div>
-        </form>
-        {uploadReceipt !== null ? (
-          <details className="annual-upload-receipt">
-            <summary>PDF 已上传并生成来源记录</summary>
-            <dl>
-              <dt>文档标识</dt><dd><code>{uploadReceipt.document_id}</code></dd>
-              <dt>页数</dt><dd>{uploadReceipt.page_count}</dd>
-              <dt>来源路径</dt><dd><code>{uploadReceipt.source_pdf_path}</code></dd>
-              <dt>SHA256</dt><dd><code>{uploadReceipt.sha256}</code></dd>
-            </dl>
-            <p className="help">如果任务启动请求失败，再次提交相同 PDF、公司代码和年度时会复用本次上传。</p>
-          </details>
-        ) : null}
-      </section>
+            <div className="annual-job-actions">
+              <button type="submit" className="primary" disabled={jobAction !== null}>
+                {jobAction === "uploading" ? "正在上传并启动…" : jobAction === "starting" ? "正在启动…" : "上传并开始分析"}
+              </button>
+              <button type="button" className="secondary" disabled={jobAction !== null} onClick={onRunHaitianSample}>
+                {jobAction === "starting" ? "正在启动…" : "启动海天 2024 样例分析"}
+              </button>
+              <span className="help">此按钮会新建分析任务，并读取本机已保存的 PDF。</span>
+            </div>
+          </form>
+          {uploadReceipt !== null ? (
+            <details className="annual-upload-receipt">
+              <summary>PDF 已上传并生成来源记录</summary>
+              <dl>
+                <dt>文档标识</dt><dd><code>{uploadReceipt.document_id}</code></dd>
+                <dt>页数</dt><dd>{uploadReceipt.page_count}</dd>
+                <dt>来源路径</dt><dd><code>{uploadReceipt.source_pdf_path}</code></dd>
+                <dt>SHA256</dt><dd><code>{uploadReceipt.sha256}</code></dd>
+              </dl>
+              <p className="help">如果任务启动请求失败，再次提交相同 PDF、公司代码和年度时会复用本次上传。</p>
+            </details>
+          ) : null}
+        </section>
       </details>
 
       <details className="annual-archive-lookup">
@@ -742,6 +854,62 @@ export function AnnualAnalysisPage() {
   );
 }
 
+function AnnualAnalysisIllustration() {
+  return (
+    <div className="annual-analysis-illustration" aria-hidden="true">
+      <svg viewBox="0 0 520 370" role="presentation" focusable="false">
+        <defs>
+          <linearGradient id="report-paper" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stopColor="#ffffff" />
+            <stop offset="1" stopColor="#e9f3ff" />
+          </linearGradient>
+          <linearGradient id="report-blue" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor="#58a5ff" />
+            <stop offset="1" stopColor="#1677ff" />
+          </linearGradient>
+          <filter id="report-shadow" x="-30%" y="-30%" width="160%" height="170%">
+            <feDropShadow dx="0" dy="16" stdDeviation="14" floodColor="#4e8fe0" floodOpacity="0.16" />
+          </filter>
+        </defs>
+        <path d="M20 302c74-58 131-77 204-57 76 21 111-18 169-60 43-31 80-39 113-23v208H20z" fill="#d9eaff" opacity=".52" />
+        <path d="M18 320c88-47 146-43 218-18 64 22 132 20 194-12 29-15 53-24 78-23" fill="none" stroke="#b7d7ff" strokeWidth="2" opacity=".7" />
+        <g filter="url(#report-shadow)" transform="rotate(-5 232 166)">
+          <rect x="94" y="33" width="260" height="290" rx="19" fill="url(#report-paper)" stroke="#c8def9" />
+          <rect x="122" y="62" width="68" height="9" rx="4.5" fill="#9cc8ff" />
+          <rect x="122" y="83" width="128" height="6" rx="3" fill="#d9e8fb" />
+          <rect x="122" y="112" width="204" height="91" rx="12" fill="#f2f7ff" stroke="#dfeafa" />
+          <path d="M143 183v-20h17v20m12 0v-38h17v38m12 0v-53h17v53m12 0v-31h17v31" fill="url(#report-blue)" opacity=".86" />
+          <path d="M139 183h164" stroke="#c5d8ef" strokeWidth="2" />
+          <rect x="122" y="221" width="124" height="7" rx="3.5" fill="#d4e4f7" />
+          <rect x="122" y="239" width="190" height="7" rx="3.5" fill="#e0ebf8" />
+          <rect x="122" y="257" width="156" height="7" rx="3.5" fill="#e0ebf8" />
+          <rect x="122" y="282" width="80" height="20" rx="7" fill="#e7f2ff" />
+          <circle cx="298" cy="291" r="12" fill="#dff6ec" />
+          <path d="m292 291 4 4 8-9" fill="none" stroke="#24a971" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+        </g>
+        <g filter="url(#report-shadow)" transform="rotate(8 371 202)">
+          <rect x="319" y="85" width="142" height="190" rx="16" fill="#ffffff" stroke="#d0e3fb" />
+          <rect x="339" y="105" width="70" height="7" rx="3.5" fill="#b8d7ff" />
+          <rect x="339" y="121" width="101" height="6" rx="3" fill="#e0ebf8" />
+          <rect x="339" y="151" width="102" height="84" rx="10" fill="#f2f7ff" />
+          <path d="M355 220v-24h13v24m9 0v-39h13v39m9 0v-29h13v29" fill="#70afff" />
+          <path d="M351 220h79" stroke="#c5d8ef" strokeWidth="2" />
+          <rect x="339" y="246" width="63" height="8" rx="4" fill="#e2edfa" />
+        </g>
+        <g transform="rotate(-14 362 257)">
+          <circle cx="363" cy="246" r="48" fill="#ffffff" fillOpacity=".5" stroke="#1677ff" strokeWidth="12" />
+          <circle cx="363" cy="246" r="37" fill="#cce4ff" fillOpacity=".38" />
+          <path d="m397 281 50 47" stroke="#1677ff" strokeWidth="17" strokeLinecap="round" />
+          <path d="m400 284 39 37" stroke="#5ba2ff" strokeWidth="5" strokeLinecap="round" />
+        </g>
+        <circle cx="94" cy="92" r="5" fill="#7bb6ff" />
+        <circle cx="443" cy="55" r="4" fill="#b8d7ff" />
+        <circle cx="465" cy="302" r="6" fill="#9dcbff" />
+      </svg>
+    </div>
+  );
+}
+
 function JobStatusPanel({
   job,
   action,
@@ -771,8 +939,10 @@ function JobStatusPanel({
       <p className="annual-job-stage">{jobStageText(job.stage, job.status)}</p>
       <p className="annual-job-status-note">
         {job.request.mode === "m3_screening"
-          ? "本次另加四项试行筛查；结果仅用于提示后续核查。"
-          : "本次使用标准分析，在本机核对年报数据、计算和引用。"}
+          ? "本次运行标准分析和四项试行筛查；规则只提示可继续核对的数据组合。"
+          : job.request.mode === "model_investigation"
+            ? "本次由本机完成数据核对，并使用云端模型分析年报相关片段、给出评审意见。"
+            : "本次使用标准分析，在本机核对年报数据、计算和引用。"}
         {` 公司代码 ${job.request.company_id}，报告年份 ${job.request.report_year}。`}
         {terminal ? " 处理状态已稳定。" : " 页面会自动更新处理状态。"}
       </p>
@@ -834,8 +1004,33 @@ function AnnualReportView({
   const { report, manifest, verification_evidences: evidenceIndex } = response;
   const verifiedMetricCount = report.confirmed.metrics.filter(isIndependentlyVerifiedMetric).length;
   const verifiedCalculationCount = report.confirmed.analyses.filter(isIndependentlyVerifiedCalculation).length;
+  const verifiedClaimCount = report.verified_claims.filter(
+    (claim) => claim.verification_status === "verified" && claim.independent_verification?.status === "verified",
+  ).length;
+  const coreMetrics = CORE_METRICS.map((spec) => {
+    const metric = report.confirmed.metrics.find(
+      (item) =>
+        item.metric_id === spec.metricId &&
+        item.comparison_role === "current" &&
+        item.period_end === `${report.report_year}-12-31`,
+    );
+    const comparativeMetric = report.confirmed.metrics.find(
+      (item) =>
+        item.metric_id === spec.metricId &&
+        item.comparison_role === "comparative" &&
+        item.period_end === `${report.report_year - 1}-12-31`,
+    );
+    return {
+      ...spec,
+      metric,
+      verified: metric !== undefined && isIndependentlyVerifiedMetric(metric),
+      comparativeMetric,
+      comparativeVerified: comparativeMetric !== undefined && isIndependentlyVerifiedMetric(comparativeMetric),
+    };
+  });
   const evidenceById = new Map(evidenceIndex.map((evidence) => [evidence.evidence_id, evidence]));
   const reportModelInvestigation = report.model_investigation;
+  const reportModelReview = report.model_review ?? null;
   const signalCount = report.pending_review.candidate_signals.length;
   const candidateCount = report.pending_review.candidate_signals.filter((item) => item.status === "candidate").length;
   const abstainedSignalCount = report.pending_review.candidate_signals.filter((item) => item.status === "abstained").length;
@@ -844,62 +1039,183 @@ function AnnualReportView({
 
   return (
     <div className="annual-report" aria-label="年度分析报告">
-      <section id="annual-report-heading" className="annual-report-heading" tabIndex={-1}>
+      <header id="annual-report-heading" className="annual-report-heading" tabIndex={-1}>
         <div>
           <p className="eyebrow">{report.company_id} · {report.report_year} 年报</p>
-          <h2>本次分析结果</h2>
+          <h2>{report.company_id} · {report.report_year} 年报分析</h2>
+          <p className="annual-report-title-caption">{report.title?.trim() || "年度分析归档结果"}</p>
+          <p className="annual-run-id">归档编号 <code>{report.run_id}</code></p>
         </div>
         <span className={manifest.status === "completed_with_issues" ? "review-chip" : "annual-status-chip"}>
           {manifestStatusText(manifest.status)}
         </span>
+      </header>
+
+      <nav className="annual-report-nav" aria-label="报告内容">
+        <a href="#annual-model-review" onClick={expandReportDetails}>
+          {reportModelReview?.status === "completed" && reportModelReview.assessment !== null
+            ? "AI 评审意见"
+            : reportModelReview !== null
+              ? "评审状态与摘要"
+              : "本次筛查摘要"}
+        </a>
+        <a href="#annual-financial-overview" onClick={expandReportDetails}>财务概览</a>
+        <a href="#annual-candidate-overview" onClick={expandReportDetails}>建议核查事项</a>
+        <a href="#annual-confirmed-metrics" onClick={expandReportDetails}>核实数据</a>
+        <a href="#annual-analysis-details" onClick={expandReportDetails}>计算过程</a>
+        <a href="#annual-verified-claims" onClick={expandReportDetails}>核验主张</a>
+        {report.m3_screening == null ? null : <a href="#annual-m3-screening" onClick={expandReportDetails}>试行筛查</a>}
+        <a href="#annual-scope" onClick={expandReportDetails}>分析范围</a>
+      </nav>
+
+      <ModelReviewSection
+        review={reportModelReview}
+        report={report}
+        evidenceById={evidenceById}
+        previewBusyId={previewBusyId}
+        onPreview={onPreview}
+      />
+
+      <section id="annual-financial-overview" className="annual-financial-overview" aria-labelledby="annual-indicators-title" tabIndex={-1}>
+        <div className="annual-overview-heading">
+          <div>
+            <p className="eyebrow">本期核心数据</p>
+            <h3 id="annual-indicators-title">财务指标概览</h3>
+          </div>
+          <span>{report.report_year} 年度 · 归档报告数据</span>
+        </div>
+        <div className="annual-indicator-grid">
+          {coreMetrics.map((item) => (
+            <article key={item.metricId} className={`annual-indicator-card annual-indicator-${item.tone}`}>
+              <div className="annual-indicator-topline">
+                <span className="annual-indicator-symbol" aria-hidden="true"><IndicatorGlyph /></span>
+                <span className={item.verified ? "verification-chip" : "review-chip"}>
+                  {item.verified ? "独立核验通过" : "待核验"}
+                </span>
+              </div>
+              <h4>{item.label}</h4>
+              <strong className="annual-indicator-value">
+                {item.verified && item.metric !== undefined
+                  ? formatCoreMetricDisplay(item.metric, evidenceById).value
+                  : "待核验"}
+              </strong>
+              <p>
+                {item.verified && item.metric !== undefined
+                  ? `${item.metric.currency || "币种未记录"} · ${formatCoreMetricDisplay(item.metric, evidenceById).unit}`
+                  : "独立核验通过前不展示金额"}
+              </p>
+            </article>
+          ))}
+        </div>
+        <p className="annual-indicator-footnote">
+          本期指标来自已核验年报数据，金额仅作展示舍入；完整数值与核验证据见下方“核实数据”。
+        </p>
+        <section className="annual-year-comparison" aria-labelledby="annual-year-comparison-title">
+          <div className="annual-year-comparison-heading">
+            <div>
+              <p className="eyebrow">年报披露值</p>
+              <h4 id="annual-year-comparison-title">两年数据对照</h4>
+            </div>
+            <span>按报告列示期间展示，不推算增幅</span>
+          </div>
+          <div className="annual-year-comparison-table-wrap">
+            <table className="annual-year-comparison-table">
+              <thead>
+                <tr>
+                  <th scope="col">指标</th>
+                  <th scope="col">{report.report_year - 1} 年</th>
+                  <th scope="col">{report.report_year} 年</th>
+                </tr>
+              </thead>
+              <tbody>
+                {coreMetrics.map((item) => (
+                  <tr key={item.metricId}>
+                    <th scope="row">{item.label}</th>
+                    <td>
+                      {item.comparativeVerified && item.comparativeMetric !== undefined ? (
+                        <>
+                          <strong>{formatCoreMetricDisplay(item.comparativeMetric, evidenceById).value}</strong>
+                          <small>{item.comparativeMetric.currency || "币种未记录"} · {formatCoreMetricDisplay(item.comparativeMetric, evidenceById).unit}</small>
+                        </>
+                      ) : <span className="annual-comparison-pending">待核验</span>}
+                    </td>
+                    <td>
+                      {item.verified && item.metric !== undefined ? (
+                        <>
+                          <strong>{formatCoreMetricDisplay(item.metric, evidenceById).value}</strong>
+                          <small>{item.metric.currency || "币种未记录"} · {formatCoreMetricDisplay(item.metric, evidenceById).unit}</small>
+                        </>
+                      ) : <span className="annual-comparison-pending">待核验</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+        <div className="annual-summary-grid" aria-label="分析与核验摘要">
+          <SummaryTile label="独立核验通过的数据" value={verifiedMetricCount} note={`共记录 ${report.confirmed.metrics.length} 项`} />
+          <SummaryTile
+            label="建议核查事项"
+            value={candidateCount}
+            note={abstainedSignalCount > 0 ? `${abstainedSignalCount} 项比较暂不能确认` : "逐项查看数据变化与待查材料"}
+          />
+          <SummaryTile label="独立重算通过" value={verifiedCalculationCount} note={`共记录 ${report.confirmed.analyses.length} 项计算`} />
+          <SummaryTile label="独立核验通过的主张" value={verifiedClaimCount} note={`共记录 ${report.verified_claims.length} 条`} />
+        </div>
+        <p className="annual-report-summary">
+          <strong>分析范围：</strong>本次选取 {report.confirmed.metrics.length} 项财务数据，并核对相关年度变化和原文出处，不代表覆盖整份年报。{" "}
+          <strong>建议继续核查：</strong>{candidateCount} 项数据变化
+          {abstainedSignalCount > 0 ? `，${abstainedSignalCount} 项年度比较因证据不足而暂不能确认` : ""}
+          {otherSignalCount > 0 ? `，另有 ${otherSignalCount} 项状态待核对` : ""}。
+        </p>
       </section>
 
-      <p className="annual-report-summary">
-        <strong>分析范围：</strong>本次从年报中选取 {report.confirmed.metrics.length} 项财务数据，并核对相关年度变化和原文出处；不代表覆盖整份年报。{" "}
-        <strong>已核对数据：</strong>{verifiedMetricCount} / {report.confirmed.metrics.length} 项财务数据通过独立核验；{" "}
-        <strong>需进一步查看：</strong>{candidateCount} 条候选线索
-        {abstainedSignalCount > 0 ? `，${abstainedSignalCount} 条规则弃权` : ""}
-        {otherSignalCount > 0 ? `，另有 ${otherSignalCount} 条状态待核对的线索` : ""}。
-        {candidateCount === 0 ? "没有记录候选线索不代表没有风险。" : "候选线索只用于后续核查，不是已确认异常或舞弊。"}
-      </p>
-
-      <section className="annual-summary-grid" aria-label="分析结果摘要">
-        <SummaryTile label="独立核验通过的财务数据" value={verifiedMetricCount} note={`报告共记录 ${report.confirmed.metrics.length} 项`} />
-        <SummaryTile label="候选线索" value={candidateCount} note="需结合原文进一步核查" />
-        <SummaryTile label="筛查规则弃权" value={abstainedSignalCount} note="保留为待核对状态" />
-        <SummaryTile
-          label="独立重算通过"
-          value={verifiedCalculationCount}
-          note={`报告共记录 ${report.confirmed.analyses.length} 项计算`}
-        />
-      </section>
-
-      <section className="panel annual-section annual-candidate-overview">
+      <section id="annual-candidate-overview" className="panel annual-section annual-candidate-overview" tabIndex={-1}>
         <div className="annual-section-heading">
           <div>
-            <p className="eyebrow">需要进一步核查</p>
-            <h3>候选线索、弃权与待核对事项</h3>
+            <p className="eyebrow">核查清单</p>
+            <h3>建议核查的具体事项</h3>
           </div>
-          <span className="review-chip">线索不是确认异常</span>
         </div>
-        <p className="annual-candidate-warning">
-          这些线索只指出值得继续查看的数据组合，不是异常认定、审计意见或舞弊结论。规则弃权和核验冲突也会保留在这里。
-        </p>
-        {report.pending_review.candidate_signals.length === 0 ? (
-          <p className="empty">报告没有记录候选线索；这不代表没有风险。</p>
-        ) : (
+        {candidateCount > 0 ? (
+          <p className="annual-candidate-context">
+            以下事项来自本地规则筛查。卡片只展示满足独立核验条件的年度差额；其余变化方向暂不作判断，请按建议项目继续查证。
+          </p>
+        ) : abstainedSignalCount > 0 ? (
+          <p className="annual-candidate-context">
+            下列年度比较因关键数据尚未确认而弃权；页面会说明缺少的前提，不能据此判断变化方向。
+          </p>
+        ) : null}
+        {candidateCount > 0 ? (
           <div className="annual-record-grid">
-            {report.pending_review.candidate_signals.map((candidate) => (
+            {report.pending_review.candidate_signals.filter((candidate) => candidate.status === "candidate").map((candidate) => (
               <CandidateCard
                 key={candidate.signal_id}
                 candidate={candidate}
+                report={report}
+                evidenceById={evidenceById}
                 locations={locationsForFactIds(candidate.input_fact_ids, report, evidenceById)}
                 previewBusyId={previewBusyId}
                 onPreview={onPreview}
               />
             ))}
           </div>
-        )}
+        ) : null}
+        {abstainedSignalCount > 0 ? (
+          <div className="annual-abstained-list">
+            {report.pending_review.candidate_signals.filter((candidate) => candidate.status === "abstained").map((candidate) => (
+              <AbstainedSignalCard
+                key={candidate.signal_id}
+                candidate={candidate}
+                report={report}
+                evidenceById={evidenceById}
+                previewBusyId={previewBusyId}
+                onPreview={onPreview}
+              />
+            ))}
+          </div>
+        ) : null}
         <PendingItems
           pending={report.pending_review}
           report={report}
@@ -907,11 +1223,18 @@ function AnnualReportView({
           previewBusyId={previewBusyId}
           onPreview={onPreview}
         />
+        {candidateCount === 0 && abstainedSignalCount === 0 &&
+        report.pending_review.facts.length === 0 &&
+        report.pending_review.calculations.length === 0 &&
+        report.pending_review.claims.length === 0 &&
+        report.pending_review.uncited_evidences.length === 0 ? (
+          <p className="annual-no-follow-up">本次报告没有列出需要优先核查的候选事项。</p>
+        ) : null}
       </section>
 
       {report.m3_screening == null ? null : <M3ScreeningBlock screening={report.m3_screening} />}
 
-      <section className="panel annual-section">
+      <section id="annual-scope" className="panel annual-section" tabIndex={-1}>
         <div className="annual-section-heading">
           <div>
             <p className="eyebrow">分析范围</p>
@@ -963,7 +1286,7 @@ function AnnualReportView({
         </dl>
       </details>
 
-      <details className="panel annual-section annual-progressive-section">
+      <details id="annual-confirmed-metrics" className="panel annual-section annual-progressive-section" tabIndex={-1}>
         <summary className="annual-progressive-summary">
           <span>已核实的财务数据与原文证据</span>
           <small>{report.confirmed.metrics.length} 项数据 · {verifiedMetricCount} 项通过独立核验</small>
@@ -1014,7 +1337,7 @@ function AnnualReportView({
         </p>
       ) : null}
 
-      <details className="panel annual-section annual-progressive-section">
+      <details id="annual-analysis-details" className="panel annual-section annual-progressive-section" tabIndex={-1}>
         <summary className="annual-progressive-summary">
           <span>计算过程与复核</span>
           <small>{report.confirmed.analyses.length} 项计算 · {verifiedCalculationCount} 项独立重算通过</small>
@@ -1031,7 +1354,7 @@ function AnnualReportView({
         )}
       </details>
 
-      <details className="panel annual-section annual-progressive-section">
+      <details id="annual-verified-claims" className="panel annual-section annual-progressive-section" tabIndex={-1}>
         <summary className="annual-progressive-summary">
           <span>核验后的分析表述</span>
           <small>{report.verified_claims.length} 条分析表述 · 展开查看状态与依据</small>
@@ -1048,10 +1371,402 @@ function AnnualReportView({
       </details>
 
       {reportModelInvestigation !== undefined && reportModelInvestigation !== null ? (
-        <ModelInvestigationBlock investigation={reportModelInvestigation} />
+        <details className="annual-model-investigation-archive">
+          <summary>补充：查看历史模型调查记录</summary>
+          <ModelInvestigationBlock investigation={reportModelInvestigation} />
+        </details>
       ) : null}
     </div>
   );
+}
+
+function ModelReviewSection({
+  review,
+  report,
+  evidenceById,
+  previewBusyId,
+  onPreview,
+}: {
+  review: AnnualAnalysisModelReview | null;
+  report: AnnualAnalysisResponse["report"];
+  evidenceById: Map<string, VerificationEvidence>;
+  previewBusyId: string | null;
+  onPreview: (evidenceId: string) => void;
+}) {
+  const completed = review?.status === "completed" && review.assessment !== null && review.summary !== null;
+  const historicInvestigation = record(report.model_investigation);
+  const historicModelCalled = report.model_called || historicInvestigation?.model_called === true;
+  const title = completed
+    ? "AI 评审意见"
+    : review !== null
+      ? "AI 评审未完成"
+      : "本次筛查摘要";
+  return (
+    <section id="annual-model-review" className="panel annual-model-review" aria-labelledby="annual-model-review-title" tabIndex={-1}>
+      <div className="annual-section-heading annual-model-review-heading">
+        <div>
+          <p className="eyebrow">优先阅读</p>
+          <h3 id="annual-model-review-title">{title}</h3>
+        </div>
+        {completed ? <span className="annual-review-assessment">{modelReviewAssessmentText(review.assessment)}</span> : null}
+      </div>
+
+      {completed ? (
+        <>
+          <p className="annual-model-review-summary">{review.summary}</p>
+          {review.reasons.length > 0 ? (
+            <div className="annual-model-review-block">
+              <h4>评审依据</h4>
+              <ol className="annual-review-reasons">
+                {review.reasons.map((item, index) => (
+                  <li key={`${index}-${item.text}`}>
+                    <p>{item.text}</p>
+                    <ModelReviewReferences
+                      evidenceIds={item.evidence_ids}
+                      report={report}
+                      evidenceById={evidenceById}
+                      previewBusyId={previewBusyId}
+                      onPreview={onPreview}
+                    />
+                  </li>
+                ))}
+              </ol>
+            </div>
+          ) : null}
+          {review.follow_up_items.length > 0 ? (
+            <div className="annual-model-review-block">
+              <h4>建议后续核查</h4>
+              <ol className="annual-review-follow-ups">
+                {review.follow_up_items.map((item, index) => (
+                  <li key={`${index}-${item.object}-${item.action}`}>
+                    <strong>{modelReviewObjectLabel(item.object, report)}</strong>
+                    <p>{item.action}</p>
+                    <ModelReviewReferences
+                      evidenceIds={item.evidence_ids}
+                      report={report}
+                      evidenceById={evidenceById}
+                      previewBusyId={previewBusyId}
+                      onPreview={onPreview}
+                    />
+                    {isInternalReviewObject(item.object, report) ? (
+                      <details className="annual-technical-record annual-review-object-reference">
+                        <summary>查看原始关联编号</summary>
+                        <code>{item.object}</code>
+                      </details>
+                    ) : null}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          ) : null}
+          {review.limitations.length > 0 ? <GapList title="本次评审的范围限制" items={review.limitations} /> : null}
+          <p className="annual-model-review-disclaimer">
+            这是模型根据本次年报材料给出的分析判断，尚未独立核实；请结合补充证据复核。
+          </p>
+          <details className="annual-technical-record annual-model-review-technical">
+            <summary>查看模型调用与归档记录</summary>
+            <dl className="meta">
+              <dt>模型是否实际调用</dt><dd>{review.model_called ? "是" : "否"}</dd>
+              <dt>已归档请求数 / 尝试次数</dt><dd>{review.call_count} / {review.call_attempt_count}</dd>
+              <dt>来源绑定</dt><dd><code>{review.source_identity.run_id} · {review.source_identity.source_document_id}</code></dd>
+              <dt>来源 SHA256</dt><dd><code>{review.source_identity.source_sha256}</code></dd>
+            </dl>
+            {review.audit_artifacts.length > 0 ? (
+              <ul className="annual-review-audit-list">
+                {review.audit_artifacts.map((artifact, index) => (
+                  <li key={recordIdentity(artifact) + "-" + index}><code>{stringValue(artifact.audit_dir) ?? stringValue(artifact.status) ?? "调用审计条目"}</code></li>
+                ))}
+              </ul>
+            ) : <p className="help">报告未列出调用审计文件。</p>}
+          </details>
+        </>
+      ) : (
+        <>
+          {review !== null ? (
+            <p className="annual-model-review-failure" role="status">{modelReviewReasonText(review.reason, review.status)}</p>
+          ) : historicModelCalled ? (
+            <p className="annual-model-review-history-note" role="status">
+              这份历史归档包含逐条模型调查，未保存最终评审意见。
+            </p>
+          ) : report.model_investigation !== undefined && report.model_investigation !== null ? (
+            <p className="annual-model-review-history-note" role="status">
+              这份归档保留了历史逐条调查记录，但没有保存最终评审意见。
+            </p>
+          ) : (
+            <p className="annual-model-review-failure" role="status">本次尚未生成 AI 评审意见；以下是本地确定性筛查结果摘要。</p>
+          )}
+          <DeterministicReviewSummary report={report} showHeading={review !== null} />
+          {review !== null ? (
+            <details className="annual-technical-record annual-model-review-technical">
+              <summary>查看模型调用状态记录</summary>
+              <dl className="meta">
+                <dt>本次模型调用</dt><dd>{review.model_called ? "已尝试" : "未调用"}</dd>
+                <dt>已归档请求数 / 尝试次数</dt><dd>{review.call_count} / {review.call_attempt_count}</dd>
+                {review.reason !== null ? <><dt>内部原因代码</dt><dd><code>{review.reason}</code></dd></> : null}
+                <dt>来源绑定</dt><dd><code>{review.source_identity.run_id} · {review.source_identity.source_document_id}</code></dd>
+              </dl>
+            </details>
+          ) : null}
+        </>
+      )}
+    </section>
+  );
+}
+
+function DeterministicReviewSummary({ report, showHeading }: { report: AnnualAnalysisResponse["report"]; showHeading: boolean }) {
+  const candidates = report.pending_review.candidate_signals.filter((item) => item.status === "candidate");
+  const abstained = report.pending_review.candidate_signals.filter((item) => item.status === "abstained");
+  const pendingFacts = report.pending_review.facts;
+  const pendingCalculations = report.pending_review.calculations;
+  const pendingClaims = report.pending_review.claims;
+  const m3 = report.m3_screening;
+  return (
+    <div className="annual-deterministic-summary">
+      {showHeading ? <h4>本地筛查摘要</h4> : null}
+      {candidates.length > 0 ? (
+        <p>本地确定性筛查记录了 {candidates.length} 项建议继续解释的数据变化：{candidates.map((item) => signalTitle(item.signal_id)).join("；")}。</p>
+      ) : null}
+      {abstained.length > 0 ? (
+        <ul>
+          {abstained.map((item) => (
+            <li key={item.signal_id}>{signalTitle(item.signal_id)}：{abstentionReasonText(item, report)}</li>
+          ))}
+        </ul>
+      ) : null}
+      {m3 !== null && m3 !== undefined ? (
+        <p>
+          四项试行规则{m3.screening_status === "completed" && m3.status === "completed"
+            ? m3.rules.every((rule) => rule.triggered === false) ? "均未触发" : "已形成结果，详细状态见下方筛查表"
+            : "未能全部完成，详细状态见下方筛查表"}；该规则摘要不是 AI 评审意见。
+        </p>
+      ) : null}
+      {pendingFacts.length > 0 ? (
+        <p>另有 {pendingFacts.length} 项财务数据未确认{previewPendingNames(pendingFacts, report)}。</p>
+      ) : null}
+      {pendingCalculations.length > 0 ? <p>{pendingCalculations.length} 项年度计算因输入数据或可比性不足而暂未完成。</p> : null}
+      {pendingClaims.length > 0 ? <p>{pendingClaims.length} 条分析主张仍需核对依据。</p> : null}
+      {candidates.length === 0 && abstained.length === 0 && m3 === null && pendingFacts.length === 0 && pendingCalculations.length === 0 && pendingClaims.length === 0 ? (
+        <p>本次确定性筛查没有记录候选事项或待确认数据。</p>
+      ) : null}
+    </div>
+  );
+}
+
+function ModelReviewReferences({
+  evidenceIds,
+  report,
+  evidenceById,
+  previewBusyId,
+  onPreview,
+}: {
+  evidenceIds: string[];
+  report: AnnualAnalysisResponse["report"];
+  evidenceById: Map<string, VerificationEvidence>;
+  previewBusyId: string | null;
+  onPreview: (evidenceId: string) => void;
+}) {
+  if (evidenceIds.length === 0) {
+    return <p className="annual-review-reference-empty">本条意见没有关联可打开的年报出处。</p>;
+  }
+  const result = locationsForReviewEvidenceIds(evidenceIds, report, evidenceById);
+  return (
+    <details className="annual-review-references">
+      <summary>查看本条关联出处</summary>
+      <SourceLocationList
+        heading="对应年报页"
+        result={result}
+        previewBusyId={previewBusyId}
+        onPreview={onPreview}
+      />
+    </details>
+  );
+}
+
+function modelReviewAssessmentText(assessment: AnnualAnalysisModelReview["assessment"]): string {
+  const labels: Record<Exclude<AnnualAnalysisModelReview["assessment"], null>, string> = {
+    prioritize_review: "建议优先核查",
+    no_priority_issue_identified_within_scope: "本次核对范围内未识别优先事项",
+    insufficient_evidence: "证据不足，暂不能形成明确判断",
+  };
+  return assessment === null ? "评审判断未记录" : labels[assessment];
+}
+
+function modelReviewReasonText(reason: string | null, status: string): string {
+  const messages: Record<string, string> = {
+    model_configuration_unavailable: "后端尚未配置云端模型，本次未能生成 AI 评审意见。下方保留本地确定性筛查摘要。",
+    model_dependency_unavailable: "后端缺少 AI 分析所需依赖，本次未能生成 AI 评审意见。下方保留本地确定性筛查摘要。",
+    model_review_call_failed: "云端模型请求未完成，本次未能生成 AI 评审意见。下方保留本地确定性筛查摘要。",
+    model_review_numeric_claim_rejected: "模型意见包含未获准的数值表述，本次未生成可展示的 AI 评审意见。下方保留本地确定性筛查摘要。",
+    model_review_response_invalid: "模型返回内容无法按评审格式读取，本次未生成可展示的 AI 评审意见。下方保留本地确定性筛查摘要。",
+    model_review_no_priority_not_supported: "当前核查范围不支持“无需优先核查”的结论，因此未生成该评审意见。下方保留本地确定性筛查摘要。",
+    model_review_priority_without_reason: "模型没有提供足够的评审依据，本次未生成可展示的 AI 评审意见。下方保留本地确定性筛查摘要。",
+    model_review_no_priority_without_reason: "模型没有提供足够的评审依据，本次未生成可展示的 AI 评审意见。下方保留本地确定性筛查摘要。",
+  };
+  if (reason !== null && messages[reason] !== undefined) {
+    return messages[reason];
+  }
+  return status === "not_called"
+    ? "本次没有调用云端模型，因此未生成 AI 评审意见。下方保留本地确定性筛查摘要。"
+    : "本次 AI 评审未能完成。下方保留本地确定性筛查摘要。";
+}
+
+function modelReviewObjectLabel(object: string, report: AnnualAnalysisResponse["report"]): string {
+  const metric = report.confirmed.metrics.find((item) => item.fact_id === object);
+  if (metric !== undefined) {
+    return metricLabelFromFactId(metric.fact_id) ?? metric.label_raw;
+  }
+  const pendingFact = report.pending_review.facts.find((item) => stringValue(item.fact_id) === object);
+  if (pendingFact !== undefined) {
+    return pendingItemTitle(pendingFact, report);
+  }
+  const calculation = report.confirmed.analyses.find((item) => item.calculation_id === object);
+  if (calculation !== undefined) {
+    return pendingItemTitle({
+      calculation_id: calculation.calculation_id,
+      input_fact_ids: calculation.input_fact_ids,
+      formula_id: calculation.formula_id,
+    }, report);
+  }
+  const pendingCalculation = report.pending_review.calculations.find((item) => stringValue(item.calculation_id) === object);
+  if (pendingCalculation !== undefined) {
+    return pendingItemTitle(pendingCalculation, report);
+  }
+  const pendingClaim = report.pending_review.claims.find((item) => stringValue(item.claim_id) === object);
+  if (pendingClaim !== undefined) {
+    return pendingItemTitle(pendingClaim, report);
+  }
+  const verifiedClaim = report.verified_claims.find((item) => item.claim_id === object);
+  if (verifiedClaim !== undefined) {
+    return verifiedClaim.text;
+  }
+
+  const pendingFactId = prefixedReviewObjectId(object, "pending_fact:");
+  if (pendingFactId !== null) {
+    const matched = report.pending_review.facts.find((item) => stringValue(item.fact_id) === pendingFactId);
+    if (matched !== undefined) return pendingItemTitle(matched, report);
+  }
+  const pendingCalculationId = prefixedReviewObjectId(object, "pending_calculation:");
+  if (pendingCalculationId !== null) {
+    const matched = report.pending_review.calculations.find((item) => stringValue(item.calculation_id) === pendingCalculationId);
+    if (matched !== undefined) return pendingItemTitle(matched, report);
+  }
+  const pendingClaimId = prefixedReviewObjectId(object, "pending_claim:");
+  if (pendingClaimId !== null) {
+    const matched = report.pending_review.claims.find((item) => stringValue(item.claim_id) === pendingClaimId);
+    if (matched !== undefined) return pendingItemTitle(matched, report);
+  }
+  const investigationId = prefixedReviewObjectId(object, "investigation:");
+  const signalId = investigationId ?? object;
+  const candidate = report.pending_review.candidate_signals.find((item) => item.signal_id === signalId);
+  if (candidate !== undefined) {
+    return `${signalTitle(candidate.signal_id)}（${report.report_year - 1}—${report.report_year} 年）`;
+  }
+  return isInternalReviewObject(object, report) ? "相关财务项目" : object;
+}
+
+function prefixedReviewObjectId(value: string, prefix: string): string | null {
+  return value.startsWith(prefix) && value.length > prefix.length ? value.slice(prefix.length) : null;
+}
+
+function isInternalReviewObject(object: string, report: AnnualAnalysisResponse["report"]): boolean {
+  return object.includes(":") || object.startsWith("pending_") || object.startsWith("investigation:") ||
+    report.pending_review.candidate_signals.some((item) => item.signal_id === object) ||
+    report.confirmed.metrics.some((item) => item.fact_id === object) ||
+    report.confirmed.analyses.some((item) => item.calculation_id === object) ||
+    report.pending_review.facts.some((item) => stringValue(item.fact_id) === object) ||
+    report.pending_review.calculations.some((item) => stringValue(item.calculation_id) === object) ||
+    report.pending_review.claims.some((item) => stringValue(item.claim_id) === object) ||
+    report.verified_claims.some((item) => item.claim_id === object);
+}
+
+function expandReportDetails(event: MouseEvent<HTMLAnchorElement>) {
+  event.preventDefault();
+  const target = document.getElementById(event.currentTarget.hash.replace(/^#/, ""));
+  if (target === null) {
+    return;
+  }
+  const details = target instanceof HTMLDetailsElement ? target : target.closest("details");
+  if (details instanceof HTMLDetailsElement) {
+    details.open = true;
+  }
+  window.requestAnimationFrame(() => {
+    target.scrollIntoView({
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+      block: "start",
+    });
+    target.focus({ preventScroll: true });
+  });
+}
+
+function formatCoreMetricDisplay(
+  metric: ConfirmedMetric,
+  evidenceById: Map<string, VerificationEvidence>,
+): { value: string; unit: string } {
+  const verifiedEvidences = verifiedMetricEvidences(metric, evidenceById);
+  const units = [...new Set(
+    verifiedEvidences
+      .map((evidence) => evidence.unit)
+      .filter((unit): unit is string => typeof unit === "string" && unit.trim().length > 0),
+  )];
+  if (units.length > 1) {
+    return { value: formatExactFinancialValue(metric.normalized_value), unit: "单位待确认" };
+  }
+  const verifiedUnit = units[0];
+  if (verifiedUnit === "元") {
+    const scaledValue = formatInHundredMillions(metric.normalized_value);
+    return scaledValue === null
+      ? { value: formatExactFinancialValue(metric.normalized_value), unit: verifiedUnit }
+      : { value: scaledValue, unit: "亿元" };
+  }
+  if (verifiedUnit !== undefined) {
+    const matchingEvidence = verifiedEvidences.find(
+      (evidence) =>
+        evidence.unit === verifiedUnit &&
+        typeof evidence.value_raw === "string" &&
+        evidence.value_raw.trim().length > 0,
+    );
+    if (matchingEvidence?.value_raw !== null && matchingEvidence?.value_raw !== undefined) {
+      return { value: matchingEvidence.value_raw, unit: verifiedUnit };
+    }
+    return { value: formatExactFinancialValue(metric.normalized_value), unit: "单位待确认" };
+  }
+  return {
+    value: formatExactFinancialValue(metric.normalized_value),
+    unit: "单位未记录",
+  };
+}
+
+function verifiedMetricEvidences(
+  metric: ConfirmedMetric,
+  evidenceById: Map<string, VerificationEvidence>,
+): VerificationEvidence[] {
+  if (!isIndependentlyVerifiedMetric(metric)) {
+    return [];
+  }
+  const verifiedEvidenceIds = new Set(
+    metric.verifications
+      .filter(
+        (verification) =>
+          verification.target_type === "financial_fact" &&
+          verification.target_id === metric.fact_id &&
+          verification.status === "verified",
+      )
+      .flatMap((verification) => verification.evidence_ids),
+  );
+  return metric.verification_evidences.flatMap((evidence) => {
+    const indexedEvidence = evidenceById.get(evidence.evidence_id);
+    if (
+      !verifiedEvidenceIds.has(evidence.evidence_id) ||
+      indexedEvidence === undefined ||
+      indexedEvidence.document_id !== metric.source_document_id ||
+      indexedEvidence.source_sha256 !== metric.source_sha256 ||
+      indexedEvidence.value_region.page !== indexedEvidence.pdf_page ||
+      indexedEvidence.value_normalized !== metric.normalized_value
+    ) {
+      return [];
+    }
+    return [indexedEvidence];
+  });
 }
 
 function SummaryTile({ label, value, note }: { label: string; value: number; note: string }) {
@@ -1064,6 +1779,42 @@ function SummaryTile({ label, value, note }: { label: string; value: number; not
   );
 }
 
+function IndicatorGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" focusable="false">
+      <path d="M4 19.5h16" />
+      <path d="M6.5 17V11h3v6m2.5 0V7h3v10m2.5 0V4h3v13" />
+    </svg>
+  );
+}
+
+function formatExactFinancialValue(value: string): string {
+  const match = /^(-?)(\d+)(\.\d+)?$/.exec(value.trim());
+  if (match === null) {
+    return value;
+  }
+  const groupedInteger = match[2].replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return `${match[1]}${groupedInteger}${match[3] ?? ""}`;
+}
+
+function formatInHundredMillions(value: string): string | null {
+  const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(value.trim());
+  if (match === null) {
+    return null;
+  }
+  const fraction = match[3] ?? "";
+  const digits = BigInt(`${match[2]}${fraction}`);
+  const divisor = 10n ** BigInt(fraction.length + 6);
+  let hundredths = digits / divisor;
+  if ((digits % divisor) * 2n >= divisor) {
+    hundredths += 1n;
+  }
+  const fixed = hundredths.toString().padStart(3, "0");
+  const integer = fixed.slice(0, -2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  const sign = match[1] === "-" && digits !== 0n ? "-" : "";
+  return `${sign}${integer}.${fixed.slice(-2)}`;
+}
+
 function M3ScreeningBlock({ screening }: { screening: M3AnnualScreening }) {
   const complete = screening.screening_status === "completed" && screening.status === "completed";
   const scoreText =
@@ -1073,7 +1824,7 @@ function M3ScreeningBlock({ screening }: { screening: M3AnnualScreening }) {
         : `${screening.total_score} / ${screening.maximum_score} · 候选待核查`
       : "未形成完整汇总分";
   return (
-    <section className="panel annual-m3-screening" aria-label="四项试行筛查结果">
+    <section id="annual-m3-screening" className="panel annual-m3-screening" aria-label="四项试行筛查结果" tabIndex={-1}>
       <div className="annual-section-heading">
         <div>
           <p className="eyebrow">补充筛查结果</p>
@@ -1320,49 +2071,298 @@ function ClaimCard({ claim }: { claim: VerifiedClaim }) {
 
 function CandidateCard({
   candidate,
+  report,
+  evidenceById,
   locations,
   previewBusyId,
   onPreview,
 }: {
   candidate: CandidateSignal;
+  report: AnnualAnalysisResponse["report"];
+  evidenceById: Map<string, VerificationEvidence>;
   locations: SourceLocationResult;
   previewBusyId: string | null;
   onPreview: (evidenceId: string) => void;
 }) {
-  const status = candidateStatusText(candidate.status);
+  const changes = verifiedCandidateChanges(candidate, report, evidenceById);
+  const why = candidateWhyText(candidate.signal_id, changes);
+  const followUp = candidateFollowUpText(candidate.signal_id);
   return (
     <article className="annual-record-card annual-candidate-card">
       <div className="annual-record-heading">
         <div>
           <h4>{signalTitle(candidate.signal_id)}</h4>
+          <p className="annual-candidate-period">比较期间 · {report.report_year - 1} → {report.report_year} 年</p>
         </div>
-        <span className="review-chip">{status}</span>
+        <span className="review-chip">{changes.length > 0 ? "变化原因待解释" : "变化情况待确认"}</span>
       </div>
-      <p className="annual-candidate-description">
-        {nonEmpty(candidate.reason) ?? "报告没有提供单独的原因说明；请结合下方已核对数据和原文页继续查看。"}
-      </p>
-      <SourceLocationList
-        heading="相关年报位置"
-        result={locations}
-        previewBusyId={previewBusyId}
-        onPreview={onPreview}
-      />
-      <p className="annual-candidate-reminder">这是一条需要进一步核查的候选线索，不是已确认异常或舞弊。</p>
-      {candidate.placement_reasons.length > 0 ? <GapList title="列入待核查的说明" items={candidate.placement_reasons} /> : null}
+      <div className="annual-candidate-content">
+        <div className="annual-candidate-data-block">
+          <h5>已核对的变化</h5>
+          {changes.length > 0 ? (
+            <ul className="annual-candidate-change-list">
+              {changes.map((change) => <li key={change.metricId}>{change.text}</li>)}
+            </ul>
+          ) : (
+            <p className="annual-candidate-missing">本次报告没有提供满足独立核验条件的年度差额，暂不能确认变化方向。</p>
+          )}
+        </div>
+        <div className="annual-candidate-data-block">
+          <h5>为什么要看</h5>
+          <p>{why}</p>
+        </div>
+        <div className="annual-candidate-data-block annual-candidate-action-block">
+          <h5>建议查看</h5>
+          <p>{followUp}</p>
+        </div>
+      </div>
+      <details className="annual-candidate-sources">
+        <summary>查看已核对数据的年报出处</summary>
+        <SourceLocationList
+          heading="关联年报位置"
+          result={locations}
+          previewBusyId={previewBusyId}
+          onPreview={onPreview}
+        />
+      </details>
       <details className="annual-technical-record">
-        <summary>技术记录：线索编号、计算及差额</summary>
-      <dl className="annual-detail-grid">
-        <dt>相关事实 ID</dt><dd>{idList(candidate.input_fact_ids)}</dd>
-        <dt>相关计算 ID</dt><dd>{idList(candidate.calculation_ids)}</dd>
-        <dt>左侧差额</dt><dd>{candidate.left_difference ?? "报告未记录"}</dd>
-        <dt>右侧差额</dt><dd>{candidate.right_difference ?? "报告未记录"}</dd>
-        <dt>线索编号</dt><dd><code>{candidate.signal_id}</code></dd>
-        <dt>内部状态</dt><dd><code>{candidate.status}</code></dd>
-        <dt>舞弊结论</dt><dd>{candidate.fraud_conclusion ?? "报告未给出舞弊结论。"}</dd>
-      </dl>
+        <summary>查看原始计算记录</summary>
+        <dl className="annual-detail-grid">
+          <dt>相关事实 ID</dt><dd>{idList(candidate.input_fact_ids)}</dd>
+          <dt>相关计算 ID</dt><dd>{idList(candidate.calculation_ids)}</dd>
+          <dt>筛查原始差额字段</dt><dd>{candidate.left_difference ?? "报告未记录"} / {candidate.right_difference ?? "报告未记录"}</dd>
+          <dt>线索编号</dt><dd><code>{candidate.signal_id}</code></dd>
+          <dt>内部状态</dt><dd><code>{candidate.status}</code></dd>
+          <dt>状态说明</dt><dd>{candidate.placement_reasons.join("；") || "报告未单列"}</dd>
+        </dl>
       </details>
     </article>
   );
+}
+
+function AbstainedSignalCard({
+  candidate,
+  report,
+  evidenceById,
+  previewBusyId,
+  onPreview,
+}: {
+  candidate: CandidateSignal;
+  report: AnnualAnalysisResponse["report"];
+  evidenceById: Map<string, VerificationEvidence>;
+  previewBusyId: string | null;
+  onPreview: (evidenceId: string) => void;
+}) {
+  const missing = abstentionReasonText(candidate, report);
+  return (
+    <article className="annual-abstained-card">
+      <div className="annual-record-heading">
+        <div>
+          <h4>{signalTitle(candidate.signal_id)}</h4>
+          <p className="annual-candidate-period">涉及 {report.report_year - 1} 与 {report.report_year} 年</p>
+        </div>
+        <span className="review-chip">比较暂不能确认</span>
+      </div>
+      <p><strong>缺少的前提：</strong>{missing}</p>
+      <p><strong>还需补充：</strong>{abstentionFollowUpText(missing)}</p>
+      <details className="annual-candidate-sources">
+        <summary>查看待核对数据的年报出处</summary>
+        <SourceLocationList
+          heading="待核对位置"
+          result={locationsForFactIds(candidate.input_fact_ids, report, evidenceById)}
+          previewBusyId={previewBusyId}
+          onPreview={onPreview}
+        />
+      </details>
+      <details className="annual-technical-record">
+        <summary>查看内部编号和原始弃权原因</summary>
+        <dl className="annual-detail-grid">
+          <dt>相关事实 ID</dt><dd>{idList(candidate.input_fact_ids)}</dd>
+          <dt>相关计算 ID</dt><dd>{idList(candidate.calculation_ids)}</dd>
+          <dt>内部状态</dt><dd><code>{candidate.status}</code></dd>
+          <dt>原始原因</dt><dd>{candidate.reason ?? "报告未记录"}</dd>
+        </dl>
+      </details>
+    </article>
+  );
+}
+
+function verifiedCandidateChanges(
+  candidate: CandidateSignal,
+  report: AnnualAnalysisResponse["report"],
+  evidenceById: Map<string, VerificationEvidence>,
+): Array<{ metricId: string; direction: "increase" | "decrease" | "unchanged"; text: string }> {
+  const changes: Array<{ metricId: string; direction: "increase" | "decrease" | "unchanged"; text: string }> = [];
+  const expectedMetricIds = candidate.signal_id === "profit_up_cash_down"
+    ? new Set(["net_profit_parent", "operating_cash_flow"])
+    : candidate.signal_id === "revenue_up_cash_down"
+      ? new Set(["revenue", "operating_cash_flow"])
+      : new Set<string>();
+  const candidateInputIds = new Set(candidate.input_fact_ids);
+  if (expectedMetricIds.size === 0) {
+    return changes;
+  }
+  for (const calculationId of candidate.calculation_ids) {
+    const calculation = report.confirmed.analyses.find((item) => item.calculation_id === calculationId);
+    if (
+      calculation === undefined ||
+      calculation.formula_id !== "annual_difference" ||
+      calculation.status !== "succeeded" ||
+      !isIndependentlyVerifiedCalculation(calculation) ||
+      typeof calculation.output_value !== "string" ||
+      (calculation.unit !== null && calculation.unit !== "元") ||
+      calculation.input_fact_ids.length !== 2 ||
+      new Set(calculation.input_fact_ids).size !== 2 ||
+      calculation.input_fact_ids.some((factId) => !candidateInputIds.has(factId)) ||
+      (calculation.independent_verification?.calculation_id !== undefined &&
+        calculation.independent_verification.calculation_id !== calculation.calculation_id) ||
+      typeof calculation.independent_verification?.recomputed_value !== "string" ||
+      normalizeExactDecimal(calculation.output_value) === null ||
+      normalizeExactDecimal(calculation.output_value) !== normalizeExactDecimal(calculation.independent_verification.recomputed_value)
+    ) {
+      continue;
+    }
+    const inputMetrics = calculation.input_fact_ids.map((factId) =>
+      report.confirmed.metrics.find((metric) => metric.fact_id === factId),
+    );
+    if (inputMetrics.some((metric) => metric === undefined)) {
+      continue;
+    }
+    const [first, second] = inputMetrics as [ConfirmedMetric, ConfirmedMetric];
+    const current = first.comparison_role === "current" ? first : second.comparison_role === "current" ? second : undefined;
+    const comparative = first.comparison_role === "comparative" ? first : second.comparison_role === "comparative" ? second : undefined;
+    if (
+      current === undefined ||
+      comparative === undefined ||
+      current.metric_id === undefined ||
+      !expectedMetricIds.has(current.metric_id) ||
+      current.metric_id !== comparative.metric_id ||
+      current.period_end !== `${report.report_year}-12-31` ||
+      comparative.period_end !== `${report.report_year - 1}-12-31` ||
+      current.source_document_id !== report.source_document_id ||
+      comparative.source_document_id !== report.source_document_id ||
+      current.source_sha256.toLowerCase() !== report.source_sha256.toLowerCase() ||
+      comparative.source_sha256.toLowerCase() !== report.source_sha256.toLowerCase() ||
+      current.currency !== comparative.currency ||
+      !isRenminbiCurrency(current.currency) ||
+      current.scope !== comparative.scope ||
+      !isIndependentlyVerifiedMetric(current) ||
+      !isIndependentlyVerifiedMetric(comparative)
+    ) {
+      continue;
+    }
+    // Legacy M2 reports may omit calculation.unit; inherit the display unit only
+    // when both independently verified inputs establish the same unit.
+    const currentUnits = Array.from(new Set(verifiedMetricEvidences(current, evidenceById).map((item) => item.unit).filter(Boolean)));
+    const comparativeUnits = Array.from(new Set(verifiedMetricEvidences(comparative, evidenceById).map((item) => item.unit).filter(Boolean)));
+    if (currentUnits.length !== 1 || currentUnits[0] !== "元" || comparativeUnits.length !== 1 || comparativeUnits[0] !== "元") {
+      continue;
+    }
+    const value = calculation.output_value.trim();
+    const parsed = /^(-?)(\d+)(?:\.(\d+))?$/.exec(value);
+    if (parsed === null) {
+      continue;
+    }
+    const exactDigits = BigInt(`${parsed[2]}${parsed[3] ?? ""}`);
+    const amount = formatInHundredMillions(value.replace(/^-/, ""));
+    if (amount === null) {
+      continue;
+    }
+    const direction = exactDigits === 0n ? "变动" : parsed[1] === "-" ? "减少" : "增加";
+    const directionKey = exactDigits === 0n ? "unchanged" : parsed[1] === "-" ? "decrease" : "increase";
+    changes.push({
+      metricId: current.metric_id,
+      direction: directionKey,
+      text: `${candidateMetricLabel(current)}：${direction}约${amount}亿元`,
+    });
+  }
+  return changes;
+}
+
+function candidateMetricLabel(metric: ConfirmedMetric): string {
+  const labels: Record<string, string> = {
+    net_profit_parent: "归母净利润",
+    revenue: "营业收入",
+    operating_cash_flow: "经营现金流净额",
+    non_recurring_total: "披露的非经常性损益合计",
+  };
+  return metric.metric_id === undefined ? metric.label_raw : labels[metric.metric_id] ?? metric.label_raw;
+}
+
+function isRenminbiCurrency(currency: string | null): boolean {
+  return currency === "CNY" || currency === "RMB" || currency === "人民币";
+}
+
+function candidateWhyText(
+  signalId: string,
+  changes: Array<{ metricId: string; direction: "increase" | "decrease" | "unchanged"; text: string }>,
+): string {
+  if (changes.length === 0) {
+    return "本次报告没有可展示的独立核验年度差额，暂不能确认这组指标是否按候选规则所示方向变化，也不能据此解释原因。";
+  }
+  const directions = new Map(changes.map((item) => [item.metricId, item.direction]));
+  if (signalId === "profit_up_cash_down") {
+    if (directions.get("net_profit_parent") === "increase" && directions.get("operating_cash_flow") === "decrease") {
+      return "归母净利润增加而经营现金流减少，两项年度变化方向相反；这些数据不能说明差异原因，需要结合年报附注继续核对。";
+    }
+  }
+  if (signalId === "revenue_up_cash_down") {
+    if (directions.get("revenue") === "increase" && directions.get("operating_cash_flow") === "decrease") {
+      return "营业收入增加而经营现金流减少；这组变化本身不能说明销售回款情况，需要结合收付款明细核对。";
+    }
+  }
+  return "上方列出了可展示的已核验年度差额，但当前数值方向不足以支持该候选项的完整描述；请先核对具体计算输入和变化原因。";
+}
+
+function abstentionFollowUpText(reason: string): string {
+  if (reason.includes("币种")) {
+    return "先找到年报中明确披露币种的依据，再确认两年数据的单位和期间口径可比。";
+  }
+  if (reason.includes("单位")) {
+    return "先确认两年金额单位一致，并核对期间和比较口径。";
+  }
+  return "补齐缺少的年度数据或披露口径依据，再判断差额和变化方向。";
+}
+
+function normalizeExactDecimal(value: string | number | null | undefined): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(value.trim());
+  if (match === null) {
+    return null;
+  }
+  const integer = match[2].replace(/^0+(?=\d)/, "");
+  const fraction = (match[3] ?? "").replace(/0+$/, "");
+  const magnitude = fraction.length === 0 ? integer : `${integer}.${fraction}`;
+  return match[1] === "-" && magnitude !== "0" ? `-${magnitude}` : magnitude;
+}
+
+function candidateFollowUpText(signalId: string): string {
+  if (signalId === "profit_up_cash_down") {
+    return "查看年报中“将净利润调节为经营活动现金流量”的附注、营运资金项目变化和非现金项目明细，核对差异来自哪些项目。";
+  }
+  if (signalId === "revenue_up_cash_down") {
+    return "查看销售回款、应收账款及其变化、现金流入与流出明细，核对收入与现金收付的对应关系。";
+  }
+  return "结合相关指标的年报附注和现金流明细逐项核对变化原因。";
+}
+
+function abstentionReasonText(candidate: CandidateSignal, report: AnnualAnalysisResponse["report"]): string {
+  const pendingFacts = candidate.input_fact_ids
+    .map((factId) => report.pending_review.facts.find((item) => stringValue(item.fact_id) === factId))
+    .filter((item): item is AnnualReportRecord => item !== undefined);
+  const rawText = [candidate.reason ?? "", ...pendingFacts.flatMap((item) => pendingRawReasons(item, report))].join(" ").toLowerCase();
+  if (rawText.includes("币种") || rawText.includes("currency")) {
+    return "年报表头未明确币种，不能确认两年金额可以直接比较。";
+  }
+  if (rawText.includes("单位") || rawText.includes("unit")) {
+    return "金额单位尚未确认，暂不能比较年度差额。";
+  }
+  if (rawText.includes("restatement") || rawText.includes("追溯调整") || rawText.includes("可比")) {
+    return "比较期口径或追溯调整状态尚未确认。";
+  }
+  return nonEmpty(candidate.reason) ?? "所需年度数据尚未通过核验，暂不能比较变化方向。";
 }
 
 function SourceLocationList({
@@ -1453,51 +2453,47 @@ function PendingItems({
       .map((item, index) => ({ label, item, key: recordIdentity(item) + "-" + index })),
   );
 
+  if (needsReason.length === 0 && nonAbstained.length === 0) {
+    return null;
+  }
+
   return (
-    <>
-      <div className="annual-pending-grid">
-        <div>
-          <h4>弃权、证据不足与核验冲突</h4>
-          {needsReason.length === 0 ? (
-            <p className="empty">报告未记录单独列出的弃权对象。</p>
-          ) : (
-            <ul className="annual-note-list">
-              {needsReason.map(({ label, item, key }) => (
-                <li key={key}>
-                  <strong>{label}：</strong>
-                  <PendingItemSummary
-                    item={item}
-                    locations={locationsForPendingItem(item, report, evidenceById)}
-                    previewBusyId={previewBusyId}
-                    onPreview={onPreview}
-                  />
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-        <div>
-          <h4>其他待核查对象</h4>
-          {nonAbstained.length === 0 ? (
-            <p className="empty">报告未记录其他待核查对象。</p>
-          ) : (
-            <ul className="annual-note-list">
-              {nonAbstained.map(({ label, item, key }) => (
-                <li key={key}>
-                  <strong>{label}：</strong>
-                  <PendingItemSummary
-                    item={item}
-                    locations={locationsForPendingItem(item, report, evidenceById)}
-                    previewBusyId={previewBusyId}
-                    onPreview={onPreview}
-                  />
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </div>
-    </>
+    <div className="annual-pending-sections">
+      {needsReason.length > 0 ? (
+        <section className="annual-pending-group">
+          <h4>尚未确认的数据</h4>
+          <div className="annual-pending-items">
+            {needsReason.map(({ item, key }) => (
+              <PendingItemSummary
+                key={key}
+                item={item}
+                report={report}
+                locations={locationsForPendingItem(item, report, evidenceById)}
+                previewBusyId={previewBusyId}
+                onPreview={onPreview}
+              />
+            ))}
+          </div>
+        </section>
+      ) : null}
+      {nonAbstained.length > 0 ? (
+        <section className="annual-pending-group">
+          <h4>其他需要核对的项目</h4>
+          <div className="annual-pending-items">
+            {nonAbstained.map(({ item, key }) => (
+              <PendingItemSummary
+                key={key}
+                item={item}
+                report={report}
+                locations={locationsForPendingItem(item, report, evidenceById)}
+                previewBusyId={previewBusyId}
+                onPreview={onPreview}
+              />
+            ))}
+          </div>
+        </section>
+      ) : null}
+    </div>
   );
 }
 
@@ -1783,11 +2779,13 @@ function hasExceptionStatus(item: AnnualReportRecord): boolean {
 
 function PendingItemSummary({
   item,
+  report,
   locations,
   previewBusyId,
   onPreview,
 }: {
   item: AnnualReportRecord;
+  report: AnnualAnalysisResponse["report"];
   locations: SourceLocationResult;
   previewBusyId: string | null;
   onPreview: (evidenceId: string) => void;
@@ -1808,6 +2806,38 @@ function PendingItemSummary({
     stringValue(record(item.verification)?.status),
     ...verificationRecords.map((verification) => stringValue(verification.status)),
   ].filter((value): value is string => value !== null);
+  const reasons = pendingRawReasons(item, report);
+  const statuses = Array.from(new Set(statusRecords.map(pendingStatusText)));
+  return (
+    <article className="annual-pending-item">
+      <div className="annual-pending-item-heading">
+        <h5>{pendingItemTitle(item, report)}</h5>
+        {statuses.length > 0 ? <span className="annual-pending-status">{statuses.join(" / ")}</span> : null}
+      </div>
+      <p>{pendingItemFriendlyReason(item, report)}</p>
+      <SourceLocationList
+        heading="关联数据的年报位置"
+        result={locations}
+        previewBusyId={previewBusyId}
+        onPreview={onPreview}
+      />
+      <details className="annual-technical-record annual-pending-technical-record">
+        <summary>查看内部编号与原始核验说明</summary>
+        <dl className="annual-detail-grid">
+          <dt>内部编号</dt><dd><code>{id}</code></dd>
+          <dt>原始状态</dt><dd>{statuses.join(" / ") || "未记录"}</dd>
+        </dl>
+        {reasons.length > 0 ? (
+          <ul className="annual-pending-raw-reasons">
+            {Array.from(new Set(reasons)).map((reason, index) => <li key={index}>{reason}</li>)}
+          </ul>
+        ) : <p className="help">报告未记录原始核验说明。</p>}
+      </details>
+    </article>
+  );
+}
+
+function pendingRawReasons(item: AnnualReportRecord, report: AnnualAnalysisResponse["report"]): string[] {
   const reasons: string[] = [];
   appendReason(reasons, "原因", item.reason);
   appendReason(reasons, "失败原因", item.failure_reason);
@@ -1817,35 +2847,213 @@ function PendingItemSummary({
   appendReason(reasons, "核验说明", record(item.verification)?.reason);
   appendReason(reasons, "核验限制", record(item.verification)?.limitations);
   appendReason(reasons, "核验冲突", record(item.verification)?.conflicts);
-  for (const verification of verificationRecords) {
+  const verifications = Array.isArray(item.verifications)
+    ? item.verifications.map(record).filter((value): value is AnnualReportRecord => value !== null)
+    : [];
+  for (const verification of verifications) {
     appendReason(reasons, "核验限制", verification.limitations);
     appendReason(reasons, "核验冲突", verification.conflicts);
     appendReason(reasons, "核验说明", verification.reason);
   }
-  const uniqueReasons = Array.from(new Set(reasons));
-  const statuses = Array.from(new Set(statusRecords.map(pendingStatusText)));
-  return (
-    <div className="annual-pending-summary">
-      {statuses.length > 0 ? <strong>{statuses.join(" / ")}</strong> : null}
-      {uniqueReasons.length > 0 ? (
-        <ul>
-          {uniqueReasons.map((reason, index) => <li key={index}>{reason}</li>)}
-        </ul>
-      ) : (
-        <span className="sub">报告未记录具体原因。</span>
-      )}
-      <SourceLocationList
-        heading="关联数据的年报位置"
-        result={locations}
-        previewBusyId={previewBusyId}
-        onPreview={onPreview}
-      />
-      <details className="annual-technical-record annual-pending-technical-record">
-        <summary>查看内部编号</summary>
-        <code>{id}</code>
-      </details>
-    </div>
-  );
+  if (stringValue(item.calculation_id) !== null) {
+    const inputIds = stringArray(item.input_fact_ids);
+    for (const inputId of inputIds) {
+      const fact = report.pending_review.facts.find((candidate) => stringValue(candidate.fact_id) === inputId);
+      if (fact !== undefined) {
+        appendReason(reasons, "输入数据核验限制", fact.limitations);
+        appendReason(reasons, "输入数据核验限制", record(fact.verification)?.limitations);
+        const factVerifications = Array.isArray(fact.verifications)
+          ? fact.verifications.map(record).filter((value): value is AnnualReportRecord => value !== null)
+          : [];
+        for (const verification of factVerifications) {
+          appendReason(reasons, "输入数据核验限制", verification.limitations);
+        }
+      }
+    }
+  }
+  return Array.from(new Set(reasons));
+}
+
+function pendingItemTitle(item: AnnualReportRecord, report: AnnualAnalysisResponse["report"]): string {
+  const factId = stringValue(item.fact_id);
+  if (factId !== null) {
+    const label = stringValue(item.label_raw) ?? stringValue(item.label) ?? metricLabelFromFactId(factId) ?? "年报财务数据";
+    const year = pendingYear(item);
+    return year === null ? label : `${label}（${year} 年）`;
+  }
+  const calculationId = stringValue(item.calculation_id);
+  if (calculationId !== null) {
+    const inputIds = stringArray(item.input_fact_ids);
+    const inputFacts = inputIds.flatMap((id) => {
+      const pending = report.pending_review.facts.find((fact) => stringValue(fact.fact_id) === id);
+      if (pending !== undefined) {
+        return [{
+          label: stringValue(pending.label_raw) ?? stringValue(pending.label) ?? metricLabelFromFactId(id) ?? "财务数据",
+          year: pendingYear(pending),
+        }];
+      }
+      const confirmed = report.confirmed.metrics.find((fact) => fact.fact_id === id);
+      return confirmed === undefined ? [] : [{
+        label: metricLabelFromFactId(id) ?? confirmed.label_raw,
+        year: confirmed.period_end?.slice(0, 4) ?? null,
+      }];
+    });
+    const labels = Array.from(new Set(inputFacts.map((fact) => fact.label)));
+    const metric = labels.length === 0 ? "相关财务数据" : labels.join("与");
+    const formula = stringValue(item.formula_id) ?? stringValue(item.formula);
+    const years = Array.from(new Set(inputFacts.map((fact) => fact.year).filter((value): value is string => value !== null))).sort();
+    const period = years.length >= 2 ? `（${years[0]}—${years[years.length - 1]} 年）` : "";
+    if (formula === "annual_yoy_rate" || calculationId.includes("annual_yoy_rate")) {
+      return `${metric}同比变化率${period}`;
+    }
+    if (formula === "annual_difference" || calculationId.includes("annual_difference")) {
+      return `${metric}年度差额${period}`;
+    }
+    return `${metric}计算${period}`;
+  }
+  const claimText = stringValue(item.text) ?? stringValue(item.expected_text) ?? stringValue(item.title);
+  if (claimText !== null) {
+    return claimText;
+  }
+  if (stringValue(item.evidence_id) !== null) {
+    return "尚未用于分析结论的年报证据";
+  }
+  return "待核对的分析项目";
+}
+
+function pendingYear(item: AnnualReportRecord): string | null {
+  const raw = stringValue(item.period_end) ?? stringValue(item.year) ?? stringValue(item.report_year);
+  if (raw === null) {
+    return null;
+  }
+  const match = /(?:^|\D)(20\d{2})(?:\D|$)/.exec(raw);
+  return match?.[1] ?? null;
+}
+
+function metricLabelFromFactId(factId: string): string | null {
+  const labels: Array<[string, string]> = [
+    ["net_profit_parent_ex_nonrecurring", "扣非归母净利润"],
+    ["net_profit_parent", "归属于母公司股东的净利润"],
+    ["operating_cash_flow", "经营活动产生的现金流量净额"],
+    ["non_recurring_total", "披露的非经常性损益合计"],
+    ["accounts_receivable_net", "应收账款净额"],
+    ["inventory_net", "存货净额"],
+    ["cost_of_revenue", "营业成本"],
+    ["net_income", "合并净利润"],
+    ["revenue", "营业收入"],
+  ];
+  return labels.find(([key]) => factId.includes(`:${key}:`))?.[1] ?? null;
+}
+
+function pendingItemFriendlyReason(item: AnnualReportRecord, report: AnnualAnalysisResponse["report"]): string {
+  const raw = pendingRawReasons(item, report).join(" ").toLowerCase();
+  const itemType = stringValue(item.fact_id) !== null
+    ? "fact"
+    : stringValue(item.calculation_id) !== null
+      ? "calculation"
+      : stringValue(item.claim_id) !== null
+        ? "claim"
+        : "other";
+  if (raw.includes("币种") || raw.includes("currency")) {
+    return itemType === "calculation"
+      ? "输入数据尚未确认币种，相关年度差额暂不能计算。"
+      : "尚未确认币种，金额暂不能用于判断。";
+  }
+  if (raw.includes("单位") || raw.includes("unit")) {
+    return itemType === "calculation"
+      ? "输入数据的单位尚未确认，暂不能完成年度计算。"
+      : "金额单位尚未确认，暂不能用于判断。";
+  }
+  if (raw.includes("restatement") || raw.includes("追溯调整")) {
+    return itemType === "calculation"
+      ? "比较期是否追溯调整尚未确认，暂不能比较年度变化。"
+      : "比较期是否追溯调整尚待确认。";
+  }
+  if (raw.includes("conflict") || raw.includes("冲突")) {
+    return "原文位置或披露口径存在冲突，需要回到年报核对。";
+  }
+  if (itemType === "calculation") {
+    return "输入数据尚未核实，暂不能完成这项计算。";
+  }
+  if (itemType === "claim") {
+    return "这段分析目前没有足够的已核验依据。";
+  }
+  if (itemType === "fact") {
+    return "原文证据不足，暂未确认这项数据。";
+  }
+  return "报告没有提供足够信息来确认该项目。";
+}
+
+function previewPendingNames(items: AnnualReportRecord[], report: AnnualAnalysisResponse["report"]): string {
+  const names = Array.from(new Set(items.slice(0, 3).map((item) => pendingItemTitle(item, report))));
+  return names.length === 0 ? "" : `（如：${names.join("、")}${items.length > names.length ? "等" : ""}）`;
+}
+
+function locationsForReviewEvidenceIds(
+  evidenceIds: string[],
+  report: AnnualAnalysisResponse["report"],
+  evidenceById: Map<string, VerificationEvidence>,
+): SourceLocationResult {
+  const factIds = new Set<string>();
+  const investigation = record(report.model_investigation);
+  const investigationItems = Array.isArray(investigation?.items)
+    ? investigation.items.map(record).filter((item): item is AnnualReportRecord => item !== null)
+    : [];
+
+  for (const referenceId of evidenceIds) {
+    if (report.confirmed.metrics.some((item) => item.fact_id === referenceId) ||
+        report.pending_review.facts.some((item) => stringValue(item.fact_id) === referenceId)) {
+      factIds.add(referenceId);
+      continue;
+    }
+
+    const confirmedCalculation = report.confirmed.analyses.find((item) => item.calculation_id === referenceId);
+    const pendingCalculation = report.pending_review.calculations.find((item) => stringValue(item.calculation_id) === referenceId);
+    const calculation = confirmedCalculation ?? pendingCalculation;
+    if (calculation !== undefined) {
+      stringArray(calculation.input_fact_ids).forEach((factId) => factIds.add(factId));
+      continue;
+    }
+
+    const confirmedClaim = report.verified_claims.find((item) => item.claim_id === referenceId);
+    const pendingClaim = report.pending_review.claims.find((item) => stringValue(item.claim_id) === referenceId);
+    const claimFacts = confirmedClaim?.supporting_fact_ids ?? stringArray(pendingClaim?.supporting_fact_ids);
+    if (claimFacts.length > 0) {
+      claimFacts.forEach((factId) => factIds.add(factId));
+      continue;
+    }
+
+    const pendingFactId = prefixedReviewObjectId(referenceId, "pending_fact:");
+    if (pendingFactId !== null && report.pending_review.facts.some((item) => stringValue(item.fact_id) === pendingFactId)) {
+      factIds.add(pendingFactId);
+      continue;
+    }
+    const pendingCalculationId = prefixedReviewObjectId(referenceId, "pending_calculation:");
+    if (pendingCalculationId !== null) {
+      const item = report.pending_review.calculations.find((entry) => stringValue(entry.calculation_id) === pendingCalculationId);
+      stringArray(item?.input_fact_ids).forEach((factId) => factIds.add(factId));
+      continue;
+    }
+    const pendingClaimId = prefixedReviewObjectId(referenceId, "pending_claim:");
+    if (pendingClaimId !== null) {
+      const item = report.pending_review.claims.find((entry) => stringValue(entry.claim_id) === pendingClaimId);
+      stringArray(item?.supporting_fact_ids).forEach((factId) => factIds.add(factId));
+      continue;
+    }
+
+    const investigationId = prefixedReviewObjectId(referenceId, "investigation:");
+    const signalId = investigationId ?? referenceId;
+    const candidate = report.pending_review.candidate_signals.find((item) => item.signal_id === signalId);
+    if (candidate !== undefined) {
+      candidate.input_fact_ids.forEach((factId) => factIds.add(factId));
+      continue;
+    }
+    const investigationItem = investigationItems.find((item) => stringValue(item.signal_id) === signalId);
+    stringArray(investigationItem?.input_fact_ids).forEach((factId) => factIds.add(factId));
+  }
+  return factIds.size === 0
+    ? { locations: [], unlocatedCount: evidenceIds.length }
+    : locationsForFactIds(Array.from(factIds), report, evidenceById);
 }
 
 function locationsForFactIds(
@@ -2171,16 +3379,18 @@ function flattenReason(value: unknown): string[] {
 function pendingStatusText(status: string): string {
   const labels: Record<string, string> = {
     abstained: "弃权",
+    verified: "已核验",
     insufficient_evidence: "证据不足",
-    failed: "失败",
+    failed: "核验未通过",
     conflict: "存在冲突",
     conflicted: "存在冲突",
     unsupported: "缺少支持依据",
     pending_review: "待核查",
+    pending: "待核查",
     unverified: "未核验",
     unknown: "状态未知",
   };
-  return labels[status] ?? status;
+  return labels[status] ?? "状态待确认";
 }
 
 function recordIdentity(item: AnnualReportRecord): string {
@@ -2308,25 +3518,12 @@ function claimTypeText(type: string): string {
   return labels[type] ?? type;
 }
 
-function candidateStatusText(status: string): string {
-  if (status === "candidate") {
-    return "候选待核查";
-  }
-  if (status === "abstained") {
-    return "弃权";
-  }
-  if (status === "not_triggered") {
-    return "规则未触发";
-  }
-  return "状态待确认";
-}
-
 function signalTitle(signalId: string): string {
   const labels: Record<string, string> = {
-    profit_up_cash_down: "利润增加，经营现金流减少",
-    revenue_up_cash_down: "营业收入增加，经营现金流减少",
+    profit_up_cash_down: "归母净利润与经营现金流的年度比较",
+    revenue_up_cash_down: "营业收入与经营现金流的年度比较",
   };
-  return labels[signalId] ?? "待核查候选线索";
+  return labels[signalId] ?? "待核查的年度财务项目";
 }
 
 function modelFieldLabel(key: string): string {

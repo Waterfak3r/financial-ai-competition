@@ -18,6 +18,8 @@ from typing import Any, Mapping
 from uuid import uuid4
 
 from finagent.api.annual_report_read import AnnualReportReadError, load_annual_report
+from finagent.core.model_settings import ModelConfigError
+from finagent.core.model_settings_store import ModelSettingsStoreError, resolve_model_settings
 
 _COMPANY_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,64}$")
 _DOCUMENT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -81,13 +83,16 @@ class AnnualAnalysisJobService:
         return self.project_root / "artifacts" / "annual-analysis-jobs"
 
     def create(self, request: Mapping[str, Any]) -> dict[str, Any]:
-        if request.get("mode", "deterministic") == "model_investigation":
-            raise AnnualAnalysisJobError(
-                501,
-                "mode_unsupported",
-                "model_investigation 模式暂不支持；当前任务 API 不会读取模型密钥或调用云端模型。",
-            )
         normalized = validate_job_request(self.project_root, request)
+        if normalized["mode"] == "model_investigation":
+            capability = get_annual_analysis_capabilities(self.project_root)
+            if not capability["model_investigation"]["available"]:
+                dependency_missing = capability["model_investigation"]["status"] == "dependency_unavailable"
+                raise AnnualAnalysisJobError(
+                    503,
+                    "model_dependency_unavailable" if dependency_missing else "model_configuration_unavailable",
+                    "模型调查所需组件暂不可用。" if dependency_missing else "模型调查配置尚未就绪，请检查服务端模型配置后重试。",
+                )
         if not self._slots.acquire(blocking=False):
             raise AnnualAnalysisJobError(
                 429,
@@ -487,6 +492,17 @@ def _invoke_cli(project_root: Path, artifacts_root: Path, request: Mapping[str, 
     if request["mode"] == "m3_screening":
         command.append("--with-m3-screening")
     environment = _cli_environment_without_credentials()
+    if request["mode"] == "model_investigation":
+        source_record = source_pdf.parent / "source.json"
+        command.extend(["--with-model", "--source-record", str(source_record)])
+        settings = resolve_model_settings(project_root)
+        environment.update(
+            {
+                "MODEL_BASE_URL": settings.base_url,
+                "MODEL_API_KEY": settings.api_key,
+                "MODEL_NAME": settings.model,
+            }
+        )
     completed = subprocess.run(
         command,
         cwd=project_root,
@@ -515,10 +531,8 @@ def _configured_cli_timeout_seconds() -> int:
 
 
 def _cli_environment_without_credentials() -> dict[str, str]:
-    # The deterministic and M3 screening CLI paths do not need API credentials.
-    # Remove common credential variables from the child process entirely.
+    # Deterministic and M3 CLI paths do not need any model configuration.
     blocked = {
-        "MODEL_API_KEY",
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
         "DEEPSEEK_API_KEY",
@@ -526,7 +540,30 @@ def _cli_environment_without_credentials() -> dict[str, str]:
         "QWEN_API_KEY",
         "AZURE_OPENAI_API_KEY",
     }
-    return {key: value for key, value in os.environ.items() if key.upper() not in blocked}
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if not key.upper().startswith("MODEL_") and key.upper() not in blocked
+    }
+
+
+def get_annual_analysis_capabilities(project_root: Path | None = None) -> dict[str, Any]:
+    """Expose model readiness without returning model configuration values."""
+
+    try:
+        import importlib
+
+        importlib.import_module("langgraph.graph")
+    except ImportError:
+        return {"model_investigation": {"available": False, "status": "dependency_unavailable"}}
+    try:
+        root = Path(project_root).resolve() if project_root is not None else Path(__file__).resolve().parents[4]
+        resolve_model_settings(root)
+    except (ModelConfigError, ModelSettingsStoreError):
+        return {"model_investigation": {"available": False, "status": "not_configured"}}
+    except Exception:
+        return {"model_investigation": {"available": False, "status": "not_configured"}}
+    return {"model_investigation": {"available": True, "status": "ready"}}
 
 
 def _run_id_from_output(output: str) -> str | None:
