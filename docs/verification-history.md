@@ -18,6 +18,10 @@
 
 annual-analysis 运行与报告分别在 `artifacts/runs/<run_id>/`、`artifacts/reports/<run_id>/`；评估位于 `artifacts/evaluations/<evaluation_id>/`。M4 协议与数据分母见 [数据规则](data-policy.md)，不是舞弊识别准确率或多公司泛化证明。
 
+## 2026-10-02 A-01 页面信息契约审阅
+
+主控审阅接受海天 603288 年报结果页信息契约，随 `921aa19d98161a54b7afcd426c567949f6173615` 提交。接受范围包括真实金额、公司/文档身份、报告期间、单位、合并口径、可比性及缺失原因边界；首屏在目标视口中的呈现随后由 A-03–A-05 最终浏览器矩阵核验，见下方“最终软件冻结与交接验收”。
+
 ## 2026-10-02 A-02 年报叙述证据与在线评审验收
 
 对海天 603288 的 2024 年报执行了四次完整 Web `model_investigation` 任务，每次实际三个模型请求；旧 job/run 和原审计归档均保留，累计十二次尝试。前三次用于定位严格归档和输出契约问题，最终一次在提示词补足既有解析边界后复验。前三次状态如下：
@@ -30,11 +34,45 @@ annual-analysis 运行与报告分别在 `artifacts/runs/<run_id>/`、`artifacts
 
 最后一次有界复验为 job `annual-job-618e6dd4fa984e1dbabecf13a2ece4d8`、run `annual-analysis-8036d75c-6a13-432a-b602-5f869f9396ce`：job、调查和最终评审均 completed，评审 assessment 为 `prioritize_review`；调查两次调用，最终评审一次，总计三次。运行归档含四条被引用叙述片段与八条独立核验金额证据。GET 报告、叙述索引及两种 focus 页图均由真实 HTTP 读取；四条片段均与归档 PDF 的原文及 bbox 相符。金额和叙述白名单保持分离；旧报告读取仍兼容。
 
-页 154 记载预收款在签订合同时收取、相关合同收入在履约义务完成后确认。这支持收入确认与现金收取可能跨期的机制假说，不证明其造成经营活动现金流下降；同一模型解释也明确原因无法确认。收入调查另有一句限制称“候选差异为计算字段，尚未核验；原文片段不足以确认任何因果关系或异常情形。”结构化报告中的相应事实核验均为 verified，净利润、营业收入及经营活动现金流三个年度差额均为 `succeeded` 且独立重算为 verified。该句作为未核实模型措辞保留，不覆盖确定性核验状态，也不作为系统级计算缺口。
+页 154 记载预收款在签订合同时收取、相关合同收入在履约义务完成后确认。这支持收入确认与现金收取可能跨期的机制假说，不证明其造成经营活动现金流下降；同一模型解释也明确原因无法确认。收入调查另有一句限制称“候选差异为计算字段，尚未核验；原文片段不足以确认任何因果关系或异常情形。”结构化报告中的三项核心指标、两年值合计六条事实均为 `verified`；净利润、营业收入及经营活动现金流三个年度差额均为 `succeeded` 且独立重算为 verified。该句作为未核实模型措辞保留，不覆盖确定性核验状态，也不作为系统级计算缺口。
 
-正式证据在 `artifacts/evaluations/a02-live-web-20261002-annual-analysis-8036d75c-6a13-432a-b602-5f869f9396ce/`，其中保存尝试历史、核验摘要，以及第 154 页叙述焦点图和已核验金额焦点图；原始审计与 PDF 位于相应 `artifacts/runs/<run_id>/`。最终 Web 服务通过 `scripts/start.ps1 -NoBrowser` 启动，API PID 为 32276，启动日志位于 `artifacts/tmp/startup-c6e19440d0e841dc91945bceb757e3b5/`。Python 3.14.3、FastAPI 0.136.3、PyMuPDF 1.27.2.3、LangGraph 1.2.12、pytest 9.0.3、Node 24.14.1；审计请求/输出的常见凭据模式扫描结果为 absent（布尔值）。评审提示文件 SHA256 记于同目录 `evaluation-evidence.json`。
+正式证据在 `artifacts/evaluations/a02-live-web-20261002-annual-analysis-8036d75c-6a13-432a-b602-5f869f9396ce/`，其中保存尝试历史、核验摘要，以及第 154 页叙述焦点图和已核验金额焦点图；原始审计与 PDF 位于相应 `artifacts/runs/<run_id>/`。A-02 当时的 Web 服务通过 `scripts/start.ps1 -NoBrowser` 启动，API PID 为 32276；`artifacts/tmp/startup-c6e19440d0e841dc91945bceb757e3b5/` 是启动目录，未保留启动日志。之后的受控 API 重启见 A-04 记录。Python 3.14.3、FastAPI 0.136.3、PyMuPDF 1.27.2.3、LangGraph 1.2.12、pytest 9.0.3、Node 24.14.1；审计请求/输出的常见凭据模式扫描结果为 absent（布尔值）。评审提示文件 SHA256 记于同目录 `evaluation-evidence.json`。
 
-A-02 相关后端测试聚焦集合为 95 passed、1 skipped；跳过来自 Windows 环境无法创建测试所需 symlink/junction 的平台守卫，原 `-q` 输出未给出具体 nodeid。提示修正后评审单元与任务集成为 15 passed。准确命令、退出码、跳过说明及未执行完整套件的边界见同目录 `checks.json`。完整后端套件待历史 API 接入后的集成阶段运行；上述在线结果不是多公司或因果识别验收。
+最终运行的 manifest 记录 `git_head=921aa19d98161a54b7afcd426c567949f6173615`、`git_dirty=true`。在本轮冻结文档核对时，逐项重算 manifest 中 29 个分析源码/提示词 SHA256，29 项均与工作区当前对应文件一致。此结论只覆盖 manifest 列出的分析链文件，不覆盖后来接入的 history API 或前端代码；不能把该运行称为最终代码提交运行。可按运行目录 `manifest.json` 的 `code.source_file_sha256` 复核。
+
+A-02 相关后端测试聚焦集合为 95 passed、1 skipped；跳过来自 Windows 环境无法创建测试所需 symlink/junction 的平台守卫，原 `-q` 输出未给出具体 nodeid。提示修正后评审单元与任务集成为 15 passed。准确命令、退出码、跳过说明及当时未执行完整套件的边界见同目录 `checks.json`；历史 API 接入后的唯一最终完整后端套件见下方 A-04 记录。上述在线结果不是多公司或因果识别验收。
+
+## 2026-10-02 A-04 本机历史索引 API 验收
+
+历史索引实现及路由通过主控代码审阅并提交于 `0d473da67a6a8b77cdbad86dfb8aaee708311368`（history 模块、app 路由集成和单元测试三个文件）。A-04 后端最终检查仅运行一次完整后端测试集：`python -m pytest -c backend/pyproject.toml tests -rs`，exit 0，367 collected、364 passed、3 skipped，86.33 秒。正式输出在 `artifacts/evaluations/annual-history-final-2813307e2c0440e0ac4429ad51743529/pytest-output.txt`；三个跳过分别为任务 API 的 PDF 符号链接、history 的目录符号链接和模型设置文件符号链接测试，均因当前 Windows 环境不能创建相应链接。
+
+同一目录 `http-verification.txt` 记录受控重启项目 API 后的真实 HTTP 核对：`GET /v1/annual-analysis-history?limit=50&offset=0` 返回 `total=23`、23 条；A-02 job `annual-job-618e6dd4fa984e1dbabecf13a2ece4d8` 与 run `annual-analysis-8036d75c-6a13-432a-b602-5f869f9396ce` 均为 completed、模式为 `model_investigation`，来源为 `cninfo-1222994233` / `1222994233.PDF`，`replay=true`、`result_available=true`、`issues=[]`。高位请求 `limit=20&offset=999999` 返回总数 23、空项目列表。路由还通过 OpenAPI 暴露检查。此处是 A-04 当时的模块/API、全套后端检查及真实 HTTP 分页快照；其 history UI 浏览器矩阵后来通过，见下方“最终软件冻结与交接验收”。23 是该次快照，不是后续列表固定总数。
+
+## 2026-10-02 A-05 样式与视口子项
+
+主控审阅接受 CSS 样式子项并提交 `b865f23d8df3a168bc145201453bb2593c41a758`（仅 `app.css`）。修正后 1366×768 首页的“分析年报”按钮完整位于首屏，实测 top=619、bottom=662；1440×900 和 390×844 页面均无横向溢出，390px 长来源/状态/操作内容可读。核心表格文字为 16px、说明文字为 14.4px；聚焦区域/整页页图与 125%、175%、200% 缩放下的视口内滚动通过本轮样式核对。15 张截图和尺寸化证据见 `artifacts/evaluations/a05-style-20261002-02/a05-style-evidence.json`。`npm run build` 与差异检查通过。这里记录的是样式和视口子矩阵；A-03 证据交互、A-04 history UI 及 A-05 完整浏览器范围随后在最终矩阵中通过。早先样式证据 `a05-style-20261002-01` 仍保留为修正前记录。
+
+## 2026-10-02 A-03 真实报告与证据交互矩阵
+
+主控审阅接受的最终只读矩阵为 `artifacts/evaluations/a03-a05-frontend-20261002/frontend-readonly-qa.json`。记录中有 92 条通过记录、55 个不同检查名；续验有重复记录，不能把 92 说成 92 个独立自动化测试或一个前端自动化测试套件。最终失败数为 0；此前 9 次失败/部分恢复尝试及故意 503 fixture 均保留在证据中。该矩阵为只读浏览器检查，没有 POST、设置写入或模型调用；标准确定性任务与旧预检的两次真实 UI POST 另见下节。
+
+矩阵通过真实 A-02 报告的三项核心金额与同比、四条叙述证据及原文来源、模型调用总数 3（调查 2 次、最终评审 1 次）、历史分页/回看、金额证据聚焦/整页/175% 缩放和第 154 页叙述限制文字与 PDF 预览响应头。Chromium 放大后 Tab 先经过原生滚动容器，再到 summary；按浏览器原生键盘行为，Enter 展开 summary、Tab 在抽屉内循环至关闭项、Escape 将操作返回来源入口均通过。报告路由的 URL 刷新、前进/后退、选择隔离、A→B→A、异步竞争和错误分页恢复均通过。此前 harness 对 Tab/Enter 的假设不符合原生行为，以及关闭 details 后的 `innerText` 读取假设，均以最终实际页面状态复验；这些失败尝试保留，不作为产品缺陷。
+
+## 2026-10-02 A-05 实际 UI 创建与回看验收
+
+实际 UI 本轮合计发出且仅发出两次任务 POST，未发起新模型请求。标准确定性分析 `POST /api/v1/annual-analysis-jobs` 返回 HTTP 202 / `queued`，job `annual-job-30d4e2fa50754e3b9abd2e749482b04d` 和 run `annual-analysis-a736d7e1-a932-4f88-9a0c-057f20d6c998` 后续均完成；按 `job_id` 的本机 URL 刷新恢复通过。主控独立 GET 确认公司 603288、报告年度 2024、来源 `cninfo-1222994233`、PDF SHA256 `5a97b13534438f5e85249752ef492fbd9e23af73e67845e47bad1ab7d92e20ee`，以及 `model_called=false`；归档 run 目录仅含 `analysis.json`、`manifest.json`、`parsed_text_pdf.json` 和 `source.pdf`，无模型审计内容。其数值模型调用数字段为 null；结合 deterministic 模式、无模型审计与 CDP 记录外部 provider origin 为 0，确认本轮 provider 请求数为 0。该任务入档后，history API 观察总数从 A-04 的 23 条快照变为 24 条；它们是不同时间的列表快照，不是固定总量。
+
+旧预检通过实际 UI 仅创建一次，`POST` 返回 HTTP 201，run 为 `annual-precheck-603288-2024-20261002-133803`。主控独立 GET 确认归档完成、`model_called=false`、含 8 条事实；旧规则 `pdf_clip_amount_and_normalization` 的 8 条检查均通过（failed=0、abstained=0），且 `independently_verified=false`，不等同 v2 独立事实核验。最终浏览器 UI 的旧归档回看 GET 返回 200。
+
+正式证据 `artifacts/evaluations/prototype-live-flow-20261002-f561f01a/evidence.json` 中 10 项 `final_checks` 全部为 passed，`unresolved_check_failures` 为空；`final_status` 将确定性分析标为 passed，将旧预检标为“passed with compatibility boundary”。其中四张正式截图依次展示新报告、job URL 刷新恢复、旧预检创建和旧归档回看，并包含最终页面标题、截图、输入框 run_id 与 GET 身份核验。较早的 harness 有两次说明文字等待超时（exit 1）及一次 `innerText` 中查找 run_id 的失败断言；这些过程记录保留，最终检查通过实际页面状态和归档身份核对完成，不表示每次 harness 都以 exit 0 结束。A-03 至 A-05 最终矩阵与这两次实际任务 POST 流程共同构成本轮浏览器验收范围。
+
+## 2026-10-02 A-03–A-05 最终软件冻结与交接验收
+
+软件原型由主控审阅并冻结于 `682471b71b2ee1b235abba317ab599caa42091f0`（`feat: complete annual analysis prototype workflow`）。该提交包含 8 个前端源码文件；A01 内容契约、A02 真实 AI 与原文预览、history API 和 CSS 分别沿用已接受提交 `921aa19d98161a54b7afcd426c567949f6173615`、`24ba5bf4fc7f2ca08b677c879041b949670bc248`、`0d473da67a6a8b77cdbad86dfb8aaee708311368`、`b865f23d8df3a168bc145201453bb2593c41a758`。前端最终 `functional_qa`、`npm run typecheck`、`npm run build` 与 `git diff --check` 均 exit 0；证据中的 8 个前端文件 SHA256 已由主控逐项比对一致。该版本冻结了可录软件原型与本机软件交接，不表示非金融用户 30 秒理解试验已完成，也不表示 A06、计划书 PDF、MP4 或上传已完成。
+
+最终报告 URL `http://127.0.0.1:5173/?run_id=annual-analysis-8036d75c-6a13-432a-b602-5f869f9396ce` 回读后，1366×768 默认真实报告位置记录为 heading top 16.203125、核心表格 bottom 640.765625；同视口首页“分析年报”按钮 top 618.96875、bottom 662.15625，完整位于首屏。最终历史观察为 `total=24`、当前页 20 条，是完成确定性任务入档后的列表快照；A-04 HTTP 检查中的 23 条是更早快照。三张不同尺寸的报告截图是明确手动定位结果，不应称为默认自动位置；更早 history 顶端图也不是默认报告首屏。最终自动定位证据字段为 `automatic_report_position_after_real_run_url_readback`。
+
+A-02 真实 AI 归档保持其原始 manifest：`git_head=921aa19d98161a54b7afcd426c567949f6173615`、`git_dirty=true`。本轮重算确认 manifest 指定的 29 个分析源码/提示词 SHA256 与对应文件一致；这只覆盖 29 个分析链文件，不包含后续 history API 或前端，故 A-02 run 不是由冻结提交 `682471b71b2ee1b235abba317ab599caa42091f0` 生成。原 manifest 未修改。
 
 ## 2026-09-30 检查快照
 
