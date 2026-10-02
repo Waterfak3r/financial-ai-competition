@@ -21,6 +21,8 @@
 
 ## 启动
 
+没有开发环境的 Windows 队友使用已构建的内部便携包：将 `artifacts/packages/<package_id>/<package_id>.zip` 完整解压到可写位置，然后双击包根目录的“启动 FINTRACE.bat”。浏览器会自动打开历史演示页面；无需安装 Python、Node.js 或项目依赖。便携包使用范围、配置和边界见[便携包说明](docs/portable-package.md)。仓库根目录 `start.bat` 仍是开发启动入口，不用于便携包。
+
 需要 Python 3.11+、Node.js 和已声明依赖；当前依赖约束以 [后端清单](backend/pyproject.toml)、[前端清单](frontend/package.json)和锁文件为准。版本来源登记见 [dependencies.md](docs/dependencies.md)。安装由操作者按本次环境需要执行，启动脚本不会自行安装：
 
 ```powershell
@@ -64,6 +66,8 @@ npm run dev
 | Web 显式 AI 分析与评审 | 优先读取根目录 `.env.model`；文件不存在时回退服务进程的完整 `MODEL_*` 环境变量 |
 | CLI `--with-model` | 只读当前进程环境变量，不读取 `.env.model` 或自动加载 `.env` |
 | 确定性 / M3 筛查 | 不调用模型；Web 子进程不携带 `MODEL_*` 凭据 |
+
+上表的宿主环境回退适用于开发服务。Windows 便携启动会清除进程中的 `MODEL_*`，只读取便携包根目录的 `.env.model`，不会继承启动它的 shell 环境；详见[便携包说明](docs/portable-package.md)。
 
 环境变量为 `MODEL_BASE_URL`、`MODEL_API_KEY`、`MODEL_NAME`。连接器在根地址末尾追加 `/chat/completions`，不要重复填写该路径。`.env.example` 仅提供空值。供应方的具体端点、地域及型号以该供应方配置说明为准。
 

@@ -39,6 +39,14 @@
 
 第三方资料来源与使用条件另见 [数据规则](data-policy.md)。以上为来源登记，不构成对分发条件的完整审查。
 
+## Windows x64 便携运行时（2026-10-02）
+
+便携构建器固定使用 Python.org 官方 [CPython 3.14.3 Windows x64 embeddable ZIP](https://www.python.org/ftp/python/3.14.3/python-3.14.3-embed-amd64.zip)，SHA256 `ad4961a479dedbeb7c7d113253f8db1b1935586b73c27488712beec4f2c894e6`。运行依赖从 Windows x64 CPython 3.14.3 构建环境按 `fastapi`、`python-multipart`、`uvicorn`、`pymupdf` 与 `langgraph` 的已安装 metadata 解析闭包；包内 `THIRD_PARTY_LICENSES.json` 逐项记录版本、PyPI 来源、上游许可字段及附带许可文件。构建器只复制 runtime closure，不复制全局 site-packages、console entrypoint 或 `node_modules`。
+
+Microsoft Visual C++ Runtime DLL 取自经 Authenticode 验证的 Microsoft 官方 x64 [Visual C++ Redistributable](https://aka.ms/vc14/vc_redist.x64.exe)：版本 14.51.36247.0，签名者 Microsoft Corporation，原安装程序 SHA256 `843068991daaa1f73ad9f6239bce4d0f6a07a51f18c37ea2a867e9beca71295c`。候选包实际纳入经校验的 x64 payload 文件集合：`concrt140.dll`、`msvcp140.dll`、`msvcp140_1.dll`、`msvcp140_2.dll`、`msvcp140_atomic_wait.dll`、`msvcp140_codecvt_ids.dll`、`vcamp140.dll`、`vccorlib140.dll`、`vcomp140.dll`、`vcruntime140.dll`、`vcruntime140_1.dll`、`vcruntime140_threads.dll`。这是随包的 runtime payload 清单，不表示其中每个文件都单独被 PyMuPDF 调用；逐文件哈希见包内 `THIRD_PARTY_LICENSES.json`。这些 DLL 来自微软官方签名安装程序，分发和使用受微软软件许可条款约束，使用者需确认并遵循适用条款。
+
+构建后的 Vite JS 使用 React 19.3.0、React DOM 19.3.0 与 scheduler 0.28.0。便携包仅附带这三个运行组件各自的原版 MIT `LICENSE`，不带 `node_modules`；包内许可清单记录 npm 来源、版本与文件路径。包的完整第三方来源、版本、文件哈希和许可索引均随 ZIP 分发；重建时必须更新并复核这些记录。
+
 ## 既有连接地址参考（历史登记）
 
 以下从旧 README 原样迁入，未在本次文档整理中重新联网核对。实际配置以供应方当前说明为准，不自动选择供应方。

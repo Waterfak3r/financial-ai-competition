@@ -53,7 +53,7 @@
 | frontend/、backend/ | 前端与后端工程 |
 | config/ | 提示词与业务规则配置 |
 | data/ | 原始、处理后及演示数据 |
-| artifacts/ | 运行证据、生成报告、评测输出、年度分析任务状态和公共临时内容 |
+| artifacts/ | 运行证据、生成报告、评测输出、年度分析任务状态、便携包和公共临时内容 |
 | evaluation/、tests/ | 评测案例与基线、自动化测试 |
 | scripts/ | 可复用的启动、数据准备与评测脚本 |
 | submission/ | 初赛计划书、视频和决赛材料 |
@@ -83,6 +83,7 @@
 - 清洗、纠错、解析和标准化结果写入 data/processed/，保留来源及处理说明。
 - 同名但内容不同的新资料单独保存，不覆盖旧资料。
 - 运行记录写入 artifacts/runs/<run_id>/；生成报告写入 artifacts/reports/<run_id>/；评测输出写入 artifacts/evaluations/<evaluation_id>/；年度分析任务状态写入 artifacts/annual-analysis-jobs/<job_id>/。
+- 可分发便携包及其校验清单写入 artifacts/packages/<package_id>/；ZIP 为本地产物，不提交到 Git。便携入口、构建器和维护说明见 README 与 docs/portable-package.md。
 - 使用唯一任务标识，避免不同运行相互覆盖。用于复现的记录和证据属于正式运行产物，不只留在 tmp/。
 - 比赛可编辑源文件及审核后的提交版本进入 submission/ 对应阶段目录，调试导出不直接混入提交材料。
 - 模拟数据、人工构造案例和真实资料必须明确标注，不能混淆。

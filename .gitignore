@@ -54,5 +54,6 @@ Desktop.ini
 !/artifacts/annual-analysis-jobs/.gitkeep
 /artifacts/evaluations/*
 !/artifacts/evaluations/.gitkeep
+/artifacts/packages/*
 
 # data/samples/, evaluation/, docs/ and submission/ are intentionally trackable.

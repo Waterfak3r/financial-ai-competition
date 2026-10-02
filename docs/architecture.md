@@ -132,6 +132,8 @@ Web 已接入本机历史列表分页，并用查询参数 `run_id` 或 `job_id`
 
 ## 6. 文件与交付
 
-目录归属遵循 [AGENTS](../AGENTS.md)和[数据规则](data-policy.md)。frontend/backend 的依赖与构建配置各自归属工程目录；config 管提示词与规则；scripts 管可复用操作；tests 管正式测试；evaluation 管隔离标签；submission 管阶段性比赛材料。临时内容就近进入 tmp/<task_id>/，默认保留，正式功能不依赖临时文件。
+目录归属遵循 [AGENTS](../AGENTS.md)和[数据规则](data-policy.md)。frontend/backend 的依赖与构建配置各自归属工程目录；config 管提示词与规则；scripts 管可复用操作；tests 管正式测试；evaluation 管隔离标签；submission 管阶段性比赛材料。`artifacts/packages/<package_id>/` 保存本地便携 ZIP 和清单，ZIP 不进入 Git；构建及使用边界见[便携包说明](portable-package.md)。临时内容就近进入 tmp/<task_id>/，默认保留，正式功能不依赖临时文件。
+
+Windows 便携服务由 `scripts/portable/serve.py` 在包内运行时启动。它通过 ASGI 包装器将 `/api/*` 去掉 `/api` 后交给现有 `create_app(project_root=包根目录)`，其他 GET/HEAD 仅服务 `frontend/dist`；缺失静态文件和遍历路径返回 404，不把包根目录暴露为静态资源。监听限制为 `127.0.0.1`，端口使用 18765–18785；同一解压目录用 Windows mutex 保持单一服务与任务队列。此包装不更改业务 API 或核验契约。
 
 本文不维护安装快照或测试计数；依赖来源见 [dependencies.md](dependencies.md)，历史验证见 [verification-history.md](verification-history.md)。计划书、视频交接和最终成品按 [产品路线](product-delivery-roadmap.md)分别验收。

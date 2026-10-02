@@ -129,6 +129,16 @@ A-02 真实 AI 归档保持其原始 manifest：`git_head=921aa19d98161a54b7afcd
 >
 > - 2026-09-30 前端按 `tem/web_expected/` 四张参考图完成视觉重排，保留旧预检和现有分析 API/任务语义。Headless Edge/CDP 已检查 M2、M3、五粮液待核验归档、旧预检创建/回看及桌面和 390px 布局；截图与日志见 `frontend/tmp/reference-redesign-20260930/`。
 
+## 2026-10-02 Windows x64 便携包验收
+
+便携包验收先对候选 `fintrace-windows-x64-20261002-candidate02` 完成运行测试；其后因补齐 README 配置差异、重建命令和 Microsoft payload 许可说明，以新唯一 ID 重建最终候选 `fintrace-windows-x64-20261002-candidate03`，没有覆盖旧产物。最终 ZIP 位于 `artifacts/packages/fintrace-windows-x64-20261002-candidate03/`，为 60,408,989 字节，SHA256 `c70a2dd45bdbfe0ec2c69fb1a113bf5bc39d0dd2cab8980849ecb9c5e730fc3a`。candidate03 使用与 candidate02 相同的运行时服务和 Python 依赖代码，新增/修订的是包内维护文档。candidate02 登记源提交 `a5b31583ef2a85f4024bd08028f4c4a9c301152d` 且构建时工作树有未提交变更；candidate03 也由该提交的未提交工作树构建。ZIP 包含 46 个 Python runtime distributions、选定海天 PDF 和历史归档、前端构建、经哈希校验的 Microsoft x64 VC payload DLL 集合、React/react-dom/scheduler 的原版 MIT 许可文件；不包含 `.env`、模型配置、Git、`node_modules` 或历史模型 request/response 审计目录。
+
+candidate02 的初次运行测试使用中文和空格解压路径；最终 candidate03 又从另一中文空格路径解压并重跑下述隔离、启动和任务测试。使用最小 Windows 子进程环境启动包内 `runtime/python.exe`；服务 PATH 未包含 host Python/Node，也未传入 provider credential 环境变量。嵌入 Python 的 `isolated=1`、`ignore_environment=1`，`sys.path` 仅含 runtime 自带 ZIP/runtime、vendor、包内 backend/src 和 scripts；UTF-8 stdout 中文探针通过。真实运行的服务进程与 PyMuPDF 探针所加载的 MSVCP140、VCRUNTIME140、VCRUNTIME140_1 和 MuPDF DLL 都来自解压副本。浏览器自动打开本机历史 AI 报告，真实桌面 Chrome 页面显示海天报告与 4 条叙述项，证据抽屉成功打开并截图；历史 report、history、capability API、金额及叙述 focus PNG 返回 200，未配置模型能力为 `not_configured`，不存在资源、运行时路径和 API 错路由按预期返回 404。candidate02 页面创建的 deterministic 子 CLI job `annual-job-18fa82d6aea24e75902a855a70989254` 完成，run `annual-analysis-9ba1a323-c0e8-4e73-8f5f-1402c50db4c4` GET 为 200 且 `model_called=false`；candidate03 复测也完成 deterministic job `annual-job-bf2d4e0188c243f0af3fdec4b31155e3`，run `annual-analysis-9daf5cd9-52b6-4ae0-b9ea-fe061c923f27` GET 为 200、`model_called=false`。同包重复启动只提示既有实例。
+
+在验收专用进程占用 18765 时，candidate02 与 candidate03 均保留该 listener 并自动改用 18766；本机启动页面仍正常。最终 candidate03 ZIP 外部 SHA、大小和包内 2,026 项逐文件长度/SHA inventory 全匹配；凭据签名扫描（模型 token、Bearer、AWS key、私钥）均为 absent。最终 JSON 证据、API 日志与抽屉截图位于 `artifacts/evaluations/windows-portable-20261002-candidate04/`；candidate02 的第一次完整 API/浏览器验收在 `artifacts/evaluations/windows-portable-20261002-candidate02/`，占用默认端口后的复验在 `artifacts/evaluations/windows-portable-20261002-candidate03/`。首轮 candidate01 QA 脚本曾因把 HTTP header 名按大小写敏感方式比较而失败；修正验证器后完整复验通过，失败记录保留在 `artifacts/evaluations/windows-portable-20261002-candidate01/failure.json`。
+
+本验收是在现有 Windows x64 主机上用隔离的包内 Python 和裁剪后的子进程环境模拟未安装 Python/Node，不是在干净虚拟机或另一台 Windows 10/11 设备上测试；不能据此声称已验证全新设备的系统 DLL 状态。无需/未执行全后端业务测试，本次改动集中在可复用包装器、构建/分发和文档。本候选以未提交工作树构建；正式提交后如需绑定提交号，可按[便携包说明](portable-package.md)使用新的唯一 package ID 重建，不覆盖本候选。
+
 ## 原文涉及的运行标识索引
 
 仅用于定位历史文件，列出不表示该运行成功、最新或可重新执行。摘录未展开的旧运行也保留在本地；不覆盖失败记录。

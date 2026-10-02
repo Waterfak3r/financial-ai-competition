@@ -14,7 +14,9 @@
 
 海天文件取得时间记录为 2026-09-23T10:25:30+08:00，原文件大小 4,561,223 字节；解析产物位于平行的 data/processed 路径。本文迁移既有登记，未重新下载原文。
 
-茅台/五粮液的 evaluation/cases 案例为 agent_provisional_pending_human 财务事实参考，没有人工 golden、舞弊或异常标签。样例覆盖和历史核验状态见验收记录。data/samples 尚未形成可交付演示包。
+茅台/五粮液的 evaluation/cases 案例为 agent_provisional_pending_human 财务事实参考，没有人工 golden、舞弊或异常标签。样例覆盖和历史核验状态见验收记录。data/samples 尚未形成可公开交付演示包。
+
+指定 Windows 队友的内部便携分发会复制海天原文、解析材料和选定历史运行归档，以支持本地演示和报告回看；源文件与仓库归档保持原样。该内部团队请求不等于取得 PDF、原文片段或报告的公开再分发许可。包内容清单、来源及使用提醒见[便携包说明](portable-package.md)；不得将其上传为公开样例。
 
 ## 2. 分类存放
 
@@ -29,6 +31,7 @@
 | 自动生成的报告 | artifacts/reports/<run_id>/ | 本地归档，默认忽略 |
 | 异步年度分析任务状态 | artifacts/annual-analysis-jobs/<job_id>/ | 本地持久化，默认忽略 |
 | 评测结果 | artifacts/evaluations/<evaluation_id>/ | 本地归档，默认忽略 |
+| Windows 便携包与清单 | artifacts/packages/<package_id>/ | 本地内部交付，不进入 Git |
 | 模块内临时内容 | 对应目录的 tmp/<task_id>/ | 忽略 |
 | 跨模块临时内容 | artifacts/tmp/<task_id>/ | 忽略 |
 | 比赛材料与其源文件 | submission/ 对应阶段目录 | 可纳入，依据材料大小和发布需要管理 |
