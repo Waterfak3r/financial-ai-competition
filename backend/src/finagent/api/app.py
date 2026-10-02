@@ -11,7 +11,7 @@ from typing import Literal
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, StrictInt
 from starlette.concurrency import run_in_threadpool
@@ -20,6 +20,10 @@ from finagent.api.annual_precheck import (
     HashMismatchError,
     create_annual_precheck,
     load_annual_precheck,
+)
+from finagent.api.annual_analysis_history import (
+    AnnualAnalysisHistoryError,
+    list_annual_analysis_history,
 )
 from finagent.api.annual_report_read import (
     AnnualReportReadError,
@@ -235,6 +239,23 @@ def create_app(project_root: Path | None = None) -> FastAPI:
         try:
             return app.state.annual_analysis_jobs.get(job_id)
         except AnnualAnalysisJobError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": exc.message},
+            ) from None
+
+    @app.get("/v1/annual-analysis-history")
+    def get_annual_analysis_history(
+        limit: int = Query(default=20, ge=1, le=50),
+        offset: int = Query(default=0, ge=0),
+    ) -> dict:
+        try:
+            return list_annual_analysis_history(
+                app.state.project_root,
+                limit=limit,
+                offset=offset,
+            )
+        except AnnualAnalysisHistoryError as exc:
             raise HTTPException(
                 status_code=exc.status_code,
                 detail={"code": exc.code, "message": exc.message},
