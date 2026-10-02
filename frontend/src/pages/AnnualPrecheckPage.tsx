@@ -112,6 +112,9 @@ export function AnnualPrecheckPage() {
       if (target === null) {
         return;
       }
+      if (targetId === "annual-source-choice-upload-radio" && target instanceof HTMLInputElement) {
+        target.click();
+      }
       target.scrollIntoView({
         behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
         block: "center",
@@ -279,14 +282,14 @@ export function AnnualPrecheckPage() {
               <NavActionButton
                 icon={<FormIcon />}
                 label="上传年报"
-                onSelect={() => focusAnnualAnalysisTarget("annual-job-pdf-file", ".annual-start-another")}
+                onSelect={() => focusAnnualAnalysisTarget("annual-source-choice-upload-radio", ".annual-start-another")}
               />
             </li>
             <li>
               <NavActionButton
                 icon={<TableIcon />}
                 label="回看归档"
-                onSelect={() => focusAnnualAnalysisTarget("annual-analysis-run-id", ".annual-archive-lookup")}
+                onSelect={() => focusAnnualAnalysisTarget("annual-history-list")}
               />
             </li>
             <li>
@@ -327,14 +330,14 @@ export function AnnualPrecheckPage() {
               <button
                 type="button"
                 className="topbar-action"
-                onClick={() => focusAnnualAnalysisTarget("annual-job-pdf-file", ".annual-start-another")}
+                onClick={() => focusAnnualAnalysisTarget("annual-source-choice-upload-radio", ".annual-start-another")}
               >
                 上传年报
               </button>
               <button
                 type="button"
                 className="topbar-action topbar-action-primary"
-                onClick={() => focusAnnualAnalysisTarget("annual-analysis-run-id", ".annual-archive-lookup")}
+                onClick={() => focusAnnualAnalysisTarget("annual-history-list")}
               >
                 回看归档
               </button>

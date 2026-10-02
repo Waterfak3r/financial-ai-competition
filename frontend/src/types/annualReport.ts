@@ -204,6 +204,11 @@ export interface AnnualAnalysisReport {
     status: string;
     restatement_status: string;
     limitations: string[];
+    document_id?: string | null;
+    source_sha256?: string | null;
+    report_year?: number | null;
+    current_year?: number | null;
+    comparative_year?: number | null;
   } | null;
   confirmed: {
     metrics: ConfirmedMetric[];

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FormEvent, MouseEvent, ReactNode } from "react";
+import type { FormEvent, MouseEvent, ReactNode, RefObject } from "react";
 import { loadAnnualAnalysisCapabilities } from "../api/annualAnalysisCapabilities";
 import { AnnualReportApiError, loadAnnualAnalysis, loadVerificationEvidencePreview } from "../api/annualReports";
+import { loadAnnualAnalysisHistory } from "../api/annualAnalysisHistory";
 import { createAnnualAnalysisJob, loadAnnualAnalysisJob } from "../api/annualAnalysisJobs";
+import { loadNarrativeEvidences, loadNarrativeEvidencePreview } from "../api/narrativeEvidences";
 import { textPdfUploadIssues, uploadTextPdf } from "../api/prechecks";
 import type {
   AnnualAnalysisResponse,
@@ -11,14 +13,18 @@ import type {
   CandidateSignal,
   ConfirmedCalculation,
   ConfirmedMetric,
+  PdfBox,
   M3AnnualScreening,
   VerificationEvidence,
   VerifiedClaim,
 } from "../types/annualReport";
+import type { AnnualAnalysisHistoryItem } from "../types/annualAnalysisHistory";
+import { NARRATIVE_EVIDENCE_INTERPRETATION_LABEL } from "../types/narrativeEvidence";
+import type { NarrativeEvidence, NarrativeEvidenceResponse } from "../types/narrativeEvidence";
 import type { AnnualAnalysisJob, AnnualAnalysisJobMode, AnnualAnalysisJobRequest } from "../types/annualAnalysisJob";
 import type { TextPdfUploadReceipt } from "../types/precheck";
 
-const SAMPLE_RUN_ID = "annual-analysis-ffcd6078-a1df-416b-88b8-6774ebe66d42";
+const SAMPLE_RUN_ID = "annual-analysis-21d8da07-097b-4cdf-97ce-6e109c8cc1b8";
 const RUN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
 const JOB_ID_PATTERN = /^annual-job-[0-9a-f]{32}$/;
 const ACTIVE_JOB_STORAGE_KEY = "fintrace.activeAnnualAnalysisJobId.v1";
@@ -34,7 +40,6 @@ const CORE_METRICS = [
   { metricId: "revenue", label: "营业收入", tone: "blue" },
   { metricId: "net_profit_parent", label: "归属于母公司股东的净利润", tone: "green" },
   { metricId: "operating_cash_flow", label: "经营活动产生的现金流量净额", tone: "orange" },
-  { metricId: "non_recurring_total", label: "披露的非经常性损益合计", tone: "violet" },
 ] as const;
 
 type JobAction = "uploading" | "starting" | "retrying" | "refreshing" | null;
@@ -52,10 +57,18 @@ interface UploadedFileContext {
 }
 
 interface Preview {
+  kind: "verified_financial_value" | "narrative_context";
   evidenceId: string;
   pageNumber: number;
   objectUrl: string;
+  mode: "focus" | "full_page";
+  region: PdfBox;
 }
+
+type AnnualSourceChoice = "sample" | "upload";
+type UrlSelection = { kind: "run"; id: string } | { kind: "job"; id: string } | null;
+type NarrativeLoadState = { runId: string; value: NarrativeEvidenceResponse | null; error: string | null } | null;
+type PreviewTarget = { kind: "verified_financial_value"; evidenceId: string } | { kind: "narrative_context"; evidenceId: string };
 
 interface SourcePage {
   pageNumber: number;
@@ -78,6 +91,7 @@ interface SourceLocationResult {
 
 export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [runId, setRunId] = useState(SAMPLE_RUN_ID);
+  const [sourceChoice, setSourceChoice] = useState<AnnualSourceChoice>("sample");
   const [companyId, setCompanyId] = useState("");
   const [reportYear, setReportYear] = useState("");
   const [pdfFile, setPdfFile] = useState<File | null>(null);
@@ -98,8 +112,26 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
   const [loadError, setLoadError] = useState<string | null>(null);
   const [runIdError, setRunIdError] = useState<string | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
+  const [previewTarget, setPreviewTarget] = useState<PreviewTarget | null>(null);
   const [previewBusyId, setPreviewBusyId] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewZoom, setPreviewZoom] = useState(100);
+  const [narrativeState, setNarrativeState] = useState<NarrativeLoadState>(null);
+  const [history, setHistory] = useState<Awaited<ReturnType<typeof loadAnnualAnalysisHistory>> | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyOffset, setHistoryOffset] = useState(0);
+  const [historyRetry, setHistoryRetry] = useState(0);
+  const [selectedHistoryItem, setSelectedHistoryItem] = useState<AnnualAnalysisHistoryItem | null>(null);
+  const [resultOrigin, setResultOrigin] = useState<"new" | "history">("history");
+  const urlSelectionOnMount = useRef<UrlSelection>(readUrlSelection());
+  const initialSelectionHandled = useRef(false);
+  const historyRequestSequence = useRef(0);
+  const narrativeRequestSequence = useRef(0);
+  const createdJobIds = useRef(new Set<string>());
+  const evidenceDrawerRef = useRef<HTMLElement>(null);
+  const evidenceDrawerCloseRef = useRef<HTMLButtonElement>(null);
+  const evidenceReturnFocus = useRef<HTMLElement | null>(null);
   const requestLock = useRef(false);
   const jobSubmitLock = useRef(false);
   const jobRefreshLock = useRef(false);
@@ -107,6 +139,38 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
   const reportRequest = useRef(0);
   const taskGeneration = useRef(0);
   const previewRequest = useRef(0);
+
+  useEffect(() => {
+    const requestOffset = historyOffset;
+    const requestSequence = historyRequestSequence.current + 1;
+    historyRequestSequence.current = requestSequence;
+    setHistoryLoading(true);
+    setHistoryError(null);
+    loadAnnualAnalysisHistory(20, requestOffset)
+      .then((loaded) => {
+        if (historyRequestSequence.current !== requestSequence) return;
+        setHistory(loaded);
+      })
+      .catch((error: unknown) => {
+        if (historyRequestSequence.current === requestSequence) setHistoryError(errorMessage(error));
+      })
+      .finally(() => {
+        if (historyRequestSequence.current === requestSequence) setHistoryLoading(false);
+      });
+    return () => {
+      if (historyRequestSequence.current === requestSequence) historyRequestSequence.current += 1;
+    };
+  }, [historyOffset, historyRetry]);
+
+  useEffect(() => {
+    if (history === null) return;
+    const selection = readUrlSelection();
+    if (selection === null) return;
+    const match = history.items.find((item) =>
+      selection.kind === "run" ? item.run_id === selection.id : item.job_id === selection.id,
+    ) ?? null;
+    setSelectedHistoryItem(match);
+  }, [history]);
 
   const refreshModelCapability = useCallback(async () => {
     setModelCapabilityLoading(true);
@@ -146,6 +210,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
       }
       setResponse(loaded);
       setRunId(loaded.report.run_id);
+      setResultOrigin(createdJobIds.current.has(completedJob.job_id) ? "new" : "history");
       if (completedJob.request.mode === "m3_screening" && loaded.report.m3_screening == null) {
         setJobError("任务已完成，但报告没有包含所选的四项试行筛查结果；请按原来源重新提交。候选线索不是已核验事实。");
       }
@@ -172,34 +237,65 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
   );
 
   useEffect(() => {
-    if (preview === null) {
+    if (previewTarget === null) {
       return;
     }
-    const heading = document.getElementById("annual-evidence-preview-heading");
-    if (heading === null) {
-      return;
-    }
-    heading.focus({ preventScroll: true });
-    heading.scrollIntoView({
-      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
-      block: "start",
-    });
-  }, [preview]);
+    evidenceDrawerCloseRef.current?.focus({ preventScroll: true });
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeEvidenceDrawer();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const drawer = evidenceDrawerRef.current;
+      if (drawer === null) return;
+      const focusable = Array.from(drawer.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [href], [tabindex]:not([tabindex="-1"])',
+      )).filter((element) => {
+        if (element.getAttribute("aria-hidden") === "true" || element.closest("[hidden], [inert]")) return false;
+        const closedDetails = element.closest("details:not([open])");
+        if (closedDetails !== null && element !== closedDetails.querySelector(":scope > summary")) return false;
+        const style = window.getComputedStyle(element);
+        return style.display !== "none" && style.visibility !== "hidden" && element.getClientRects().length > 0;
+      });
+      if (focusable.length === 0) {
+        event.preventDefault();
+        drawer.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [previewTarget]);
 
+  const previousDrawerOpen = useRef(false);
   useEffect(() => {
-    if (previewError === null) {
+    if (previewTarget !== null) {
+      previousDrawerOpen.current = true;
       return;
     }
-    const alert = document.getElementById("annual-evidence-preview-error");
-    if (alert === null) {
-      return;
+    if (previousDrawerOpen.current) {
+      previousDrawerOpen.current = false;
+      if (evidenceReturnFocus.current?.isConnected) evidenceReturnFocus.current.focus({ preventScroll: true });
+      else document.getElementById("annual-report-heading")?.focus({ preventScroll: true });
+      evidenceReturnFocus.current = null;
     }
-    alert.focus({ preventScroll: true });
-    alert.scrollIntoView({
-      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
-      block: "center",
-    });
-  }, [previewError]);
+  }, [previewTarget]);
   useEffect(
     () => () => {
       previewRequest.current += 1;
@@ -223,47 +319,49 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
   }, [response]);
 
   useEffect(() => {
-    const savedJobId = readStoredJobId();
-    if (savedJobId === null) {
+    if (response === null) {
+      setNarrativeState(null);
+      narrativeRequestSequence.current += 1;
       return;
     }
-    const generation = taskGeneration.current + 1;
-    taskGeneration.current = generation;
-    let active = true;
-    setRestoreBusy(true);
-    loadAnnualAnalysisJob(savedJobId)
-      .then((restored) => {
-        if (!active || taskGeneration.current !== generation) {
-          return;
-        }
-        setJob(restored);
-        setRestoreError(null);
-        writeStoredJobId(restored.job_id);
-        if (restored.run_id !== null) {
-          setRunId(restored.run_id);
-        }
-        if (isSuccessfulJob(restored)) {
-          void loadReportForJob(restored, generation);
-        }
+    const requestSequence = narrativeRequestSequence.current + 1;
+    narrativeRequestSequence.current = requestSequence;
+    setNarrativeState({ runId: response.report.run_id, value: null, error: null });
+    loadNarrativeEvidences(
+      response.report.run_id,
+      response.report.source_document_id,
+      response.report.source_sha256,
+    )
+      .then((loaded) => {
+        if (narrativeRequestSequence.current === requestSequence) setNarrativeState({ runId: loaded.run_id, value: loaded, error: null });
       })
       .catch((error: unknown) => {
-        if (!active || taskGeneration.current !== generation) {
-          return;
-        }
-        setRestoreError(errorMessage(error));
-      })
-      .finally(() => {
-        if (active && taskGeneration.current === generation) {
-          setRestoreBusy(false);
+        if (narrativeRequestSequence.current === requestSequence) {
+          setNarrativeState({ runId: response.report.run_id, value: null, error: errorMessage(error) });
         }
       });
     return () => {
-      active = false;
-      if (taskGeneration.current === generation) {
-        taskGeneration.current += 1;
-      }
+      if (narrativeRequestSequence.current === requestSequence) narrativeRequestSequence.current += 1;
     };
+  }, [response]);
+
+  useEffect(() => {
+    if (initialSelectionHandled.current) return;
+    initialSelectionHandled.current = true;
+    const initialSelection = urlSelectionOnMount.current;
+    if (initialSelection !== null) {
+      void navigateToSelection(initialSelection, false);
+      return;
+    }
+    const savedJobId = readStoredJobId();
+    void navigateToSelection(savedJobId === null ? null : { kind: "job", id: savedJobId }, false);
   }, [loadReportForJob]);
+
+  useEffect(() => {
+    const onPopState = () => void navigateToSelection(readUrlSelection(), false);
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [history, loadReportForJob]);
 
   useEffect(() => {
     if (job === null || !isActiveJob(job)) {
@@ -344,7 +442,9 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
     setLoading(false);
     setResponse(null);
     setLoadError(null);
+    setNarrativeState(null);
     setPreview(null);
+    setPreviewTarget(null);
     setPreviewError(null);
     setPreviewBusyId(null);
     previewRequest.current += 1;
@@ -363,7 +463,11 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
         return;
       }
       setJob(created);
+      createdJobIds.current.add(created.job_id);
+      setResultOrigin("new");
+      setSelectedHistoryItem(null);
       writeStoredJobId(created.job_id);
+      writeUrlSelection({ kind: "job", id: created.job_id }, true);
       if (created.run_id !== null) {
         setRunId(created.run_id);
       }
@@ -425,6 +529,15 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
     );
   }
 
+  async function onStartSelectedSource(event: FormEvent<HTMLFormElement>) {
+    if (sourceChoice === "sample") {
+      event.preventDefault();
+      await onRunHaitianSample();
+      return;
+    }
+    await onUploadAndStart(event);
+  }
+
   async function onRetryJob() {
     if (job === null || !isFailedJob(job)) {
       return;
@@ -480,10 +593,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
     }
   }
 
-  async function loadReportByRunId(value: string) {
-    if (requestLock.current) {
-      return;
-    }
+  async function loadReportByRunId(value: string, updateUrl = true) {
     const checkedRunId = value.trim();
     setRunId(checkedRunId);
     if (!RUN_ID_PATTERN.test(checkedRunId)) {
@@ -491,31 +601,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
       return;
     }
     setRunIdError(null);
-    setLoadError(null);
-    setPreviewError(null);
-    setPreview(null);
-    setPreviewBusyId(null);
-    previewRequest.current += 1;
-    const requestId = reportRequest.current + 1;
-    reportRequest.current = requestId;
-    requestLock.current = true;
-    setLoading(true);
-    try {
-      const loaded = await loadAnnualAnalysis(checkedRunId);
-      if (reportRequest.current === requestId) {
-        setResponse(loaded);
-      }
-    } catch (error) {
-      if (reportRequest.current === requestId) {
-        setLoadError(errorMessage(error));
-        setResponse(null);
-      }
-    } finally {
-      if (reportRequest.current === requestId) {
-        requestLock.current = false;
-        setLoading(false);
-      }
-    }
+    await navigateToSelection({ kind: "run", id: checkedRunId }, updateUrl);
   }
 
   async function onLoad(event: FormEvent<HTMLFormElement>) {
@@ -523,101 +609,234 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
     await loadReportByRunId(runId);
   }
 
-  async function onViewArchivedSample() {
-    await loadReportByRunId(SAMPLE_RUN_ID);
-  }
-
-  function focusUploadForm() {
-    const upload = document.getElementById("annual-job-pdf-file");
-    upload?.scrollIntoView({
-      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
-      block: "center",
-    });
-    upload?.focus({ preventScroll: true });
-  }
-
-  async function onPreview(evidenceId: string) {
-    if (response === null || requestLock.current) {
+  async function navigateToSelection(selection: UrlSelection, updateUrl: boolean) {
+    if (updateUrl) writeUrlSelection(selection, true);
+    const generation = taskGeneration.current + 1;
+    taskGeneration.current = generation;
+    reportRequest.current += 1;
+    requestLock.current = false;
+    jobReadSequence.current += 1;
+    setLoading(false);
+    setResponse(null);
+    setLoadError(null);
+    setRunIdError(null);
+    setPreview(null);
+    setPreviewTarget(null);
+    setPreviewError(null);
+    setPreviewBusyId(null);
+    setPreviewZoom(100);
+    previewRequest.current += 1;
+    setNarrativeState(null);
+    narrativeRequestSequence.current += 1;
+    setJob(null);
+    setJobError(null);
+    setRestoreError(null);
+    setRestoreBusy(false);
+    jobRefreshLock.current = false;
+    if (selection === null || selection.kind === "run") removeStoredJobId();
+    const selected = selection === null
+      ? null
+      : history?.items.find((item) => selection.kind === "run" ? item.run_id === selection.id : item.job_id === selection.id) ?? null;
+    setSelectedHistoryItem(selected);
+    if (selection === null) {
+      setRunId(SAMPLE_RUN_ID);
+      setResultOrigin("history");
       return;
     }
+    if (selection.kind === "run") {
+      setRunId(selection.id);
+      if (!RUN_ID_PATTERN.test(selection.id)) {
+        setRunIdError("URL 中的 run_id 格式无效，请检查归档编号。");
+        return;
+      }
+      const requestId = reportRequest.current + 1;
+      reportRequest.current = requestId;
+      requestLock.current = true;
+      setLoading(true);
+      setResultOrigin("history");
+      try {
+        const loaded = await loadAnnualAnalysis(selection.id);
+        if (taskGeneration.current === generation && reportRequest.current === requestId) {
+          setResponse(loaded);
+          setRunId(loaded.report.run_id);
+        }
+      } catch (error) {
+        if (taskGeneration.current === generation && reportRequest.current === requestId) {
+          setLoadError(errorMessage(error));
+        }
+      } finally {
+        if (taskGeneration.current === generation && reportRequest.current === requestId) {
+          requestLock.current = false;
+          setLoading(false);
+        }
+      }
+      return;
+    }
+    if (!JOB_ID_PATTERN.test(selection.id)) {
+      setRestoreError("URL 中的 job_id 格式无效，请检查任务编号。");
+      return;
+    }
+    setRestoreBusy(true);
+    try {
+      const restored = await loadAnnualAnalysisJob(selection.id);
+      if (taskGeneration.current !== generation) return;
+      setJob(restored);
+      setResultOrigin("history");
+      writeStoredJobId(restored.job_id);
+      if (restored.run_id !== null) setRunId(restored.run_id);
+      if (isSuccessfulJob(restored)) void loadReportForJob(restored, generation);
+    } catch (error) {
+      if (taskGeneration.current === generation) setRestoreError(errorMessage(error));
+    } finally {
+      if (taskGeneration.current === generation) setRestoreBusy(false);
+    }
+  }
+
+  function onOpenHistoryItem(item: AnnualAnalysisHistoryItem) {
+    setSelectedHistoryItem(item);
+    if (item.run_id !== null && item.result_available) {
+      void navigateToSelection({ kind: "run", id: item.run_id }, true);
+      return;
+    }
+    if (item.job_id !== null) {
+      void navigateToSelection({ kind: "job", id: item.job_id }, true);
+      return;
+    }
+    setHistoryError(item.issues.map((issue) => issue.message).join("；") || "此历史条目没有可读取的运行报告或任务状态。");
+  }
+
+  function onPreview(evidenceId: string) {
+    if (response === null || requestLock.current) return;
+    evidenceReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const evidence = response.verification_evidences.find((item) => item.evidence_id === evidenceId);
     if (evidence === undefined) {
+      setPreviewTarget({ kind: "verified_financial_value", evidenceId });
       setPreviewError("该证据不在服务端返回的独立核验证据索引中，未请求页图。");
       return;
     }
+    setPreviewTarget({ kind: "verified_financial_value", evidenceId });
+    void loadEvidencePreview({ kind: "verified_financial_value", evidenceId }, true);
+  }
+
+  function onNarrativePreview(evidenceId: string) {
+    if (response === null || requestLock.current) return;
+    evidenceReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const evidence = narrativeState?.value?.items.find((item) => item.evidence_id === evidenceId);
+    if (evidence === undefined) {
+      setPreviewTarget({ kind: "narrative_context", evidenceId });
+      setPreviewError("该叙述片段不在本次报告绑定的原文定位清单中，未请求页图。");
+      return;
+    }
+    setPreviewTarget({ kind: "narrative_context", evidenceId });
+    void loadEvidencePreview({ kind: "narrative_context", evidenceId }, true);
+  }
+
+  async function loadEvidencePreview(target: PreviewTarget, focus: boolean) {
+    if (response === null) return;
     const requestId = previewRequest.current + 1;
     previewRequest.current = requestId;
     setPreview(null);
     setPreviewError(null);
-    setPreviewBusyId(evidenceId);
+    setPreviewBusyId(target.evidenceId);
+    setPreviewZoom(100);
     try {
-      const loaded = await loadVerificationEvidencePreview(
-        response.report.run_id,
-        evidence,
-        response.manifest.report_sha256,
-      );
-      if (previewRequest.current !== requestId) {
-        return;
-      }
+      const loaded = target.kind === "verified_financial_value"
+        ? await (async () => {
+            const evidence = response.verification_evidences.find((item) => item.evidence_id === target.evidenceId);
+            if (evidence === undefined) throw new AnnualReportApiError("该证据不在独立核验证据索引中。");
+            return await loadVerificationEvidencePreview(response.report.run_id, evidence, response.manifest.report_sha256, focus);
+          })()
+        : await (async () => {
+            const evidence = narrativeState?.value?.items.find((item) => item.evidence_id === target.evidenceId);
+            if (evidence === undefined) throw new AnnualReportApiError("该片段不在本次报告绑定的原文定位清单中。");
+            return await loadNarrativeEvidencePreview(response.report.run_id, evidence, response.manifest.report_sha256, focus);
+          })();
+      if (previewRequest.current !== requestId) return;
       setPreview({
-        evidenceId,
+        kind: target.kind,
+        evidenceId: target.evidenceId,
         pageNumber: loaded.pageNumber,
         objectUrl: URL.createObjectURL(loaded.blob),
+        mode: loaded.mode,
+        region: loaded.region.bbox,
       });
     } catch (error) {
-      if (previewRequest.current === requestId) {
-        setPreviewError(errorMessage(error));
-      }
+      if (previewRequest.current === requestId) setPreviewError(errorMessage(error));
     } finally {
-      if (previewRequest.current === requestId) {
-        setPreviewBusyId(null);
-      }
+      if (previewRequest.current === requestId) setPreviewBusyId(null);
     }
+  }
+
+  function closeEvidenceDrawer() {
+    previewRequest.current += 1;
+    setPreviewTarget(null);
+    setPreview(null);
+    setPreviewError(null);
+    setPreviewBusyId(null);
+  }
+
+  function togglePreviewMode() {
+    if (previewTarget === null) return;
+    const currentlyFocused = preview?.mode === "focus" || preview === null;
+    void loadEvidencePreview(previewTarget, !currentlyFocused);
   }
 
   return (
     <>
       {response === null ? (
-        <section className="annual-analysis-intro" aria-labelledby="annual-analysis-title">
-          <div className="annual-analysis-copy">
-            <p className="eyebrow">FINTRACE / 年度财报</p>
-            <h1 id="annual-analysis-title">让年报分析更清晰</h1>
-            <p className="lede">
-              从财务数据、计算到原文出处，逐项呈现核验结果与需要继续查看的线索。
-            </p>
-            <div className="annual-intro-actions">
-              <button type="button" className="primary" onClick={focusUploadForm}>
-                选择年报开始分析
-              </button>
-              <button type="button" className="secondary" disabled={loading} onClick={onViewArchivedSample}>
-                {loading ? "正在读取归档…" : "查看海天 2024 已归档结果"}
-              </button>
-            </div>
-            <ul className="annual-intro-points" aria-label="分析内容">
-              <li>财务数据与计算分别核对</li>
-              <li>保留报告页码与证据来源</li>
-              <li>候选线索始终保持待核查状态</li>
-            </ul>
-          </div>
-          <AnnualAnalysisIllustration />
-        </section>
+        <header className="annual-home-heading">
+          <p className="eyebrow">FINTRACE / 本机年度分析</p>
+          <h1 id="annual-analysis-title">分析年报</h1>
+          <p>逐项核对年度数据与出处；异常线索仍需继续查证。</p>
+        </header>
+      ) : null}
+      {runIdError !== null ? (
+        <p id="annual-analysis-run-id-error" className="field-error" role="alert">
+          {runIdError}
+        </p>
       ) : null}
 
       <details className="annual-start-another" open={response === null}>
-        <summary>{response === null ? "上传年报并启动分析" : "分析另一份年报"}</summary>
+        <summary>{response === null ? "选择材料并分析" : "分析另一份年报"}</summary>
         <section id="annual-job-create" className="panel annual-job-create" aria-labelledby="annual-job-create-title">
           <div className="annual-section-heading">
             <div>
-              <p className="eyebrow">开始分析</p>
-              <h2 id="annual-job-create-title">选择年报并开始分析</h2>
+              <p className="eyebrow">年度分析 · 当前仅支持年报</p>
+              <h2 id="annual-job-create-title">选择已有材料或上传 PDF</h2>
             </div>
-            <span className="sub">标准分析默认开启</span>
           </div>
-          <p className="annual-job-intro">
-            填写公司代码与年份后选择可读取文字的 PDF。原始文件保存在本机，不会覆盖已有资料。
-          </p>
-          <form className="annual-job-form" onSubmit={onUploadAndStart} noValidate>
-          <div className="annual-job-fields">
+          <form className="annual-job-form annual-start-form" onSubmit={onStartSelectedSource} noValidate>
+            <fieldset className="annual-source-choice">
+              <legend>材料来源</legend>
+              <label className={`annual-source-option${sourceChoice === "sample" ? " selected" : ""}`}>
+                <input
+                  type="radio"
+                  name="annual-source-choice"
+                  value="sample"
+                  checked={sourceChoice === "sample"}
+                  onChange={() => setSourceChoice("sample")}
+                />
+                <span><strong>已有材料</strong><small>海天味业 · 603288 · 2024 年报</small></span>
+              </label>
+              <label id="annual-source-choice-upload" className={`annual-source-option${sourceChoice === "upload" ? " selected" : ""}`}>
+                <input
+                  id="annual-source-choice-upload-radio"
+                  type="radio"
+                  name="annual-source-choice"
+                  value="upload"
+                  checked={sourceChoice === "upload"}
+                  onChange={() => setSourceChoice("upload")}
+                />
+                <span><strong>上传年报</strong><small>选择可读取文字的 PDF</small></span>
+              </label>
+            </fieldset>
+            {sourceChoice === "sample" ? (
+              <div className="annual-selected-source">
+                <strong>海天味业 2024 年报</strong>
+                <span>603288 · 文档 cninfo-1222994233 · 使用本机已保存文件</span>
+              </div>
+            ) : (
+              <div className="annual-job-fields">
             <label>
               公司代码
               <input
@@ -681,7 +900,8 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
                 <span id="annual-job-file-error" className="field-error">{fieldErrors.file}</span>
               )}
             </div>
-          </div>
+              </div>
+            )}
 
           <fieldset className="annual-job-mode">
             <legend>分析方式</legend>
@@ -694,7 +914,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
                   checked={mode === "deterministic"}
                   onChange={() => setMode("deterministic")}
                 />
-                <span><strong>标准分析</strong><small>核对年报中的数据、计算和原文引用。</small></span>
+                <span><strong>标准分析</strong><small>本地统计与核验，不调用模型。</small></span>
               </label>
               <label className={`annual-job-mode-option annual-job-mode-experimental${mode === "m3_screening" ? " selected" : ""}`}>
                 <input
@@ -704,7 +924,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
                   checked={mode === "m3_screening"}
                   onChange={() => setMode("m3_screening")}
                 />
-                <span><strong>标准分析 + 四项试行筛查</strong><small>另用尚未校准的规则提示可继续核对的数据组合；不判断是否存在异常。</small></span>
+                <span><strong>标准分析 + 四规则试行</strong><small>不调用模型；规则阈值未校准，分数不是风险概率。</small></span>
               </label>
               <label className={`annual-job-mode-option annual-job-mode-ai${mode === "model_investigation" ? " selected" : ""}${modelCapability !== "ready" ? " is-unavailable" : ""}`}>
                 <input
@@ -715,14 +935,14 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
                   disabled={modelCapability !== "ready"}
                   onChange={() => setMode("model_investigation")}
                 />
-                <span><strong>AI 分析与评审</strong><small>使用云端模型分析本次年报的相关片段，给出判断、依据和建议核查事项。</small></span>
+                <span><strong>AI 调查与最终评审</strong><small>实际调用云端模型，仅发送本次所需年报片段；服务 ready 后可选。</small></span>
               </label>
             </div>
             <p className={`annual-job-capability${modelCapability === "ready" ? " is-ready" : ""}`} role="status">
               {modelCapabilityLoading
                 ? "正在检查 AI 服务状态…"
                 : modelCapability === "ready"
-                  ? "模型连接信息已配置。选择该方式后，相关年报片段会发送给已配置的云端模型。"
+                  ? "模型已就绪。选择 AI 模式后会实际调用已配置服务，并发送必要的年报片段。"
                   : modelCapability === "not_configured"
                     ? "当前不可用：后端尚未配置云端模型。标准分析和试行筛查仍可使用。"
                     : modelCapability === "dependency_unavailable"
@@ -742,13 +962,10 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
           </fieldset>
 
             <div className="annual-job-actions">
-              <button type="submit" className="primary" disabled={jobAction !== null}>
-                {jobAction === "uploading" ? "正在上传并启动…" : jobAction === "starting" ? "正在启动…" : "上传并开始分析"}
+              <button type="submit" className="primary" disabled={jobAction !== null || loading}>
+                {jobAction === "uploading" ? "正在上传并分析…" : jobAction !== null ? "正在启动…" : "分析年报"}
               </button>
-              <button type="button" className="secondary" disabled={jobAction !== null} onClick={onRunHaitianSample}>
-                {jobAction === "starting" ? "正在启动…" : "启动海天 2024 样例分析"}
-              </button>
-              <span className="help">此按钮会新建分析任务，并读取本机已保存的 PDF。</span>
+              <span className="help">分析结果保存在本机；文本型 PDF 暂不支持扫描件 OCR。</span>
             </div>
           </form>
           {uploadReceipt !== null ? (
@@ -765,6 +982,76 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
           ) : null}
         </section>
       </details>
+
+      <section id="annual-history-list" className="panel annual-history-list" aria-labelledby="annual-history-heading" tabIndex={-1}>
+        <div className="annual-section-heading">
+          <div>
+            <p className="eyebrow">本机归档</p>
+            <h2 id="annual-history-heading">已有分析</h2>
+          </div>
+          {history === null || history.total === 0 ? null : <span className="sub">共 {history.total} 条</span>}
+        </div>
+        {historyLoading ? <p className="status-line" role="status">正在读取本机历史…</p> : null}
+        {historyError !== null ? (
+          <div className="alert annual-history-error" role="alert">
+            <span>{historyError}</span>
+            <button type="button" className="secondary" onClick={() => setHistoryRetry((value) => value + 1)}>重新读取</button>
+          </div>
+        ) : null}
+        {!historyLoading && historyError === null && history?.items.length === 0 ? (
+          <p className="empty annual-history-empty">
+            {history.total === 0
+              ? "本机还没有可列出的年度分析。上传年报或选择已有材料后开始分析。"
+              : "这一页没有历史条目；可以返回上一页或重新读取本机历史。"}
+          </p>
+        ) : null}
+        {history !== null && history.items.length > 0 ? (
+          <ol className="annual-history-items">
+            {history.items.map((item) => {
+              const canOpenReport = item.run_id !== null && item.result_available;
+              const canOpenJob = item.job_id !== null;
+              const actionText = canOpenReport ? "打开报告" : canOpenJob ? "查看任务状态" : "报告暂不可读";
+              return (
+                <li className="annual-history-item" key={item.item_id}>
+                  <div className="annual-history-main">
+                    <strong>{item.company_code} · {item.year} 年报</strong>
+                    <span>{item.source_name ?? item.source_document_id}</span>
+                    <small>{historyTimeText(item.created_at)} · {item.replay ? "历史归档" : "本机任务"}</small>
+                  </div>
+                  <div className="annual-history-statuses" aria-label="任务与报告状态">
+                    {item.job_id === null ? null : <span>任务：{historyStatusText(item.job_status)}</span>}
+                    {item.run_id === null ? null : <span>报告：{historyStatusText(item.run_status)}</span>}
+                    <span>任务模式：{historyModeText(item.mode)}</span>
+                    {item.run_mode !== null && item.run_mode !== item.mode ? <span>报告模式：{historyModeText(item.run_mode)}</span> : null}
+                  </div>
+                  <div className="annual-history-action">
+                    <button
+                      type="button"
+                      className={canOpenReport || canOpenJob ? "text-button" : "text-button is-disabled"}
+                      disabled={!canOpenReport && !canOpenJob}
+                      onClick={() => onOpenHistoryItem(item)}
+                    >
+                      {actionText}
+                    </button>
+                  </div>
+                  {item.issues.length > 0 ? (
+                    <ul className="annual-history-issues">
+                      {item.issues.map((issue) => <li key={issue.code}>{issue.message}</li>)}
+                    </ul>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ol>
+        ) : null}
+        {history !== null && (history.total > history.limit || historyOffset > 0) ? (
+          <nav className="annual-history-pagination" aria-label="历史列表分页">
+            <button type="button" className="secondary" disabled={history.offset === 0 || historyLoading || historyError !== null} onClick={() => setHistoryOffset((offset) => Math.max(0, offset - history.limit))}>上一页</button>
+            <span>{history.items.length === 0 ? `${Math.min(history.offset, history.total)} / ${history.total} 条` : `${Math.min(history.offset + 1, history.total)}–${Math.min(history.offset + history.items.length, history.total)} / ${history.total}`}</span>
+            <button type="button" className="secondary" disabled={history.offset + history.limit >= history.total || historyLoading || historyError !== null} onClick={() => setHistoryOffset((offset) => offset + history.limit)}>下一页</button>
+          </nav>
+        ) : null}
+      </section>
 
       <details className="annual-archive-lookup">
         <summary>高级：回看已有分析报告</summary>
@@ -786,11 +1073,6 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
             </button>
           </div>
           <p className="help">示例：海天味业（603288）2024 年正式运行。</p>
-          {runIdError !== null ? (
-            <p id="annual-analysis-run-id-error" className="field-error">
-              {runIdError}
-            </p>
-          ) : null}
         </form>
       </details>
 
@@ -827,15 +1109,6 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
         </p>
       ) : null}
 
-      {response === null && !loading && loadError === null ? (
-        <section className="panel annual-empty">
-          <h2>报告会显示在这里</h2>
-          <p className="empty">
-            任务完成后自动加载对应年报结果与核验证据。也可以展开高级选项读取此前保存的分析。
-          </p>
-        </section>
-      ) : null}
-
       {response !== null ? (
         <>
           {job !== null && job.run_id === response.report.run_id && job.request.mode === "m3_screening" && response.report.m3_screening == null ? (
@@ -843,69 +1116,439 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
           ) : null}
           <AnnualReportView
             response={response}
-            preview={preview}
             previewBusyId={previewBusyId}
-            previewError={previewError}
             onPreview={onPreview}
+            narrativeState={narrativeState?.runId === response.report.run_id ? narrativeState : null}
+            onNarrativePreview={onNarrativePreview}
+            resultOrigin={resultOrigin}
+            selectedHistoryItem={selectedHistoryItem}
+            activeMode={job?.run_id === response.report.run_id ? job.request.mode : null}
           />
         </>
+      ) : null}
+      {previewTarget !== null && response !== null ? (
+        <EvidenceDrawer
+          target={previewTarget}
+          report={response.report}
+          evidence={previewTarget.kind === "verified_financial_value"
+            ? response.verification_evidences.find((item) => item.evidence_id === previewTarget.evidenceId) ?? null
+            : null}
+          metric={previewTarget.kind === "verified_financial_value"
+            ? response.report.confirmed.metrics.find((metric) => metric.verification_evidences.some((item) => item.evidence_id === previewTarget.evidenceId)) ?? null
+            : null}
+          narrative={previewTarget.kind === "narrative_context"
+            ? narrativeState?.value?.items.find((item) => item.evidence_id === previewTarget.evidenceId) ?? null
+            : null}
+          preview={preview}
+          busy={previewBusyId !== null}
+          error={previewError}
+          zoom={previewZoom}
+          drawerRef={evidenceDrawerRef}
+          closeRef={evidenceDrawerCloseRef}
+          onClose={closeEvidenceDrawer}
+          onToggleMode={togglePreviewMode}
+          onZoom={setPreviewZoom}
+        />
       ) : null}
     </>
   );
 }
 
-function AnnualAnalysisIllustration() {
+type CoreMetricSpec = typeof CORE_METRICS[number];
+type AnnualReport = AnnualAnalysisResponse["report"];
+
+type CoreMetricRow = CoreMetricSpec & {
+  currentMetric: ConfirmedMetric | undefined;
+  comparativeMetric: ConfirmedMetric | undefined;
+  currentEvidence: VerificationEvidence | null;
+  comparativeEvidence: VerificationEvidence | null;
+  difference: ConfirmedCalculation | null;
+  yoy: ConfirmedCalculation | null;
+  comparisonReason: string;
+  yoyReason: string;
+};
+
+function trustedCompanyName(companyId: string, documentId: string, sourceSha256: string): string {
+  return companyId === HAITIAN_SAMPLE_REQUEST.company_id &&
+    documentId === HAITIAN_SAMPLE_REQUEST.document_id &&
+    sourceSha256.toLowerCase() === HAITIAN_SAMPLE_REQUEST.sha256
+    ? "海天味业"
+    : companyId;
+}
+
+function buildCoreMetricRow(
+  spec: CoreMetricSpec,
+  report: AnnualReport,
+  evidenceById: Map<string, VerificationEvidence>,
+): CoreMetricRow {
+  const currentMetric = findCoreFact(spec.metricId, "current", report, evidenceById);
+  const comparativeMetric = findCoreFact(spec.metricId, "comparative", report, evidenceById);
+  const currentEvidence = currentMetric === undefined ? null : verifiedMetricEvidences(currentMetric, evidenceById)[0] ?? null;
+  const comparativeEvidence = comparativeMetric === undefined ? null : verifiedMetricEvidences(comparativeMetric, evidenceById)[0] ?? null;
+  const inputGate = coreComparisonInputReason(currentMetric, comparativeMetric, report, evidenceById);
+  const differenceResult = inputGate === null
+    ? verifiedComparisonCalculation(`calc:annual_difference:${spec.metricId}`, "annual_difference", currentMetric!, comparativeMetric!, report, evidenceById)
+    : { value: null, reason: inputGate };
+  const yoyBase = comparativeMetric === undefined ? null : normalizeExactDecimal(comparativeMetric.normalized_value);
+  const yoyBaseIsPositive = yoyBase !== null && isPositiveExactDecimal(yoyBase);
+  const yoyResult = inputGate !== null
+    ? { value: null, reason: inputGate }
+    : !yoyBaseIsPositive
+      ? { value: null, reason: "比较期基数为零、负数或未确认，同比弃权" }
+      : verifiedComparisonCalculation(`calc:annual_yoy_rate:${spec.metricId}`, "annual_yoy_rate", currentMetric!, comparativeMetric!, report, evidenceById);
+  return {
+    ...spec,
+    currentMetric,
+    comparativeMetric,
+    currentEvidence,
+    comparativeEvidence,
+    difference: differenceResult.value,
+    yoy: yoyResult.value,
+    comparisonReason: differenceResult.reason,
+    yoyReason: yoyResult.reason,
+  };
+}
+
+function findCoreFact(
+  metricId: string,
+  role: "current" | "comparative",
+  report: AnnualReport,
+  evidenceById: Map<string, VerificationEvidence>,
+): ConfirmedMetric | undefined {
+  const year = role === "current" ? report.report_year : report.report_year - 1;
+  const matches = report.confirmed.metrics.filter((metric) =>
+    metric.metric_id === metricId && metric.comparison_role === role && metric.period_end === `${year}-12-31`,
+  );
+  if (matches.length !== 1) return undefined;
+  const metric = matches[0];
+  if (
+    metric.report_year !== report.report_year ||
+    (metric.company_id !== undefined && metric.company_id !== report.company_id) ||
+    metric.source_document_id !== report.source_document_id ||
+    metric.source_sha256.toLowerCase() !== report.source_sha256.toLowerCase() ||
+    metric.period_start !== `${year}-01-01` ||
+    metric.period_end !== `${year}-12-31` ||
+    !isIndependentlyVerifiedMetric(metric) ||
+    verifiedMetricEvidences(metric, evidenceById).length === 0
+  ) return undefined;
+  return metric;
+}
+
+function coreComparisonInputReason(
+  current: ConfirmedMetric | undefined,
+  comparative: ConfirmedMetric | undefined,
+  report: AnnualReport,
+  evidenceById: Map<string, VerificationEvidence>,
+): string | null {
+  if (current === undefined || comparative === undefined) return "本期或比较期事实缺少匹配的独立核验证据";
+  const comparability = report.comparability;
+  if (
+    comparability === null || comparability.status !== "verified" ||
+    comparability.document_id !== report.source_document_id ||
+    comparability.source_sha256?.toLowerCase() !== report.source_sha256.toLowerCase() ||
+    comparability.report_year !== report.report_year ||
+    comparability.current_year !== report.report_year ||
+    comparability.comparative_year !== report.report_year - 1
+  ) return "报告可比性身份或期间依据不完整，年度比较暂不能确认";
+  if (
+    current.scope.trim() === "" || comparative.scope.trim() === "" ||
+    current.scope === "unknown" || comparative.scope === "unknown" ||
+    current.scope !== comparative.scope
+  ) return "两期合并或母公司口径不一致或未确认";
+  if (
+    current.statement_type === undefined || comparative.statement_type === undefined ||
+    current.statement_type === "" || current.statement_type !== comparative.statement_type
+  ) return "两期报表类别缺失或不一致";
+  if (current.period_type !== "duration" || comparative.period_type !== "duration") {
+    return "两期事实必须明确为期间金额，才能进行完整年度比较";
+  }
+  const currentEvidence = verifiedMetricEvidences(current, evidenceById);
+  const comparativeEvidence = verifiedMetricEvidences(comparative, evidenceById);
+  const currentUnits = uniqueKnown(currentEvidence.map((item) => item.unit));
+  const comparativeUnits = uniqueKnown(comparativeEvidence.map((item) => item.unit));
+  if (currentUnits.length !== 1 || comparativeUnits.length !== 1 || currentUnits[0] !== "元" || comparativeUnits[0] !== "元") {
+    return "两期金额单位未能由匹配证据确认一致";
+  }
+  const currentCurrencies = uniqueKnown(currentEvidence.map((item) => item.currency).map(normalizeCurrency));
+  const comparativeCurrencies = uniqueKnown(comparativeEvidence.map((item) => item.currency).map(normalizeCurrency));
+  if (
+    currentCurrencies.length !== 1 || comparativeCurrencies.length !== 1 ||
+    currentCurrencies[0] !== "RMB" || comparativeCurrencies[0] !== "RMB" ||
+    normalizeCurrency(current.currency) !== "RMB" || normalizeCurrency(comparative.currency) !== "RMB"
+  ) return "币种未能由两期匹配证据确认一致";
+  return null;
+}
+
+function verifiedComparisonCalculation(
+  calculationId: string,
+  formulaId: "annual_difference" | "annual_yoy_rate",
+  current: ConfirmedMetric,
+  comparative: ConfirmedMetric,
+  report: AnnualReport,
+  evidenceById: Map<string, VerificationEvidence>,
+): { value: ConfirmedCalculation | null; reason: string } {
+  const calculation = report.confirmed.analyses.find((item) => item.calculation_id === calculationId);
+  if (
+    calculation === undefined || calculation.formula_id !== formulaId || calculation.status !== "succeeded" ||
+    typeof calculation.output_value !== "string" || calculation.independent_verification?.status !== "verified" ||
+    calculation.independent_verification.calculation_id !== calculation.calculation_id ||
+    normalizeExactDecimal(calculation.output_value) === null ||
+    normalizeExactDecimal(calculation.output_value) !== normalizeExactDecimal(calculation.independent_verification.recomputed_value) ||
+    calculation.input_fact_ids.length !== 2 ||
+    !calculation.input_fact_ids.includes(current.fact_id) || !calculation.input_fact_ids.includes(comparative.fact_id) ||
+    new Set(calculation.input_fact_ids).size !== 2 ||
+    (formulaId === "annual_difference" && calculation.unit !== null && calculation.unit !== "元") ||
+    (formulaId === "annual_yoy_rate" && calculation.unit !== null && calculation.unit !== "ratio")
+  ) return { value: null, reason: "归档计算、输入事实或独立重算未通过绑定核对" };
+  const currentEvidenceIds = new Set(verifiedMetricEvidences(current, evidenceById).map((item) => item.evidence_id));
+  const comparativeEvidenceIds = new Set(verifiedMetricEvidences(comparative, evidenceById).map((item) => item.evidence_id));
+  const claim = report.verified_claims.find((item) => item.claim_id === `claim:calculation:${calculationId}`);
+  if (
+    claim === undefined || claim.verification_status !== "verified" || claim.independent_verification?.status !== "verified" ||
+    claim.independent_verification.claim_id !== claim.claim_id ||
+    !claim.calculation_ids.includes(calculationId) ||
+    !claim.supporting_fact_ids.includes(current.fact_id) || !claim.supporting_fact_ids.includes(comparative.fact_id) ||
+    !Array.from(currentEvidenceIds).some((id) => claim.supporting_evidence_ids.includes(id)) ||
+    !Array.from(comparativeEvidenceIds).some((id) => claim.supporting_evidence_ids.includes(id))
+  ) return { value: null, reason: "对应核验主张缺失或未绑定两侧事实与出处" };
+  return { value: calculation, reason: "比较依据尚未满足展示条件" };
+}
+
+function uniqueKnown(values: Array<string | null | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => typeof value === "string" && value.trim() !== ""))];
+}
+
+function normalizeCurrency(value: string | null | undefined): string | null {
+  if (value === "人民币" || value === "RMB" || value === "CNY") return "RMB";
+  return null;
+}
+
+function isPositiveExactDecimal(value: string): boolean {
+  const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(value);
+  return match !== null && match[1] !== "-" && BigInt(`${match[2]}${match[3] ?? ""}`) > 0n;
+}
+
+function MetricAmount({ metric, evidence, evidenceById }: {
+  metric: ConfirmedMetric;
+  evidence: VerificationEvidence | null;
+  evidenceById: Map<string, VerificationEvidence>;
+}) {
+  const validEvidences = verifiedMetricEvidences(metric, evidenceById);
+  const units = uniqueKnown(validEvidences.map((item) => item.unit));
+  const unit = units.length === 1 ? units[0] : null;
+  const amount = unit === "元" ? formatInHundredMillions(metric.normalized_value) : null;
+  const displayValue = amount === null ? formatExactFinancialValue(metric.normalized_value) : amount;
+  const displayUnit = unit === "元" && amount !== null ? "亿元" : unit ?? "单位待定位";
+  const displayCurrency = evidence?.currency ? currencyText(evidence.currency) : "币种待定位";
   return (
-    <div className="annual-analysis-illustration" aria-hidden="true">
-      <svg viewBox="0 0 520 370" role="presentation" focusable="false">
-        <defs>
-          <linearGradient id="report-paper" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stopColor="#ffffff" />
-            <stop offset="1" stopColor="#e9f3ff" />
-          </linearGradient>
-          <linearGradient id="report-blue" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stopColor="#58a5ff" />
-            <stop offset="1" stopColor="#1677ff" />
-          </linearGradient>
-          <filter id="report-shadow" x="-30%" y="-30%" width="160%" height="170%">
-            <feDropShadow dx="0" dy="16" stdDeviation="14" floodColor="#4e8fe0" floodOpacity="0.16" />
-          </filter>
-        </defs>
-        <path d="M20 302c74-58 131-77 204-57 76 21 111-18 169-60 43-31 80-39 113-23v208H20z" fill="#d9eaff" opacity=".52" />
-        <path d="M18 320c88-47 146-43 218-18 64 22 132 20 194-12 29-15 53-24 78-23" fill="none" stroke="#b7d7ff" strokeWidth="2" opacity=".7" />
-        <g filter="url(#report-shadow)" transform="rotate(-5 232 166)">
-          <rect x="94" y="33" width="260" height="290" rx="19" fill="url(#report-paper)" stroke="#c8def9" />
-          <rect x="122" y="62" width="68" height="9" rx="4.5" fill="#9cc8ff" />
-          <rect x="122" y="83" width="128" height="6" rx="3" fill="#d9e8fb" />
-          <rect x="122" y="112" width="204" height="91" rx="12" fill="#f2f7ff" stroke="#dfeafa" />
-          <path d="M143 183v-20h17v20m12 0v-38h17v38m12 0v-53h17v53m12 0v-31h17v31" fill="url(#report-blue)" opacity=".86" />
-          <path d="M139 183h164" stroke="#c5d8ef" strokeWidth="2" />
-          <rect x="122" y="221" width="124" height="7" rx="3.5" fill="#d4e4f7" />
-          <rect x="122" y="239" width="190" height="7" rx="3.5" fill="#e0ebf8" />
-          <rect x="122" y="257" width="156" height="7" rx="3.5" fill="#e0ebf8" />
-          <rect x="122" y="282" width="80" height="20" rx="7" fill="#e7f2ff" />
-          <circle cx="298" cy="291" r="12" fill="#dff6ec" />
-          <path d="m292 291 4 4 8-9" fill="none" stroke="#24a971" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-        </g>
-        <g filter="url(#report-shadow)" transform="rotate(8 371 202)">
-          <rect x="319" y="85" width="142" height="190" rx="16" fill="#ffffff" stroke="#d0e3fb" />
-          <rect x="339" y="105" width="70" height="7" rx="3.5" fill="#b8d7ff" />
-          <rect x="339" y="121" width="101" height="6" rx="3" fill="#e0ebf8" />
-          <rect x="339" y="151" width="102" height="84" rx="10" fill="#f2f7ff" />
-          <path d="M355 220v-24h13v24m9 0v-39h13v39m9 0v-29h13v29" fill="#70afff" />
-          <path d="M351 220h79" stroke="#c5d8ef" strokeWidth="2" />
-          <rect x="339" y="246" width="63" height="8" rx="4" fill="#e2edfa" />
-        </g>
-        <g transform="rotate(-14 362 257)">
-          <circle cx="363" cy="246" r="48" fill="#ffffff" fillOpacity=".5" stroke="#1677ff" strokeWidth="12" />
-          <circle cx="363" cy="246" r="37" fill="#cce4ff" fillOpacity=".38" />
-          <path d="m397 281 50 47" stroke="#1677ff" strokeWidth="17" strokeLinecap="round" />
-          <path d="m400 284 39 37" stroke="#5ba2ff" strokeWidth="5" strokeLinecap="round" />
-        </g>
-        <circle cx="94" cy="92" r="5" fill="#7bb6ff" />
-        <circle cx="443" cy="55" r="4" fill="#b8d7ff" />
-        <circle cx="465" cy="302" r="6" fill="#9dcbff" />
-      </svg>
+    <>
+      <strong>{displayValue}</strong>
+      <small>{displayCurrency} · {displayUnit} · {scopeText(metric.scope)}</small>
+    </>
+  );
+}
+
+function formatSignedAmount(value: string | number | null): string {
+  if (typeof value !== "string") return "差额待核实";
+  const normalized = normalizeExactDecimal(value);
+  if (normalized === null) return "差额待核实";
+  const isNegative = normalized.startsWith("-");
+  const magnitude = normalized.replace(/^-/, "");
+  const formatted = formatInHundredMillions(magnitude);
+  if (formatted === null) return "差额待核实";
+  const isZero = /^0(?:\.0+)?$/.test(magnitude);
+  return `${isZero ? "" : isNegative ? "−" : "+"}${formatted} 亿元`;
+}
+
+function formatSignedPercent(value: string | number | null): string {
+  if (typeof value !== "string") return "同比待核实";
+  const normalized = normalizeExactDecimal(value);
+  if (normalized === null) return "同比待核实";
+  const isNegative = normalized.startsWith("-");
+  const [whole, fraction = ""] = normalized.replace(/^-/, "").split(".");
+  const scale = 10n ** BigInt(fraction.length);
+  const digits = BigInt(`${whole}${fraction}`);
+  const hundredths = (digits * 10000n * 2n + scale) / (scale * 2n);
+  const fixed = hundredths.toString().padStart(3, "0");
+  const integer = fixed.slice(0, -2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  const sign = hundredths === 0n ? "" : isNegative ? "−" : "+";
+  return `${sign}${integer}.${fixed.slice(-2)}%`;
+}
+
+function NarrativeEvidenceSection({ state, previewBusyId, onPreview }: {
+  state: NarrativeLoadState;
+  previewBusyId: string | null;
+  onPreview: (evidenceId: string) => void;
+}) {
+  const value = state?.value ?? null;
+  return (
+    <section className="panel annual-narrative-evidence" aria-labelledby="annual-narrative-title">
+      <div className="annual-section-heading">
+        <div>
+          <p className="eyebrow">年报原文线索</p>
+          <h3 id="annual-narrative-title">解释文本与原文位置</h3>
+        </div>
+      </div>
+      <p className="annual-narrative-disclaimer">原文片段定位/模型观点引用，非独立因果核验。片段出处可核对，但不能单独证明经营变化原因。</p>
+      {state === null || (value === null && state.error === null) ? <p className="status-line" role="status">正在读取原文片段定位…</p> : null}
+      {state?.error !== null && state?.error !== undefined ? <p className="alert" role="alert">原文片段定位暂不可用：{state.error}</p> : null}
+      {value !== null && value.items.length === 0 ? <p className="empty">这份报告没有经过来源校验的叙述片段定位记录。</p> : null}
+      {value !== null && value.items.length > 0 ? (
+        <div className="annual-narrative-items">
+          {value.items.map((item: NarrativeEvidence) => (
+            <article className="annual-narrative-item" key={item.evidence_id}>
+              <div className="annual-narrative-item-heading">
+                <strong>{narrativeSectionLabel(item.section_label)}</strong>
+                <span>PDF 第 {item.pdf_page} 页</span>
+              </div>
+              <blockquote>{item.raw_text}</blockquote>
+              <p><strong>定位说明：</strong>{item.selection_reason.trim() || "报告未记录定位说明。"}</p>
+              <button type="button" className="secondary" onClick={() => onPreview(item.evidence_id)} disabled={previewBusyId === item.evidence_id}>
+                {previewBusyId === item.evidence_id ? "正在读取页图…" : "查看原文页图"}
+              </button>
+            </article>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function EvidenceDrawer({
+  target,
+  evidence,
+  metric,
+  narrative,
+  report,
+  preview,
+  busy,
+  error,
+  zoom,
+  drawerRef,
+  closeRef,
+  onClose,
+  onToggleMode,
+  onZoom,
+}: {
+  target: PreviewTarget;
+  evidence: VerificationEvidence | null;
+  metric: ConfirmedMetric | null;
+  narrative: NarrativeEvidence | null;
+  report: AnnualReport;
+  preview: Preview | null;
+  busy: boolean;
+  error: string | null;
+  zoom: number;
+  drawerRef: RefObject<HTMLElement | null>;
+  closeRef: RefObject<HTMLButtonElement | null>;
+  onClose: () => void;
+  onToggleMode: () => void;
+  onZoom: (zoom: number) => void;
+}) {
+  const isNarrative = target.kind === "narrative_context";
+  const pageNumber = evidence?.pdf_page ?? narrative?.pdf_page ?? preview?.pageNumber ?? null;
+  const title = isNarrative ? "原文片段定位" : "独立核验金额证据";
+  const displayRow = evidence?.row_label?.trim() || "待定位";
+  return (
+    <div
+      className="annual-evidence-backdrop"
+      onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}
+    >
+      <section
+        className={`annual-evidence-drawer${isNarrative ? " is-narrative" : " is-financial-value"}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="annual-evidence-drawer-title"
+        tabIndex={-1}
+        ref={drawerRef}
+      >
+        <header className="annual-evidence-drawer-heading">
+          <div>
+            <p className="eyebrow">{isNarrative ? "叙述片段" : "独立核验白名单"} · {pageNumber === null ? "页码待定位" : `PDF 第 ${pageNumber} 页`}</p>
+            <h2 id="annual-evidence-drawer-title">{title}</h2>
+          </div>
+          <button ref={closeRef} type="button" className="secondary" onClick={onClose}>关闭</button>
+        </header>
+
+        {isNarrative ? (
+          <p className="annual-evidence-interpretation">{NARRATIVE_EVIDENCE_INTERPRETATION_LABEL}。核对页图只能确认原文定位，不确认模型观点与事实之间的因果关系。</p>
+        ) : (
+          <p className="annual-evidence-interpretation">页图只对应已独立核验的财务事实。来源页本身不构成异常或舞弊结论。</p>
+        )}
+
+        <div className="annual-evidence-toolbar" aria-label="页图显示设置">
+          <button type="button" className="secondary" onClick={onToggleMode} disabled={busy || error !== null}>
+            {preview?.mode === "full_page" ? "聚焦证据区域" : "查看整页"}
+          </button>
+          <div className="annual-evidence-zoom" aria-label={`缩放 ${zoom}%`}>
+            <button type="button" className="secondary" onClick={() => onZoom(Math.max(75, zoom - 25))} disabled={zoom <= 75} aria-label="缩小页图">−</button>
+            <span>{zoom}%</span>
+            <button type="button" className="secondary" onClick={() => onZoom(Math.min(200, zoom + 25))} disabled={zoom >= 200} aria-label="放大页图">+</button>
+          </div>
+        </div>
+
+        {busy ? <p className="status-line" role="status">正在读取并校验 PDF 页图…</p> : null}
+        {error !== null ? <p className="alert annual-evidence-error" role="alert">{error}</p> : null}
+        {preview !== null ? (
+          <div className="annual-evidence-image-viewport">
+            <img
+              src={preview.objectUrl}
+              alt={`${isNarrative ? "原文片段定位" : "独立核验金额证据"}，PDF 第 ${preview.pageNumber} 页，${preview.mode === "focus" ? "证据区域" : "整页"}`}
+              className="annual-evidence-image"
+              style={{ width: `${zoom}%` }}
+            />
+          </div>
+        ) : null}
+
+        <section className="annual-evidence-source-detail" aria-labelledby="annual-evidence-source-title">
+          <h3 id="annual-evidence-source-title">来源与定位详情</h3>
+          {isNarrative && narrative !== null ? (
+            <>
+              <blockquote className="annual-evidence-raw-text">{narrative.raw_text}</blockquote>
+              <dl className="annual-evidence-details">
+                <dt>章节</dt><dd>{narrativeSectionLabel(narrative.section_label)}</dd>
+                <dt>定位原因</dt><dd>{narrative.selection_reason.trim() || "报告未记录"}</dd>
+                <dt>引用线索</dt><dd>{narrative.cited_by_signal_ids.length ? narrative.cited_by_signal_ids.map(signalTitle).join("、") : "报告未记录"}</dd>
+                <dt>页码</dt><dd>{narrative.pdf_page}</dd>
+                <dt>来源文档</dt><dd><code>{narrative.source_document_id}</code></dd>
+              </dl>
+              <details className="annual-technical-record annual-evidence-technical">
+                <summary>归档引用与来源校验</summary>
+                <dl>
+                  <dt>证据编号</dt><dd><code>{narrative.evidence_id}</code></dd>
+                  <dt>来源 SHA256</dt><dd><code>{narrative.source_sha256}</code></dd>
+                  <dt>原始章节标识</dt><dd><code>{narrative.section_label || "未记录"}</code></dd>
+                  <dt>引用线索编号</dt><dd><code>{narrative.cited_by_signal_ids.join("、") || "未记录"}</code></dd>
+                  <dt>PDF 区域</dt><dd><code>{JSON.stringify(narrative.bbox)}</code></dd>
+                </dl>
+              </details>
+            </>
+          ) : isNarrative ? <p className="annual-evidence-pending">原文片段不在已核对的定位清单中，详情待定位。</p> : (
+            <>
+              <dl className="annual-evidence-details">
+                <dt>表名</dt><dd>{evidence?.table_title?.trim() || "待定位"}</dd>
+                <dt>行</dt><dd>{displayRow}</dd>
+                <dt>列</dt><dd>{evidence?.column_label?.trim() || "待定位"}</dd>
+                <dt>年报原值</dt><dd>{evidence?.value_raw?.trim() || "待定位"}</dd>
+                <dt>标准值</dt><dd>{evidence?.value_normalized?.trim() || metric?.normalized_value || "待定位"}</dd>
+                <dt>单位 / 币种</dt><dd>{evidence?.unit?.trim() || "待定位"} · {evidence?.currency?.trim() || "待定位"}</dd>
+                <dt>期间</dt><dd>{metric?.period_start && metric.period_end ? `${metric.period_start} 至 ${metric.period_end}` : "待定位"}</dd>
+                <dt>口径</dt><dd>{metric === null ? "待定位" : scopeText(metric.scope)}</dd>
+                <dt>页码</dt><dd>{evidence?.pdf_page ?? "待定位"}</dd>
+                <dt>来源文档</dt><dd><code>{evidence?.document_id ?? report.source_document_id}</code></dd>
+              </dl>
+              <details className="annual-technical-record annual-evidence-technical">
+                <summary>核验证据编号与区域坐标</summary>
+                <dl>
+                  <dt>证据编号</dt><dd><code>{evidence?.evidence_id ?? target.evidenceId}</code></dd>
+                  <dt>来源 SHA256</dt><dd><code>{evidence?.source_sha256 ?? report.source_sha256}</code></dd>
+                  <dt>PDF 区域</dt><dd><code>{evidence ? JSON.stringify(evidence.value_region.bbox) : "待定位"}</code></dd>
+                </dl>
+              </details>
+            </>
+          )}
+        </section>
+      </section>
     </div>
   );
 }
@@ -990,66 +1633,74 @@ function JobStatusPanel({
 
 function AnnualReportView({
   response,
-  preview,
   previewBusyId,
-  previewError,
   onPreview,
+  narrativeState,
+  onNarrativePreview,
+  resultOrigin,
+  selectedHistoryItem,
+  activeMode,
 }: {
   response: AnnualAnalysisResponse;
-  preview: Preview | null;
   previewBusyId: string | null;
-  previewError: string | null;
   onPreview: (evidenceId: string) => void;
+  narrativeState: NarrativeLoadState;
+  onNarrativePreview: (evidenceId: string) => void;
+  resultOrigin: "new" | "history";
+  selectedHistoryItem: AnnualAnalysisHistoryItem | null;
+  activeMode: AnnualAnalysisJobMode | null;
 }) {
   const { report, manifest, verification_evidences: evidenceIndex } = response;
+  const evidenceById = new Map(evidenceIndex.map((evidence) => [evidence.evidence_id, evidence]));
   const verifiedMetricCount = report.confirmed.metrics.filter(isIndependentlyVerifiedMetric).length;
   const verifiedCalculationCount = report.confirmed.analyses.filter(isIndependentlyVerifiedCalculation).length;
-  const verifiedClaimCount = report.verified_claims.filter(
-    (claim) => claim.verification_status === "verified" && claim.independent_verification?.status === "verified",
-  ).length;
-  const coreMetrics = CORE_METRICS.map((spec) => {
-    const metric = report.confirmed.metrics.find(
-      (item) =>
-        item.metric_id === spec.metricId &&
-        item.comparison_role === "current" &&
-        item.period_end === `${report.report_year}-12-31`,
-    );
-    const comparativeMetric = report.confirmed.metrics.find(
-      (item) =>
-        item.metric_id === spec.metricId &&
-        item.comparison_role === "comparative" &&
-        item.period_end === `${report.report_year - 1}-12-31`,
-    );
-    return {
-      ...spec,
-      metric,
-      verified: metric !== undefined && isIndependentlyVerifiedMetric(metric),
-      comparativeMetric,
-      comparativeVerified: comparativeMetric !== undefined && isIndependentlyVerifiedMetric(comparativeMetric),
-    };
-  });
-  const evidenceById = new Map(evidenceIndex.map((evidence) => [evidence.evidence_id, evidence]));
+  const coreMetrics = CORE_METRICS.map((spec) => buildCoreMetricRow(spec, report, evidenceById));
   const reportModelInvestigation = report.model_investigation;
   const reportModelReview = report.model_review ?? null;
-  const signalCount = report.pending_review.candidate_signals.length;
   const candidateCount = report.pending_review.candidate_signals.filter((item) => item.status === "candidate").length;
   const abstainedSignalCount = report.pending_review.candidate_signals.filter((item) => item.status === "abstained").length;
-  const otherSignalCount = signalCount - candidateCount - abstainedSignalCount;
   const sourceMatches = report.source_sha256 === manifest.source_pdf_sha256;
+  const companyName = trustedCompanyName(report.company_id, report.source_document_id, report.source_sha256);
+  const mode = activeMode ?? selectedHistoryItem?.run_mode ?? selectedHistoryItem?.mode ??
+    (report.m3_screening !== null && report.m3_screening !== undefined ? "m3_screening" : null);
+  const modeText = mode === "deterministic" ? "标准分析" : mode === "m3_screening" ? "四规则试行" :
+    mode === "model_investigation" ? "AI 调查与评审" : report.model_called ? "模型调用记录" : "模式未记录";
+  const headlineRates = coreMetrics
+    .filter((item) => item.yoy !== null)
+    .map((item) => `${item.label}同比 ${formatSignedPercent(item.yoy!.output_value)}`);
+  const candidateSignals = report.pending_review.candidate_signals.filter((item) => item.status === "candidate");
+  const candidateReasons = candidateSignals.map((item) => item.reason?.trim() ?? "").filter(Boolean);
+  const investigationRecord = record(report.model_investigation);
+  const investigationItems = Array.isArray(investigationRecord?.items)
+    ? investigationRecord.items.map(record).filter((item): item is AnnualReportRecord => item !== null)
+    : [];
+  const hasUnverifiedExplanation = (reportModelReview?.reasons.some((item) => item.text.trim() !== "") ?? false) ||
+    investigationItems.some((item) => [item.interpretation, item.explanation, item.text, item.reason].some((value) => stringValue(value)?.trim()));
+  const primaryReason = candidateReasons.length > 0
+    ? `报告记录原因（未独立证实）：${candidateReasons.join("；")}`
+    : hasUnverifiedExplanation
+      ? "报告包含模型解释，但解释尚未独立核实；变化原因仍待确认。"
+      : "原因尚未说明。";
 
   return (
     <div className="annual-report" aria-label="年度分析报告">
       <header id="annual-report-heading" className="annual-report-heading" tabIndex={-1}>
         <div>
-          <p className="eyebrow">{report.company_id} · {report.report_year} 年报</p>
-          <h2>{report.company_id} · {report.report_year} 年报分析</h2>
+          <p className="eyebrow">{companyName} · {report.company_id} · {report.report_year} 年报</p>
+          <h2>{companyName} {report.company_id} · {report.report_year} 年报</h2>
           <p className="annual-report-title-caption">{report.title?.trim() || "年度分析归档结果"}</p>
-          <p className="annual-run-id">归档编号 <code>{report.run_id}</code></p>
+          <p className="annual-run-id">{resultOrigin === "new" ? "本次运行" : "历史归档"} · {modeText} · {report.model_called ? "已调用模型" : "模型未调用"}</p>
         </div>
         <span className={manifest.status === "completed_with_issues" ? "review-chip" : "annual-status-chip"}>
           {manifestStatusText(manifest.status)}
         </span>
       </header>
+
+      {selectedHistoryItem?.issues.length ? (
+        <ul className="annual-report-history-issues" aria-label="历史归档问题">
+          {selectedHistoryItem.issues.map((issue) => <li key={issue.code}>{issue.message}</li>)}
+        </ul>
+      ) : null}
 
       <nav className="annual-report-nav" aria-label="报告内容">
         <a href="#annual-model-review" onClick={expandReportDetails}>
@@ -1068,108 +1719,72 @@ function AnnualReportView({
         <a href="#annual-scope" onClick={expandReportDetails}>分析范围</a>
       </nav>
 
-      <ModelReviewSection
-        review={reportModelReview}
-        report={report}
-        evidenceById={evidenceById}
-        previewBusyId={previewBusyId}
-        onPreview={onPreview}
-      />
-
       <section id="annual-financial-overview" className="annual-financial-overview" aria-labelledby="annual-indicators-title" tabIndex={-1}>
         <div className="annual-overview-heading">
           <div>
-            <p className="eyebrow">本期核心数据</p>
-            <h3 id="annual-indicators-title">财务指标概览</h3>
+            <p className="eyebrow">已核验事实与归档计算</p>
+            <h3 id="annual-indicators-title">年度核心指标</h3>
           </div>
-          <span>{report.report_year} 年度 · 归档报告数据</span>
+          <span>{report.report_year} 年 / {report.report_year - 1} 年 · 期间与口径见各项记录</span>
         </div>
-        <div className="annual-indicator-grid">
-          {coreMetrics.map((item) => (
-            <article key={item.metricId} className={`annual-indicator-card annual-indicator-${item.tone}`}>
-              <div className="annual-indicator-topline">
-                <span className="annual-indicator-symbol" aria-hidden="true"><IndicatorGlyph /></span>
-                <span className={item.verified ? "verification-chip" : "review-chip"}>
-                  {item.verified ? "独立核验通过" : "待核验"}
-                </span>
-              </div>
-              <h4>{item.label}</h4>
-              <strong className="annual-indicator-value">
-                {item.verified && item.metric !== undefined
-                  ? formatCoreMetricDisplay(item.metric, evidenceById).value
-                  : "待核验"}
-              </strong>
-              <p>
-                {item.verified && item.metric !== undefined
-                  ? `${item.metric.currency || "币种未记录"} · ${formatCoreMetricDisplay(item.metric, evidenceById).unit}`
-                  : "独立核验通过前不展示金额"}
-              </p>
-            </article>
-          ))}
-        </div>
-        <p className="annual-indicator-footnote">
-          本期指标来自已核验年报数据，金额仅作展示舍入；完整数值与核验证据见下方“核实数据”。
+        <p className="annual-primary-finding">
+          <strong>主要变化</strong>
+          {headlineRates.length > 0 ? <span>{headlineRates.join("；")}。</span> : <span>当前归档没有满足展示条件的同比计算。</span>}
+          <span className="annual-finding-candidate">{candidateSignals.length > 0 ? "候选待核查" : "变化原因尚未核实"}</span>
+          <span className="annual-primary-reason">{primaryReason}</span>
+          <span>数值核验不代表因果判断或舞弊结论。</span>
         </p>
-        <section className="annual-year-comparison" aria-labelledby="annual-year-comparison-title">
-          <div className="annual-year-comparison-heading">
-            <div>
-              <p className="eyebrow">年报披露值</p>
-              <h4 id="annual-year-comparison-title">两年数据对照</h4>
-            </div>
-            <span>按报告列示期间展示，不推算增幅</span>
-          </div>
-          <div className="annual-year-comparison-table-wrap">
-            <table className="annual-year-comparison-table">
-              <thead>
-                <tr>
-                  <th scope="col">指标</th>
-                  <th scope="col">{report.report_year - 1} 年</th>
-                  <th scope="col">{report.report_year} 年</th>
+        <div className="annual-core-table-wrap">
+          <table className="annual-core-table">
+            <thead>
+              <tr>
+                <th scope="col">指标</th>
+                <th scope="col">{report.report_year} 本期</th>
+                <th scope="col">{report.report_year - 1} 比较期</th>
+                <th scope="col">年度差额</th>
+                <th scope="col">同比</th>
+                <th scope="col">核验与原文</th>
+              </tr>
+            </thead>
+            <tbody>
+              {coreMetrics.map((item) => (
+                <tr key={item.metricId}>
+                  <th scope="row">{item.label}</th>
+                  <td>{item.currentMetric === undefined
+                    ? <span className="annual-comparison-pending">金额待核实</span>
+                    : <MetricAmount metric={item.currentMetric} evidence={item.currentEvidence} evidenceById={evidenceById} />}</td>
+                  <td>{item.comparativeMetric === undefined
+                    ? <span className="annual-comparison-pending">金额待核实</span>
+                    : <MetricAmount metric={item.comparativeMetric} evidence={item.comparativeEvidence} evidenceById={evidenceById} />}</td>
+                  <td>{item.difference === null
+                    ? <span className="annual-comparison-pending" title={item.comparisonReason}>{item.comparisonReason}</span>
+                    : <strong className="annual-core-computed-value">{formatSignedAmount(item.difference.output_value)}</strong>}</td>
+                  <td>{item.yoy === null
+                    ? <span className="annual-comparison-pending" title={item.comparisonReason}>{item.yoyReason}</span>
+                    : <strong className="annual-core-computed-value">{formatSignedPercent(item.yoy.output_value)}</strong>}</td>
+                  <td>
+                    <span className={item.difference === null ? "review-chip" : "verification-chip"}>{item.difference === null ? "比较暂不能确认" : "独立核验通过"}</span>
+                    <div className="annual-core-evidence-links">
+                      {item.currentEvidence === null ? <span>本期原文待定位</span> : <button type="button" className="text-button" onClick={() => onPreview(item.currentEvidence!.evidence_id)} disabled={previewBusyId === item.currentEvidence.evidence_id}>{`本期 PDF 第 ${item.currentEvidence.pdf_page} 页`}</button>}
+                      {item.comparativeEvidence === null ? null : <button type="button" className="text-button" onClick={() => onPreview(item.comparativeEvidence!.evidence_id)} disabled={previewBusyId === item.comparativeEvidence.evidence_id}>{`比较期 PDF 第 ${item.comparativeEvidence.pdf_page} 页`}</button>}
+                    </div>
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {coreMetrics.map((item) => (
-                  <tr key={item.metricId}>
-                    <th scope="row">{item.label}</th>
-                    <td>
-                      {item.comparativeVerified && item.comparativeMetric !== undefined ? (
-                        <>
-                          <strong>{formatCoreMetricDisplay(item.comparativeMetric, evidenceById).value}</strong>
-                          <small>{item.comparativeMetric.currency || "币种未记录"} · {formatCoreMetricDisplay(item.comparativeMetric, evidenceById).unit}</small>
-                        </>
-                      ) : <span className="annual-comparison-pending">待核验</span>}
-                    </td>
-                    <td>
-                      {item.verified && item.metric !== undefined ? (
-                        <>
-                          <strong>{formatCoreMetricDisplay(item.metric, evidenceById).value}</strong>
-                          <small>{item.metric.currency || "币种未记录"} · {formatCoreMetricDisplay(item.metric, evidenceById).unit}</small>
-                        </>
-                      ) : <span className="annual-comparison-pending">待核验</span>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-        <div className="annual-summary-grid" aria-label="分析与核验摘要">
-          <SummaryTile label="独立核验通过的数据" value={verifiedMetricCount} note={`共记录 ${report.confirmed.metrics.length} 项`} />
-          <SummaryTile
-            label="建议核查事项"
-            value={candidateCount}
-            note={abstainedSignalCount > 0 ? `${abstainedSignalCount} 项比较暂不能确认` : "逐项查看数据变化与待查材料"}
-          />
-          <SummaryTile label="独立重算通过" value={verifiedCalculationCount} note={`共记录 ${report.confirmed.analyses.length} 项计算`} />
-          <SummaryTile label="独立核验通过的主张" value={verifiedClaimCount} note={`共记录 ${report.verified_claims.length} 条`} />
+              ))}
+            </tbody>
+          </table>
         </div>
-        <p className="annual-report-summary">
-          <strong>分析范围：</strong>本次选取 {report.confirmed.metrics.length} 项财务数据，并核对相关年度变化和原文出处，不代表覆盖整份年报。{" "}
-          <strong>建议继续核查：</strong>{candidateCount} 项数据变化
-          {abstainedSignalCount > 0 ? `，${abstainedSignalCount} 项年度比较因证据不足而暂不能确认` : ""}
-          {otherSignalCount > 0 ? `，另有 ${otherSignalCount} 项状态待核对` : ""}。
+        <p className="annual-core-footnote">
+          差额与同比只读取归档计算并要求两侧事实、独立重算和对应核验主张全部匹配。单侧金额按本侧已核验证据显示；缺少比较依据时保留金额并说明原因。
+          {report.comparability?.limitations.length ? ` 可比性限制：${report.comparability.limitations.join("；")}` : ""}
         </p>
       </section>
+
+      <NarrativeEvidenceSection
+        state={narrativeState}
+        previewBusyId={previewBusyId}
+        onPreview={onNarrativePreview}
+      />
 
       <section id="annual-candidate-overview" className="panel annual-section annual-candidate-overview" tabIndex={-1}>
         <div className="annual-section-heading">
@@ -1231,6 +1846,14 @@ function AnnualReportView({
           <p className="annual-no-follow-up">本次报告没有列出需要优先核查的候选事项。</p>
         ) : null}
       </section>
+
+      <ModelReviewSection
+        review={reportModelReview}
+        report={report}
+        evidenceById={evidenceById}
+        previewBusyId={previewBusyId}
+        onPreview={onPreview}
+      />
 
       {report.m3_screening == null ? null : <M3ScreeningBlock screening={report.m3_screening} />}
 
@@ -1308,34 +1931,6 @@ function AnnualReportView({
           </div>
         )}
       </details>
-
-      {preview !== null ? (
-        <section id="annual-evidence-preview" className="panel annual-evidence-preview" aria-live="polite">
-          <div className="annual-section-heading">
-            <div>
-              <p className="eyebrow">核验证据</p>
-              <h3 id="annual-evidence-preview-heading" tabIndex={-1}>独立核验证据 · 第 {preview.pageNumber} 页</h3>
-            </div>
-          </div>
-          <p className="help">
-            此页图由服务端根据独立核验证据生成，黄色框标出该证据的数值区域；它是核验材料，不表示异常或舞弊结论。
-          </p>
-          <img
-            src={preview.objectUrl}
-            alt={"独立核验证据 PDF 页图，第 " + preview.pageNumber + " 页"}
-            className="annual-evidence-image"
-          />
-          <details className="annual-technical-record">
-            <summary>技术记录：核验证据编号</summary>
-            <code>{preview.evidenceId}</code>
-          </details>
-        </section>
-      ) : null}
-      {previewError !== null ? (
-        <p id="annual-evidence-preview-error" className="alert" role="alert" tabIndex={-1}>
-          {previewError}
-        </p>
-      ) : null}
 
       <details id="annual-analysis-details" className="panel annual-section annual-progressive-section" tabIndex={-1}>
         <summary className="annual-progressive-summary">
@@ -1461,13 +2056,13 @@ function ModelReviewSection({
           ) : null}
           {review.limitations.length > 0 ? <GapList title="本次评审的范围限制" items={review.limitations} /> : null}
           <p className="annual-model-review-disclaimer">
-            这是模型根据本次年报材料给出的分析判断，尚未独立核实；请结合补充证据复核。
+            模型关于原因及核验状态的陈述属于未核实观点，事实与计算状态以上方独立核验记录为准；请结合补充证据复核模型意见。
           </p>
           <details className="annual-technical-record annual-model-review-technical">
             <summary>查看模型调用与归档记录</summary>
             <dl className="meta">
               <dt>模型是否实际调用</dt><dd>{review.model_called ? "是" : "否"}</dd>
-              <dt>已归档请求数 / 尝试次数</dt><dd>{review.call_count} / {review.call_attempt_count}</dd>
+              <dt>最终评审阶段归档请求数 / 尝试次数</dt><dd>{review.call_count} / {review.call_attempt_count}</dd>
               <dt>来源绑定</dt><dd><code>{review.source_identity.run_id} · {review.source_identity.source_document_id}</code></dd>
               <dt>来源 SHA256</dt><dd><code>{review.source_identity.source_sha256}</code></dd>
             </dl>
@@ -1501,7 +2096,7 @@ function ModelReviewSection({
               <summary>查看模型调用状态记录</summary>
               <dl className="meta">
                 <dt>本次模型调用</dt><dd>{review.model_called ? "已尝试" : "未调用"}</dd>
-                <dt>已归档请求数 / 尝试次数</dt><dd>{review.call_count} / {review.call_attempt_count}</dd>
+                <dt>最终评审阶段归档请求数 / 尝试次数</dt><dd>{review.call_count} / {review.call_attempt_count}</dd>
                 {review.reason !== null ? <><dt>内部原因代码</dt><dd><code>{review.reason}</code></dd></> : null}
                 <dt>来源绑定</dt><dd><code>{review.source_identity.run_id} · {review.source_identity.source_document_id}</code></dd>
               </dl>
@@ -1698,44 +2293,6 @@ function expandReportDetails(event: MouseEvent<HTMLAnchorElement>) {
   });
 }
 
-function formatCoreMetricDisplay(
-  metric: ConfirmedMetric,
-  evidenceById: Map<string, VerificationEvidence>,
-): { value: string; unit: string } {
-  const verifiedEvidences = verifiedMetricEvidences(metric, evidenceById);
-  const units = [...new Set(
-    verifiedEvidences
-      .map((evidence) => evidence.unit)
-      .filter((unit): unit is string => typeof unit === "string" && unit.trim().length > 0),
-  )];
-  if (units.length > 1) {
-    return { value: formatExactFinancialValue(metric.normalized_value), unit: "单位待确认" };
-  }
-  const verifiedUnit = units[0];
-  if (verifiedUnit === "元") {
-    const scaledValue = formatInHundredMillions(metric.normalized_value);
-    return scaledValue === null
-      ? { value: formatExactFinancialValue(metric.normalized_value), unit: verifiedUnit }
-      : { value: scaledValue, unit: "亿元" };
-  }
-  if (verifiedUnit !== undefined) {
-    const matchingEvidence = verifiedEvidences.find(
-      (evidence) =>
-        evidence.unit === verifiedUnit &&
-        typeof evidence.value_raw === "string" &&
-        evidence.value_raw.trim().length > 0,
-    );
-    if (matchingEvidence?.value_raw !== null && matchingEvidence?.value_raw !== undefined) {
-      return { value: matchingEvidence.value_raw, unit: verifiedUnit };
-    }
-    return { value: formatExactFinancialValue(metric.normalized_value), unit: "单位待确认" };
-  }
-  return {
-    value: formatExactFinancialValue(metric.normalized_value),
-    unit: "单位未记录",
-  };
-}
-
 function verifiedMetricEvidences(
   metric: ConfirmedMetric,
   evidenceById: Map<string, VerificationEvidence>,
@@ -1767,25 +2324,6 @@ function verifiedMetricEvidences(
     }
     return [indexedEvidence];
   });
-}
-
-function SummaryTile({ label, value, note }: { label: string; value: number; note: string }) {
-  return (
-    <article className="annual-summary-tile">
-      <p>{label}</p>
-      <strong>{value}</strong>
-      <span>{note}</span>
-    </article>
-  );
-}
-
-function IndicatorGlyph() {
-  return (
-    <svg viewBox="0 0 24 24" focusable="false">
-      <path d="M4 19.5h16" />
-      <path d="M6.5 17V11h3v6m2.5 0V7h3v10m2.5 0V4h3v13" />
-    </svg>
-  );
 }
 
 function formatExactFinancialValue(value: string): string {
@@ -2085,7 +2623,9 @@ function CandidateCard({
   onPreview: (evidenceId: string) => void;
 }) {
   const changes = verifiedCandidateChanges(candidate, report, evidenceById);
-  const why = candidateWhyText(candidate.signal_id, changes);
+  const why = candidate.reason?.trim() === ""
+    ? "原因尚未说明。"
+    : `报告记录原因（未独立证实）：${candidate.reason}`;
   const followUp = candidateFollowUpText(candidate.signal_id);
   return (
     <article className="annual-record-card annual-candidate-card">
@@ -2108,7 +2648,7 @@ function CandidateCard({
           )}
         </div>
         <div className="annual-candidate-data-block">
-          <h5>为什么要看</h5>
+          <h5>解释与缺口</h5>
           <p>{why}</p>
         </div>
         <div className="annual-candidate-data-block annual-candidate-action-block">
@@ -2202,116 +2742,25 @@ function verifiedCandidateChanges(
   if (expectedMetricIds.size === 0) {
     return changes;
   }
-  for (const calculationId of candidate.calculation_ids) {
-    const calculation = report.confirmed.analyses.find((item) => item.calculation_id === calculationId);
+  for (const spec of CORE_METRICS.filter((item) => expectedMetricIds.has(item.metricId))) {
+    const row = buildCoreMetricRow(spec, report, evidenceById);
     if (
-      calculation === undefined ||
-      calculation.formula_id !== "annual_difference" ||
-      calculation.status !== "succeeded" ||
-      !isIndependentlyVerifiedCalculation(calculation) ||
-      typeof calculation.output_value !== "string" ||
-      (calculation.unit !== null && calculation.unit !== "元") ||
-      calculation.input_fact_ids.length !== 2 ||
-      new Set(calculation.input_fact_ids).size !== 2 ||
-      calculation.input_fact_ids.some((factId) => !candidateInputIds.has(factId)) ||
-      (calculation.independent_verification?.calculation_id !== undefined &&
-        calculation.independent_verification.calculation_id !== calculation.calculation_id) ||
-      typeof calculation.independent_verification?.recomputed_value !== "string" ||
-      normalizeExactDecimal(calculation.output_value) === null ||
-      normalizeExactDecimal(calculation.output_value) !== normalizeExactDecimal(calculation.independent_verification.recomputed_value)
-    ) {
-      continue;
-    }
-    const inputMetrics = calculation.input_fact_ids.map((factId) =>
-      report.confirmed.metrics.find((metric) => metric.fact_id === factId),
-    );
-    if (inputMetrics.some((metric) => metric === undefined)) {
-      continue;
-    }
-    const [first, second] = inputMetrics as [ConfirmedMetric, ConfirmedMetric];
-    const current = first.comparison_role === "current" ? first : second.comparison_role === "current" ? second : undefined;
-    const comparative = first.comparison_role === "comparative" ? first : second.comparison_role === "comparative" ? second : undefined;
-    if (
-      current === undefined ||
-      comparative === undefined ||
-      current.metric_id === undefined ||
-      !expectedMetricIds.has(current.metric_id) ||
-      current.metric_id !== comparative.metric_id ||
-      current.period_end !== `${report.report_year}-12-31` ||
-      comparative.period_end !== `${report.report_year - 1}-12-31` ||
-      current.source_document_id !== report.source_document_id ||
-      comparative.source_document_id !== report.source_document_id ||
-      current.source_sha256.toLowerCase() !== report.source_sha256.toLowerCase() ||
-      comparative.source_sha256.toLowerCase() !== report.source_sha256.toLowerCase() ||
-      current.currency !== comparative.currency ||
-      !isRenminbiCurrency(current.currency) ||
-      current.scope !== comparative.scope ||
-      !isIndependentlyVerifiedMetric(current) ||
-      !isIndependentlyVerifiedMetric(comparative)
-    ) {
-      continue;
-    }
-    // Legacy M2 reports may omit calculation.unit; inherit the display unit only
-    // when both independently verified inputs establish the same unit.
-    const currentUnits = Array.from(new Set(verifiedMetricEvidences(current, evidenceById).map((item) => item.unit).filter(Boolean)));
-    const comparativeUnits = Array.from(new Set(verifiedMetricEvidences(comparative, evidenceById).map((item) => item.unit).filter(Boolean)));
-    if (currentUnits.length !== 1 || currentUnits[0] !== "元" || comparativeUnits.length !== 1 || comparativeUnits[0] !== "元") {
-      continue;
-    }
-    const value = calculation.output_value.trim();
-    const parsed = /^(-?)(\d+)(?:\.(\d+))?$/.exec(value);
-    if (parsed === null) {
-      continue;
-    }
-    const exactDigits = BigInt(`${parsed[2]}${parsed[3] ?? ""}`);
-    const amount = formatInHundredMillions(value.replace(/^-/, ""));
-    if (amount === null) {
-      continue;
-    }
-    const direction = exactDigits === 0n ? "变动" : parsed[1] === "-" ? "减少" : "增加";
-    const directionKey = exactDigits === 0n ? "unchanged" : parsed[1] === "-" ? "decrease" : "increase";
+      row.difference === null || row.currentMetric === undefined || row.comparativeMetric === undefined ||
+      !candidateInputIds.has(row.currentMetric.fact_id) || !candidateInputIds.has(row.comparativeMetric.fact_id) ||
+      !candidate.calculation_ids.includes(row.difference.calculation_id)
+    ) continue;
+    const value = normalizeExactDecimal(row.difference.output_value);
+    if (value === null) continue;
+    const magnitude = value.replace(/^-/, "");
+    const isZero = /^0(?:\.0+)?$/.test(magnitude);
+    const isNegative = value.startsWith("-");
     changes.push({
-      metricId: current.metric_id,
-      direction: directionKey,
-      text: `${candidateMetricLabel(current)}：${direction}约${amount}亿元`,
+      metricId: spec.metricId,
+      direction: isZero ? "unchanged" : isNegative ? "decrease" : "increase",
+      text: `${spec.label}：${isZero ? "无变化" : isNegative ? "减少" : "增加"}${formatSignedAmount(row.difference.output_value)}`,
     });
   }
   return changes;
-}
-
-function candidateMetricLabel(metric: ConfirmedMetric): string {
-  const labels: Record<string, string> = {
-    net_profit_parent: "归母净利润",
-    revenue: "营业收入",
-    operating_cash_flow: "经营现金流净额",
-    non_recurring_total: "披露的非经常性损益合计",
-  };
-  return metric.metric_id === undefined ? metric.label_raw : labels[metric.metric_id] ?? metric.label_raw;
-}
-
-function isRenminbiCurrency(currency: string | null): boolean {
-  return currency === "CNY" || currency === "RMB" || currency === "人民币";
-}
-
-function candidateWhyText(
-  signalId: string,
-  changes: Array<{ metricId: string; direction: "increase" | "decrease" | "unchanged"; text: string }>,
-): string {
-  if (changes.length === 0) {
-    return "本次报告没有可展示的独立核验年度差额，暂不能确认这组指标是否按候选规则所示方向变化，也不能据此解释原因。";
-  }
-  const directions = new Map(changes.map((item) => [item.metricId, item.direction]));
-  if (signalId === "profit_up_cash_down") {
-    if (directions.get("net_profit_parent") === "increase" && directions.get("operating_cash_flow") === "decrease") {
-      return "归母净利润增加而经营现金流减少，两项年度变化方向相反；这些数据不能说明差异原因，需要结合年报附注继续核对。";
-    }
-  }
-  if (signalId === "revenue_up_cash_down") {
-    if (directions.get("revenue") === "increase" && directions.get("operating_cash_flow") === "decrease") {
-      return "营业收入增加而经营现金流减少；这组变化本身不能说明销售回款情况，需要结合收付款明细核对。";
-    }
-  }
-  return "上方列出了可展示的已核验年度差额，但当前数值方向不足以支持该候选项的完整描述；请先核对具体计算输入和变化原因。";
 }
 
 function abstentionFollowUpText(reason: string): string {
@@ -2499,7 +2948,12 @@ function PendingItems({
 
 function ModelInvestigationBlock({ investigation }: { investigation: AnnualReportRecord }) {
   const entries = Object.entries(investigation);
-  const knownFields = new Set(["status", "model_called", "reason", "reason_detail", "items"]);
+  const knownFields = new Set([
+    "status", "model_called", "reason", "reason_detail", "items",
+    "model_call_count", "model_call_attempt_count",
+    "investigation_call_count", "investigation_call_attempt_count",
+    "model_review_call_count", "model_review_call_attempt_count", "final_review",
+  ]);
   const otherEntries = entries.filter(([key]) => !knownFields.has(key));
   const status = stringValue(investigation.status);
   const items = Array.isArray(investigation.items)
@@ -2535,6 +2989,7 @@ function ModelInvestigationBlock({ investigation }: { investigation: AnnualRepor
           <summary>技术记录：调用状态与内部原因</summary>
           <dl className="meta">
             <dt>模型是否实际调用</dt><dd>{modelCalled ? "是" : "否"}</dd>
+            <dt>完整模型流程调用总数</dt><dd>{modelFlowCountSummary(investigation)}</dd>
             {status !== null ? <><dt>内部状态代码</dt><dd><code>{status}</code></dd></> : null}
             {reason !== null ? <><dt>内部原因代码</dt><dd><code>{reason}</code></dd></> : null}
           </dl>
@@ -3409,6 +3864,30 @@ function record(value: unknown): AnnualReportRecord | null {
     : null;
 }
 
+function modelFlowCountSummary(investigation: AnnualReportRecord): string {
+  const finalReview = record(investigation.final_review);
+  const investigationCalls = nonNegativeInteger(investigation.investigation_call_count);
+  const reviewCalls = nonNegativeInteger(investigation.model_review_call_count) ?? nonNegativeInteger(finalReview?.call_count);
+  const investigationAttempts = nonNegativeInteger(investigation.investigation_call_attempt_count);
+  const reviewAttempts = nonNegativeInteger(investigation.model_review_call_attempt_count) ?? nonNegativeInteger(finalReview?.call_attempt_count);
+  if (investigationCalls === null || reviewCalls === null) {
+    return "调查或最终评审的分阶段调用数未完整记录，无法确认流程总数。";
+  }
+  const totalCalls = investigationCalls + reviewCalls;
+  const attemptText = investigationAttempts === null || reviewAttempts === null
+    ? ""
+    : `；尝试 ${investigationAttempts + reviewAttempts} 次（调查 ${investigationAttempts} + 最终评审 ${reviewAttempts}）`;
+  const archivedTotal = nonNegativeInteger(investigation.model_call_count);
+  const mismatchText = archivedTotal !== null && archivedTotal !== totalCalls
+    ? `；归档总数 ${archivedTotal} 与分阶段合计不一致`
+    : "";
+  return `总计 ${totalCalls} 次（调查 ${investigationCalls} + 最终评审 ${reviewCalls}；评审已计入总数）${attemptText}${mismatchText}`;
+}
+
+function nonNegativeInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
 function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.trim() !== "" ? value : null;
 }
@@ -3694,6 +4173,65 @@ function m3RuleDescription(ruleId: string): string {
 function formatTimestamp(value: string): string {
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString("zh-CN");
+}
+
+function readUrlSelection(): UrlSelection {
+  const params = new URL(window.location.href).searchParams;
+  const runId = params.get("run_id");
+  if (runId !== null) return { kind: "run", id: runId };
+  const jobId = params.get("job_id");
+  return jobId === null ? null : { kind: "job", id: jobId };
+}
+
+function writeUrlSelection(selection: UrlSelection, push: boolean) {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("run_id");
+  url.searchParams.delete("job_id");
+  if (selection !== null) url.searchParams.set(selection.kind === "run" ? "run_id" : "job_id", selection.id);
+  const next = `${url.pathname}${url.search}${url.hash}`;
+  if (push) window.history.pushState({ fintraceAnnualSelection: true }, "", next);
+  else window.history.replaceState({ fintraceAnnualSelection: true }, "", next);
+}
+
+function historyTimeText(value: string | null): string {
+  return value === null ? "未记录创建时间" : formatTimestamp(value);
+}
+
+function historyStatusText(value: string | null): string {
+  if (value === null || value.trim() === "") return "未记录状态";
+  const labels: Record<string, string> = {
+    queued: "等待执行",
+    pending: "等待执行",
+    running: "正在执行",
+    completed: "已完成",
+    completed_with_issues: "完成但有问题",
+    failed: "执行失败",
+    interrupted: "已中断",
+    archived: "已归档",
+    unavailable: "暂不可读取",
+  };
+  return labels[value] ?? value;
+}
+
+function historyModeText(mode: AnnualAnalysisHistoryItem["mode"]): string {
+  const labels: Record<AnnualAnalysisHistoryItem["mode"], string> = {
+    deterministic: "标准分析",
+    m3_screening: "标准分析 + 四规则试行",
+    model_investigation: "AI 调查与最终评审",
+    unknown: "未记录模式",
+  };
+  return labels[mode];
+}
+
+function narrativeSectionLabel(value: string): string {
+  const labels: Record<string, string> = {
+    mda: "管理层讨论与分析",
+    financial_notes: "财务报表附注",
+    financial_statements: "财务报表",
+    business_overview: "经营情况讨论",
+    risk_factors: "风险因素",
+  };
+  return labels[value] ?? "年报原文片段";
 }
 
 function readStoredJobId(): string | null {

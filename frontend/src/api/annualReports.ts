@@ -22,6 +22,18 @@ const EVIDENCE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:._-]{0,255}$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/i;
 const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
 
+export interface EvidencePreviewRegion {
+  bbox: PdfBox;
+  coordinateSpace: "unrotated_pdf_points";
+}
+
+export interface EvidencePreviewImage {
+  blob: Blob;
+  pageNumber: number;
+  mode: "focus" | "full_page";
+  region: EvidencePreviewRegion;
+}
+
 export class AnnualReportApiError extends Error {
   readonly status: number | null;
   readonly code: string | null;
@@ -60,7 +72,8 @@ export async function loadVerificationEvidencePreview(
   runId: string,
   evidence: VerificationEvidence,
   expectedReportSha256: string,
-): Promise<{ blob: Blob; pageNumber: number }> {
+  focus = true,
+): Promise<EvidencePreviewImage> {
   if (!RUN_ID_PATTERN.test(runId) || !EVIDENCE_ID_PATTERN.test(evidence.evidence_id)) {
     throw new AnnualReportApiError("运行 ID 或核验证据 ID 格式无效。");
   }
@@ -70,7 +83,7 @@ export async function loadVerificationEvidencePreview(
     encodeURIComponent(runId) +
     "/evidence/" +
     encodeURIComponent(evidence.evidence_id) +
-    "/preview.png";
+    "/preview.png?focus=" + String(focus);
   const response = await fetch(url, {
     method: "GET",
     headers: { Accept: "image/png" },
@@ -88,11 +101,32 @@ export async function loadVerificationEvidencePreview(
   if ((response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase() !== "image/png") {
     throw new AnnualReportApiError("证据预览响应不是 PNG 图片，已停止显示。", response.status);
   }
+  return validateEvidencePreviewResponse(response, evidence.pdf_page, evidence.value_region.bbox, expectedReportSha256, "verified_financial_value", focus);
+}
+
+async function validateEvidencePreviewResponse(
+  response: Response,
+  expectedPage: number,
+  expectedBox: PdfBox,
+  expectedReportSha256: string,
+  expectedKind: "verified_financial_value" | "narrative_context",
+  focus: boolean,
+): Promise<EvidencePreviewImage> {
   const pageHeader = response.headers.get("X-PDF-Page");
   const pageNumber = pageHeader === null ? NaN : Number(pageHeader);
-  if (!Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber !== evidence.value_region.page) {
-    throw new AnnualReportApiError("证据预览页码与核验证据记录不一致，已停止显示。", response.status);
+  if (!Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber !== expectedPage) {
+    throw new AnnualReportApiError("证据预览页码与证据记录不一致，已停止显示。", response.status);
   }
+  if (response.headers.get("X-Evidence-Kind") !== expectedKind) {
+    throw new AnnualReportApiError("证据预览类型与证据白名单不一致，已停止显示。", response.status);
+  }
+  const mode = response.headers.get("X-Preview-Mode");
+  const expectedMode = focus ? "focus" : "full_page";
+  if (mode !== expectedMode) {
+    throw new AnnualReportApiError("证据预览范围与请求不一致，已停止显示。", response.status);
+  }
+  const regionHeader = response.headers.get("X-Preview-Region");
+  const region = parsePreviewRegion(regionHeader, expectedBox, response.status);
   const reportSha256 = response.headers.get("X-Report-SHA256");
   if (
     reportSha256 === null ||
@@ -106,7 +140,39 @@ export async function loadVerificationEvidencePreview(
   if (blob.size <= PNG_SIGNATURE.length || PNG_SIGNATURE.some((byte, index) => signature[index] !== byte)) {
     throw new AnnualReportApiError("证据预览内容无法验证为 PNG，已停止显示。", response.status);
   }
-  return { blob, pageNumber };
+  return { blob, pageNumber, mode: expectedMode, region };
+}
+
+function parsePreviewRegion(
+  header: string | null,
+  expectedBox: PdfBox,
+  status: number,
+): EvidencePreviewRegion {
+  if (header === null) throw new AnnualReportApiError("证据预览缺少区域元数据，已停止显示。", status);
+  try {
+    const value: unknown = JSON.parse(header);
+    const record = optionalRecord(value);
+    const bbox = optionalRecord(record?.bbox);
+    if (record === null || bbox === null || record.coordinate_space !== "unrotated_pdf_points") throw new Error();
+    const parsed = {
+      x0: finiteNumber(bbox.x0),
+      y0: finiteNumber(bbox.y0),
+      x1: finiteNumber(bbox.x1),
+      y1: finiteNumber(bbox.y1),
+    };
+    if (
+      parsed.x0 < 0 || parsed.y0 < 0 || parsed.x1 <= parsed.x0 || parsed.y1 <= parsed.y0 ||
+      Object.keys(parsed).some((key) => Math.abs(parsed[key as keyof typeof parsed] - expectedBox[key as keyof PdfBox]) > 0.01)
+    ) throw new Error();
+    return { bbox: parsed, coordinateSpace: "unrotated_pdf_points" };
+  } catch {
+    throw new AnnualReportApiError("证据预览区域与证据定位不一致，已停止显示。", status);
+  }
+}
+
+function finiteNumber(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new Error();
+  return value;
 }
 
 async function readJson(response: Response): Promise<unknown> {
@@ -617,6 +683,11 @@ function readComparability(value: Record<string, unknown>, path: string) {
     status: requireString(value.status, path + ".status"),
     restatement_status: requireString(value.restatement_status, path + ".restatement_status"),
     limitations: readStringArray(value.limitations, path + ".limitations"),
+    document_id: nullableOptionalString(value.document_id, path + ".document_id"),
+    source_sha256: nullableOptionalString(value.source_sha256, path + ".source_sha256"),
+    report_year: nullableOptionalInteger(value.report_year, path + ".report_year"),
+    current_year: nullableOptionalInteger(value.current_year, path + ".current_year"),
+    comparative_year: nullableOptionalInteger(value.comparative_year, path + ".comparative_year"),
   };
 }
 
@@ -680,6 +751,12 @@ function requireInteger(value: unknown, path: string): number {
     throw invalidResponse(path);
   }
   return value;
+}
+
+function nullableOptionalInteger(value: unknown, path: string): number | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  return requireInteger(value, path);
 }
 
 function requireFiniteNumber(value: unknown, path: string): number {
