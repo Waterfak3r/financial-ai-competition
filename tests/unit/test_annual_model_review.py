@@ -222,7 +222,7 @@ def test_final_review_uses_one_audited_call_and_current_source_refs(
         "limitations": ["模型解释尚未核实。"],
         "narrative_evidence_ids": ["nctx:report:17"],
     }])
-    with _MockServer([(200, _response())]) as server:
+    with _MockServer([(200, _response(reference="investigation:revenue_up_cash_down"))]) as server:
         review, run_dir = _run(monkeypatch, tmp_path, report, investigation, server)
 
     assert review["status"] == "completed"
@@ -236,6 +236,9 @@ def test_final_review_uses_one_audited_call_and_current_source_refs(
     body = json.loads(request["messages"][1]["content"])
     assert body["candidate_signals"][0]["status"] == "candidate"
     assert body["investigation_items"][0]["classification"] == "unverified_model_material"
+    assert body["investigation_items"][0]["review_id"] == "investigation:revenue_up_cash_down"
+    assert "narrative_evidence_ids" not in body["investigation_items"][0]
+    assert "nctx:report:17" not in request["messages"][1]["content"]
     assert body["coverage"]["candidate_count"] == 1
     audit = run_dir / Path(review["audit_artifacts"][0]["audit_dir"]).name
     assert (audit / "request.json").is_file()
@@ -318,6 +321,59 @@ def test_no_candidate_with_no_verified_evidence_can_return_insufficient_evidence
     assert review["assessment"] == "insufficient_evidence"
     assert review["model_called"] is True
     assert review["reasons"][0]["evidence_ids"] == []
+
+
+def test_review_accepts_eight_distinct_supported_refs_per_item() -> None:
+    references = [f"fact:ref:{index}" for index in range(1, 9)]
+    answer = json.dumps({
+        "assessment": "prioritize_review",
+        "summary": "建议复核该候选线索。",
+        "reasons": [{"text": "候选线索需要回到披露进一步核对。", "evidence_ids": references}],
+        "follow_up_items": [{
+            "object": references[0],
+            "action": "核对该候选线索对应的披露。",
+            "evidence_ids": references,
+        }],
+        "limitations": ["现有材料仍需人工复核。"],
+    }, ensure_ascii=False)
+
+    parsed = annual_review.parse_model_review(
+        answer,
+        allowed_ids=set(references),
+        no_priority_allowed=False,
+    )
+
+    assert parsed["reasons"][0]["evidence_ids"] == references
+    assert parsed["follow_up_items"][0]["evidence_ids"] == references
+
+
+@pytest.mark.parametrize(
+    "references",
+    [
+        [f"fact:ref:{index}" for index in range(1, 10)],
+        ["fact:ref:1", "fact:ref:1"],
+    ],
+    ids=["nine-distinct-refs", "duplicate-ref"],
+)
+def test_review_rejects_more_than_eight_or_duplicate_refs_per_item(references: list[str]) -> None:
+    answer = json.dumps({
+        "assessment": "prioritize_review",
+        "summary": "建议复核该候选线索。",
+        "reasons": [{"text": "候选线索需要回到披露进一步核对。", "evidence_ids": references}],
+        "follow_up_items": [{
+            "object": references[0],
+            "action": "核对该候选线索对应的披露。",
+            "evidence_ids": references,
+        }],
+        "limitations": ["现有材料仍需人工复核。"],
+    }, ensure_ascii=False)
+
+    with pytest.raises(ValueError, match="^model_review_response_invalid$"):
+        annual_review.parse_model_review(
+            answer,
+            allowed_ids=set(references),
+            no_priority_allowed=False,
+        )
 
 
 @pytest.mark.parametrize(

@@ -334,7 +334,6 @@ def _build_review_input(
             "explanation": _limited_optional_text(item.get("explanation"), 350, mark_truncated),
             "reason": _limited_optional_text(item.get("reason"), 120, mark_truncated),
             "limitations": _text_list(item.get("limitations"), 3, 160),
-            "narrative_evidence_ids": _id_list(item.get("narrative_evidence_ids"), 12),
         })
         allowed.add(review_id)
 
@@ -722,12 +721,6 @@ def _text_list(value: object, maximum_count: int, maximum_chars: int) -> list[st
     if not isinstance(value, list):
         return []
     return [item.strip()[:maximum_chars] for item in value[:maximum_count] if isinstance(item, str) and item.strip()]
-
-
-def _id_list(value: object, maximum_count: int) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [item for item in value[:maximum_count] if isinstance(item, str) and _ID_RE.fullmatch(item)]
 
 
 def _load_prompt() -> str:

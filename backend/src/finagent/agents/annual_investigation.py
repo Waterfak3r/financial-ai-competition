@@ -113,10 +113,22 @@ class AnnualInvestigationResult:
     model_call_attempt_count: int
     supplementary_retrieval_used: bool
     items: tuple[InvestigationItem, ...]
+    narrative_evidences: tuple[NarrativeSnippet, ...]
     audit_artifacts: tuple[AuditArtifact, ...]
     reason: str | None = None
 
     def to_dict(self) -> dict[str, object]:
+        cited_ids = {
+            evidence_id
+            for item in self.items
+            if item.status == "interpretation"
+            for evidence_id in item.narrative_evidence_ids
+        }
+        cited_evidences = [
+            _narrative_evidence_to_dict(item)
+            for item in self.narrative_evidences
+            if item.evidence_id in cited_ids
+        ]
         result: dict[str, object] = {
             "kind": "fintrace_annual_investigation",
             "run_id": self.run_id,
@@ -132,12 +144,32 @@ class AnnualInvestigationResult:
             "model_call_attempt_count": self.model_call_attempt_count,
             "supplementary_retrieval_used": self.supplementary_retrieval_used,
             "items": [item.to_dict() for item in self.items],
+            "narrative_evidences": cited_evidences,
             "audit_artifacts": [item.to_dict() for item in self.audit_artifacts],
             "fraud_conclusion": None,
         }
         if self.reason is not None:
             result["reason"] = self.reason
         return result
+
+
+def _narrative_evidence_to_dict(item: NarrativeSnippet) -> dict[str, object]:
+    return {
+        "evidence_id": item.evidence_id,
+        "source_document_id": item.source_document_id,
+        "source_sha256": item.source_sha256,
+        "signal_ids": list(item.signal_ids),
+        "section_label": item.section_label,
+        "pdf_page": item.pdf_page,
+        "bbox": {
+            "x0": item.bbox[0],
+            "y0": item.bbox[1],
+            "x1": item.bbox[2],
+            "y1": item.bbox[3],
+        },
+        "raw_text": item.raw_text,
+        "selection_reason": item.selection_reason,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -1117,6 +1149,9 @@ def _result_from_state(state: Mapping[str, object]) -> AnnualInvestigationResult
         model_call_attempt_count=int(state.get("model_call_attempt_count", 0)),
         supplementary_retrieval_used=bool(state.get("supplementary_retrieval_used", False)),
         items=tuple(items),
+        narrative_evidences=tuple(
+            item for item in state.get("context_snippets", []) if isinstance(item, NarrativeSnippet)
+        ),
         audit_artifacts=tuple(audits),
         reason=state.get("overall_reason") if isinstance(state.get("overall_reason"), str) else None,
     )

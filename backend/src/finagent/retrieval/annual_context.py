@@ -51,10 +51,32 @@ _OPERATING_CASH_TERMS = (
     "经营现金流",
 )
 _NON_OPERATING_CASH_TERMS = ("投资活动", "筹资活动")
-_REVENUE_TERMS = ("营业收入", "销售收入", "收入确认", "收入合同", "合同負債", "合同负债")
+_REVENUE_TERMS = (
+    "营业收入",
+    "销售收入",
+    "收入确认",
+    "收入合同",
+    "合同收入",
+    "确认为收入",
+    "合同負債",
+    "合同负债",
+)
 _PROFIT_TERMS = ("净利润", "净利率", "归属于上市公司股东的净利润")
 _CONTEXT_TERMS = ("本期", "本年", "上年同期", "报告期", "同比", "较上期")
 _EXPLANATION_TERMS = ("原因", "主要是", "由于", "变动说明", "增加", "减少", "上升", "下降")
+_EXPLICIT_EXPLANATION_TERMS = (
+    "原因说明",
+    "主要是",
+    "主要由于",
+    "由于",
+    "因收到",
+    "因本期",
+    "变动原因",
+    "变动原因说明",
+    "所致",
+    "所确认",
+    "后确认",
+)
 _CASH_DETAIL_TERMS = (
     "现金流入",
     "现金流出",
@@ -123,6 +145,7 @@ class _ScoredBlock:
     score: int
     matched_signals: tuple[str, ...]
     reason: str
+    has_explicit_explanation: bool
     evidence_id: str
 
 
@@ -523,10 +546,26 @@ def _score_blocks(
             has_cash = _contains_any(normalized, _CASH_TERMS)
             has_operating_cash = _contains_any(normalized, _OPERATING_CASH_TERMS)
             has_nonoperating_cash = _contains_any(normalized, _NON_OPERATING_CASH_TERMS)
+            if has_cash and has_nonoperating_cash and not has_operating_cash:
+                # Candidate signals concern operating cash. Do not let the
+                # separate investing/financing explanations stand in for it.
+                continue
             cash_is_relevant = has_cash and (has_operating_cash or not has_nonoperating_cash)
             has_context = _contains_any(normalized, context_terms)
-            has_explanation = _contains_any(normalized, _EXPLANATION_TERMS)
+            has_explicit_explanation = _contains_any(normalized, _EXPLICIT_EXPLANATION_TERMS)
+            has_explanation = _contains_any(normalized, _EXPLANATION_TERMS) or has_explicit_explanation
             has_cash_detail = _contains_any(normalized, _CASH_DETAIL_TERMS)
+            has_any_target = any(
+                _contains_any(
+                    normalized,
+                    _PROFIT_TERMS if signal_id == "profit_up_cash_down" else _REVENUE_TERMS,
+                )
+                for signal_id in signal_ids
+            )
+            if has_cash and not (has_any_target or has_context or has_explanation or has_cash_detail):
+                # A standalone cash-flow heading has no useful context for
+                # interpretation and should not displace disclosure text.
+                continue
 
             matched_signals: list[str] = []
             score = 0
@@ -536,18 +575,20 @@ def _score_blocks(
                 if not cash_is_relevant and not (has_target and (has_context or has_explanation)):
                     continue
                 matched_signals.append(signal_id)
-                score = max(score, 4 * int(cash_is_relevant) + 3 * int(has_target))
+                score = max(score, 3 * int(cash_is_relevant) + 3 * int(has_target))
 
             if not matched_signals:
                 continue
             score += 2 * int(cash_is_relevant and _contains_any(normalized, _OPERATING_CASH_TERMS))
             score += int(has_context) + int(has_explanation) + int(has_cash_detail)
+            score += 6 * int(has_explicit_explanation)
             if section.label == "mda":
                 score += 1
+            score -= _table_noise_penalty(block.text, has_explicit_explanation)
             reason = _selection_reason(cash_is_relevant, has_target_any=any(
                 _contains_any(normalized, _PROFIT_TERMS if signal_id == "profit_up_cash_down" else _REVENUE_TERMS)
                 for signal_id in matched_signals
-            ), has_explanation=has_explanation)
+            ), has_explanation=has_explanation or has_explicit_explanation)
             evidence_id = _evidence_id(document_id, source_sha256, section.label, block)
             scored.append(
                 _ScoredBlock(
@@ -556,6 +597,7 @@ def _score_blocks(
                     score,
                     tuple(matched_signals),
                     reason,
+                    has_explicit_explanation,
                     evidence_id,
                 )
             )
@@ -585,6 +627,19 @@ def _selection_reason(cash_relevant: bool, *, has_target_any: bool, has_explanat
     return f"本地确定性词项匹配：{joined}；仅保留原文上下文，不表示因果解释或核验结论。"
 
 
+def _table_noise_penalty(text: str, has_explicit_explanation: bool) -> int:
+    """Down-rank numeric rows and bare headings when a narrative reason exists."""
+
+    if has_explicit_explanation:
+        return 0
+    numeric_groups = re.findall(r"(?<!\w)[(+-]?\d[\d,]*(?:\.\d+)?%?", text)
+    compact = _compact(text)
+    penalty = 3 if len(numeric_groups) >= 2 else 0
+    if len(compact) <= 100 and compact.endswith(("：", ":")):
+        penalty += 2
+    return penalty
+
+
 def _select_bounded(
     candidates: tuple[_ScoredBlock, ...],
     max_snippets: int,
@@ -594,9 +649,15 @@ def _select_bounded(
     selected_ids: set[str] = set()
     total_chars = 0
 
-    # Keep both located sections visible when relevant material exists in both.
+    # Prefer an explicit disclosure explanation in each located section. If a
+    # section has none, retain its best relevant context while still making the
+    # lack of a stated reason visible to the model.
     for section_label in ("mda", "financial_notes"):
-        section_candidate = next((item for item in candidates if item.section_label == section_label), None)
+        section_candidates = [item for item in candidates if item.section_label == section_label]
+        section_candidate = next(
+            (item for item in section_candidates if item.has_explicit_explanation),
+            section_candidates[0] if section_candidates else None,
+        )
         if section_candidate is not None:
             if len(selected) >= max_snippets or total_chars + len(section_candidate.block.text) > max_total_chars:
                 continue

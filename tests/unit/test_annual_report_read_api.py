@@ -15,7 +15,14 @@ from fastapi.testclient import TestClient
 from finagent.api.app import create_app
 
 
-def _make_archive(root: Path, run_id: str, *, source_text: str = "source alpha") -> dict[str, object]:
+def _make_archive(
+    root: Path,
+    run_id: str,
+    *,
+    source_text: str = "source alpha",
+    include_narrative: bool = False,
+    rotate_value_page: bool = False,
+) -> dict[str, object]:
     run_dir = root / "artifacts" / "runs" / run_id
     report_dir = root / "artifacts" / "reports" / run_id
     run_dir.mkdir(parents=True)
@@ -24,9 +31,16 @@ def _make_archive(root: Path, run_id: str, *, source_text: str = "source alpha")
     pdf = pymupdf.open()
     first = pdf.new_page(width=400, height=500)
     first.insert_text((40, 80), f"TABLE {source_text} TITLE AND COLUMN HEADER")
+    narrative_text = "Contract income follows performance."
+    narrative_rect = None
+    if include_narrative:
+        first.insert_text((40, 200), narrative_text)
+        narrative_rect = first.search_for(narrative_text)[0]
     value_page = pdf.new_page(width=600, height=800)
     value_page.insert_text((70, 130), "INDEPENDENT VERIFIED VALUE")
     value_rect = value_page.search_for("INDEPENDENT VERIFIED VALUE")[0]
+    if rotate_value_page:
+        value_page.set_rotation(90)
     source_pdf_bytes = pdf.tobytes()
     pdf.close()
     (run_dir / "source.pdf").write_bytes(source_pdf_bytes)
@@ -108,6 +122,50 @@ def _make_archive(root: Path, run_id: str, *, source_text: str = "source alpha")
         },
         "metadata_note": source_text,
     }
+    if include_narrative:
+        report["model_investigation"] = {
+            "items": [
+                {
+                    "signal_id": "revenue_up_cash_down",
+                    "status": "interpretation",
+                    "narrative_evidence_ids": ["nctx-test-note"],
+                }
+            ],
+            "narrative_evidences": [
+                {
+                    "evidence_id": "nctx-test-note",
+                    "source_document_id": "doc-1",
+                    "source_sha256": source_sha256,
+                    "signal_ids": ["revenue_up_cash_down"],
+                    "section_label": "financial_notes",
+                    "pdf_page": 1,
+                    "bbox": {
+                        "x0": narrative_rect.x0,
+                        "y0": narrative_rect.y0,
+                        "x1": narrative_rect.x1,
+                        "y1": narrative_rect.y1,
+                    },
+                    "raw_text": narrative_text,
+                    "selection_reason": "local-term-match",
+                },
+                {
+                    "evidence_id": "nctx-uncited",
+                    "source_document_id": "doc-1",
+                    "source_sha256": source_sha256,
+                    "signal_ids": ["revenue_up_cash_down"],
+                    "section_label": "financial_notes",
+                    "pdf_page": 1,
+                    "bbox": {
+                        "x0": narrative_rect.x0,
+                        "y0": narrative_rect.y0,
+                        "x1": narrative_rect.x1,
+                        "y1": narrative_rect.y1,
+                    },
+                    "raw_text": narrative_text,
+                    "selection_reason": "local-term-match",
+                },
+            ],
+        }
     (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     (report_dir / "report.json").write_text(json.dumps(report), encoding="utf-8")
     return {
@@ -132,6 +190,7 @@ def test_report_api_returns_manifest_binding_and_only_verified_evidence(tmp_path
     report_bytes = (tmp_path / "artifacts" / "reports" / run_id / "report.json").read_bytes()
     assert payload["manifest"]["report_sha256"] == hashlib.sha256(report_bytes).hexdigest()
     assert [item["evidence_id"] for item in payload["verification_evidences"]] == ["ev-independent"]
+    assert payload["narrative_evidences"]["items"] == []
     assert "D:\\private\\source.pdf" not in response.text
 
 
@@ -155,6 +214,110 @@ def test_preview_is_png_and_uses_value_region_page_only(tmp_path: Path) -> None:
     assert response.headers["x-report-sha256"] == hashlib.sha256(
         (tmp_path / "artifacts" / "reports" / run_id / "report.json").read_bytes()
     ).hexdigest()
+    assert response.headers["x-evidence-kind"] == "verified_financial_value"
+    assert response.headers["x-preview-mode"] == "full_page"
+    assert json.loads(response.headers["x-preview-region"])["coordinate_space"] == "unrotated_pdf_points"
+
+
+def test_narrative_index_and_preview_are_source_bound_and_separate_from_verified_allowlist(tmp_path: Path) -> None:
+    run_id = "synthetic-narrative-preview-001"
+    created = _make_archive(tmp_path, run_id, include_narrative=True)
+    source_pdf = pymupdf.open(stream=created["source_pdf_bytes"], filetype="pdf")
+    try:
+        source_block = next(
+            block[4]
+            for block in source_pdf[0].get_text("blocks")
+            if len(block) >= 5 and "Contract income follows performance." in block[4]
+        )
+    finally:
+        source_pdf.close()
+    # The archived excerpt omits only block-edge whitespace, which some
+    # PyMuPDF builds return as a trailing line break in get_text("blocks").
+    assert source_block.strip() == "Contract income follows performance."
+    assert source_block != "Contract income follows performance."
+    client = TestClient(create_app(tmp_path))
+
+    index = client.get(f"/v1/annual-analyses/{run_id}/narrative-evidences")
+
+    assert index.status_code == 200
+    payload = index.json()
+    assert payload["interpretation_label"] == "原文片段定位/模型观点引用，非独立因果核验"
+    assert [item["evidence_id"] for item in payload["items"]] == ["nctx-test-note"]
+    item = payload["items"][0]
+    assert item["raw_text"] == "Contract income follows performance."
+    assert item["cited_by_signal_ids"] == ["revenue_up_cash_down"]
+    assert item["preview_url"].endswith("/nctx-test-note/preview.png")
+
+    full = client.get(f"/v1/annual-analyses/{run_id}/narrative-evidences/nctx-test-note/preview.png")
+    focus = client.get(
+        f"/v1/annual-analyses/{run_id}/narrative-evidences/nctx-test-note/preview.png?focus=true"
+    )
+    assert full.status_code == focus.status_code == 200
+    assert full.headers["content-type"] == focus.headers["content-type"] == "image/png"
+    assert focus.headers["x-evidence-kind"] == "narrative_context"
+    assert focus.headers["x-evidence-interpretation-code"] == (
+        "original_text_location_model_opinion_not_independent_causal_verification"
+    )
+    assert focus.headers["x-preview-mode"] == "focus"
+    assert focus.headers["x-report-sha256"] == hashlib.sha256(
+        (tmp_path / "artifacts" / "reports" / run_id / "report.json").read_bytes()
+    ).hexdigest()
+    assert json.loads(focus.headers["x-preview-region"])["coordinate_space"] == "unrotated_pdf_points"
+    full_width, full_height = struct.unpack(">II", full.content[16:24])
+    focus_width, focus_height = struct.unpack(">II", focus.content[16:24])
+    assert focus_height < full_height
+    assert focus_width * focus_height <= 12_000_000
+    assert focus_width > 0
+
+    amount_with_narrative_id = client.get(
+        f"/v1/annual-analyses/{run_id}/evidence/nctx-test-note/preview.png"
+    )
+    narrative_with_amount_id = client.get(
+        f"/v1/annual-analyses/{run_id}/narrative-evidences/ev-independent/preview.png"
+    )
+    assert amount_with_narrative_id.status_code == 404
+    assert amount_with_narrative_id.json()["detail"]["code"] == "evidence_not_found"
+    assert narrative_with_amount_id.status_code == 404
+    assert narrative_with_amount_id.json()["detail"]["code"] == "narrative_evidence_not_found"
+
+
+def test_narrative_source_mismatch_and_invalid_section_label_are_safe_errors(tmp_path: Path) -> None:
+    run_id = "synthetic-narrative-mismatch-001"
+    _make_archive(tmp_path, run_id, include_narrative=True)
+    report_path = tmp_path / "artifacts" / "reports" / run_id / "report.json"
+    original = json.loads(report_path.read_text(encoding="utf-8"))
+    bad_text = json.loads(json.dumps(original))
+    bad_text["model_investigation"]["narrative_evidences"][0]["raw_text"] = "forged disclosure"
+    report_path.write_text(json.dumps(bad_text), encoding="utf-8")
+    client = TestClient(create_app(tmp_path))
+
+    mismatch = client.get(f"/v1/annual-analyses/{run_id}/narrative-evidences")
+    assert mismatch.status_code == 409
+    assert mismatch.json()["detail"]["code"] == "narrative_evidence_source_mismatch"
+
+    bad_section = json.loads(json.dumps(original))
+    bad_section["model_investigation"]["narrative_evidences"][0]["section_label"] = []
+    report_path.write_text(json.dumps(bad_section), encoding="utf-8")
+    malformed = client.get(f"/v1/annual-analyses/{run_id}/narrative-evidences")
+    assert malformed.status_code == 422
+    assert malformed.json()["detail"]["code"] == "report_invalid"
+
+
+def test_focus_preview_handles_rotated_pdf_coordinates(tmp_path: Path) -> None:
+    run_id = "synthetic-rotated-focus-001"
+    _make_archive(tmp_path, run_id, rotate_value_page=True)
+    client = TestClient(create_app(tmp_path))
+
+    full = client.get(f"/v1/annual-analyses/{run_id}/evidence/ev-independent/preview.png")
+    focus = client.get(
+        f"/v1/annual-analyses/{run_id}/evidence/ev-independent/preview.png?focus=true"
+    )
+
+    assert full.status_code == focus.status_code == 200
+    assert struct.unpack(">II", full.content[16:24]) == (1200, 900)
+    focus_width, focus_height = struct.unpack(">II", focus.content[16:24])
+    assert 0 < focus_width < 1200
+    assert 0 < focus_height < 900
 
 
 def test_invalid_traversal_run_id_is_rejected(tmp_path: Path) -> None:

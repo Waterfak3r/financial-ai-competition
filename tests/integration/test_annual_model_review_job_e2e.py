@@ -56,17 +56,18 @@ class _MockProvider:
                     }, ensure_ascii=False)
                 else:
                     signal_id = "profit_up_cash_down"
+                    review_id = f"investigation:{signal_id}"
                     answer = json.dumps({
                         "assessment": "prioritize_review",
                         "summary": "建议优先复核候选线索及相关披露。",
                         "reasons": [{
                             "text": "候选线索仍需回到相关披露核对。",
-                            "evidence_ids": [signal_id],
+                            "evidence_ids": [review_id],
                         }],
                         "follow_up_items": [{
-                            "object": signal_id,
+                            "object": review_id,
                             "action": "核对相关披露及背离形成原因。",
-                            "evidence_ids": [signal_id],
+                            "evidence_ids": [review_id],
                         }],
                         "limitations": ["评审属于模型观点，未独立核验。"],
                     }, ensure_ascii=False)
@@ -257,19 +258,25 @@ def _install_mock_analysis(monkeypatch: pytest.MonkeyPatch, source: dict[str, An
 
 
 def _install_mock_retrieval(monkeypatch: pytest.MonkeyPatch) -> None:
-    def retrieve(report: dict[str, Any], _source_path: Path, _source_record: dict[str, Any], **_kwargs: Any):
+    def retrieve(report: dict[str, Any], source_path: Path, _source_record: dict[str, Any], **_kwargs: Any):
         document_id = report["source_document_id"]
         digest = report["source_sha256"]
         signal_ids = ("profit_up_cash_down", "revenue_up_cash_down")
+        with pymupdf.open(source_path) as pdf:
+            page = pdf[0]
+            source_blocks = page.get_text("blocks")
+            assert source_blocks
+            raw_text = source_blocks[0][4]
+            bbox = tuple(float(value) for value in source_blocks[0][:4])
         snippets = tuple(NarrativeSnippet(
             evidence_id=f"nctx-{signal_id}",
             source_document_id=document_id,
             source_sha256=digest,
             signal_ids=(signal_id,),
             section_label="mda",
-            pdf_page=index + 1,
-            bbox=(1.0, 2.0, 3.0, 4.0),
-            raw_text="年报中的候选线索相关叙述片段。",
+            pdf_page=1,
+            bbox=bbox,
+            raw_text=raw_text,
             selection_reason="local mock retrieval",
         ) for index, signal_id in enumerate(signal_ids))
         return AnnualContextResult(

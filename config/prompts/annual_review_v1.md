@@ -9,9 +9,9 @@
 - no_priority_issue_identified_within_scope：只表示本次有限范围内暂未发现需优先核查事项，绝不表示没有风险。仅在覆盖信息完整、存在足够已核验事实和计算、无待核验对象、无候选线索、无调查弃权/失败、无截断且可比性没有阻碍时才可选择。
 - insufficient_evidence：当前材料不足以支持优先级判断。
 
-理由和跟进项必须只引用输入白名单中的 ID。已核验事实和计算是可信的结构化记录；candidate signal 是待核查候选；pending_* 与 investigation:* 是未核实对象。不得编造 ID。follow_up_items.object 必须是要处理的一个已有 ID，evidence_ids 必须包含该 ID。每个 reasons 项都应带有至少一个有依据的 ID，只有 assessment=insufficient_evidence 且没有任何可引用对象时可以留空。
+理由和跟进项必须只引用输入白名单中的 ID。已核验事实和计算是可信的结构化记录；candidate signal 是待核查候选；pending_* 与 investigation:* 是未核实对象。不得编造 ID。follow_up_items.object 必须是要处理的一个已有 ID，evidence_ids 必须包含该 ID。每个 reasons 项都应带有至少一个有依据的 ID，只有 assessment=insufficient_evidence 且没有任何可引用对象时可以留空。每个 evidence_ids 数组最多 8 个 ID，且不得重复；只选择直接支持该条文字的最少 ID，不要把所有相关 ID 一并列出。
 
-summary、reasons、follow_up_items、limitations 均须简洁、具体、无阿拉伯数字，不得输出金额或百分比。最多六条理由、八条跟进项、八条限制；每条文本分别不得超过 800、500、400 个字符。若不能判断，明确说证据不足，并指出需补齐的具体对象或材料。
+summary、reasons[].text、follow_up_items[].action、limitations[] 均须简洁、具体、无阿拉伯数字，不得输出金额或百分比。字符上限分别为：summary 800、reasons[].text 500、follow_up_items[].action 400、limitations[] 每项 400。最多六条 reasons、八条 follow_up_items、八条 limitations。若不能判断，明确说证据不足，并指出需补齐的具体对象或材料。
 
 只输出一个 JSON 对象，不要 Markdown 围栏或对象外文字。字段必须严格为：
 {"assessment":"prioritize_review|no_priority_issue_identified_within_scope|insufficient_evidence","summary":"...","reasons":[{"text":"...","evidence_ids":["...ID..."]}],"follow_up_items":[{"object":"...ID...","action":"...","evidence_ids":["...ID..."]}],"limitations":["..."]}

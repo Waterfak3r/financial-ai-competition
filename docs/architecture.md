@@ -35,7 +35,7 @@ flowchart TD
 | schemas | 旧 FinancialFact 与隔离的 v2 事实、TableCellEvidence、计算、核验、Claim 类型 |
 | verification | 独立重读原文、检查行列与字段、年度可比性、重算、支持依据；缺证据时弃权 |
 | finance | Decimal 公式、年度差额/增长率、确定性候选与 M3 试行规则 |
-| retrieval | 当前同源年报的正文/附注片段检索，绑定来源哈希、页码、坐标、证据 ID，并限制数量与字符数 |
+| retrieval | 当前同源年报的 MD&A/财务附注片段检索，绑定来源哈希、页码、坐标、证据 ID，并限制数量与字符数；过滤无关投资/筹资现金流说明与只有标题的片段 |
 | agents | LangGraph 候选调查及有限补充检索；调查后结构化最终评审；不把模型意见升级成独立核验 |
 | tools | 将已有业务能力适配为工具，不复制解析、计算或核验实现 |
 | llm | 同步 Chat Completions 纯文本连接器；请求限共有字段，常规默认超时 60 秒 |
@@ -58,6 +58,8 @@ flowchart TD
 | GET /v1/annual-analysis-jobs/{job_id} | 查询阶段、状态、结果 run_id / result_url |
 | GET /v1/annual-analyses/{run_id} | 只读已归档的 v2 报告 |
 | GET /v1/annual-analyses/{run_id}/evidence/{evidence_id}/preview.png | 已核验证据白名单页图 |
+| GET /v1/annual-analyses/{run_id}/narrative-evidences | 读取归档且被模型解释引用的年报原文片段索引 |
+| GET /v1/annual-analyses/{run_id}/narrative-evidences/{evidence_id}/preview.png | 预览上述原文片段的 PDF 页图 |
 | GET /v1/annual-analysis-capabilities | 仅返回模型模式是否可用与 ready / not_configured / dependency_unavailable |
 | GET / PUT / DELETE /v1/model-settings | 读取非密钥状态、保存完整本机配置、清除配置 |
 | POST /v1/model-settings/test | 按草稿真实测试连接，不保存草稿、不发送年报 |
@@ -103,7 +105,17 @@ Claim 类型为 fact、calculation、inference、hypothesis；同比属于 calcu
 
 审计目录为 `artifacts/runs/<run_id>/` 的 UUID 子目录，联网前写 request.json/started，成功写 response.json，失败写安全类别；凭据须脱敏，不记录请求头、base_url 或异常原文。响应审计写入失败抛 AuditPersistError，不返回审计成功；输出归档仍需独立检查是否可能夹带敏感信息，不能据一个脱敏环节推定整条链路安全。
 
-model_review 为可选报告字段，含 completed/failed/not_called 状态、assessment、理由、依据 ID、后续核查、限制及调用审计。assessment 可为 prioritize_review、no_priority_issue_identified_within_scope、insufficient_evidence。观点校验不等同独立事实/语义核验；评审失败仍保留确定性报告并暴露问题，旧报告无此字段仍可读。
+model_review 为可选报告字段，含 completed/failed/not_called 状态、assessment、理由、依据 ID、后续核查、限制及调用审计。assessment 可为 prioritize_review、no_priority_issue_identified_within_scope、insufficient_evidence。`annual_review_v1` 与解析器保持同一输出约束：理由最多六项、后续核查最多八项、限制最多八项；每项 `evidence_ids` 最多八个互不重复的白名单 ID。`summary` 最多 800 字符、理由文本最多 500、后续动作最多 400、每条限制最多 400；这些文本不得包含阿拉伯数字，跟进对象必须同时出现在该项依据中。解析器拒绝越界、重复、无来源或不匹配的引用。提示词约束的行为调整须同时核对该解析契约及回归。
+
+观点校验不等同独立事实/语义核验；评审失败仍保留确定性报告并暴露问题，旧报告无此字段仍可读。
+
+### 叙述片段索引与页图
+
+`GET /v1/annual-analyses/{run_id}` 在兼容旧报告的同时返回两个分离的列表：`verification_evidences` 是已核验金额白名单，`narrative_evidences` 是带 `interpretation_label` 与 `items` 的叙述片段索引。独立索引路由返回 `{run_id, source_document_id, source_sha256, interpretation_label, items}`；每项含 `evidence_id`、来源文档与哈希、关联 signal IDs、section label、物理 PDF 页码、未旋转页面坐标 bbox、原始文本、选择原因、引用该片段的 signal IDs 和预览路由。`interpretation_label` 固定为“原文片段定位/模型观点引用，非独立因果核验”。
+
+叙述索引只收录已写入运行归档、且被相应模型解释引用的片段。读取归档时后端按归档来源 ID 与 PDF SHA256 重开原 PDF，逐条核对完整原文（仅忽略文本首尾空白）和 bbox；不匹配则拒绝归档读取。叙述 ID 不进入金额 `verification_evidences` 白名单，也不把原文引用升级为独立因果核验。检索只读取本次同一 PDF 的 MD&A/财务附注文本块，不访问网络；默认最多 4 块、每块 900 字符、总计 2600 字符，另有 8 块、每块 1200 字符、总计 4000 字符的硬上限。选择器优先保留解释性正文/附注，并排除只有标题或投资、筹资现金流的片段；没有足够上下文时保留缺口，不硬编码公司原因。
+
+金额和叙述页图都支持可选 `focus=true`，默认仍返回整页。聚焦图围绕已白名单核验坐标裁剪并受像素上限约束；`X-PDF-Page`、`X-Evidence-Kind`、`X-Preview-Mode` 与 `X-Preview-Region` 描述返回图像，叙述图另带 `X-Evidence-Interpretation-Code`。`X-Report-SHA256` 响应头是归档报告 JSON 的哈希；PDF 原文哈希通过报告/叙述索引中的 `source_sha256` 单独绑定。聚焦坐标以 `unrotated_pdf_points` 返回，前端不得以猜测纸张尺寸推算坐标。
 
 同源、独立核验通过且命中白名单的证据可预览 PDF 页图。未核实提取位置标“待核实定位”，没有可靠页码则标“原文位置待定位”；不能用页码改变对象核验状态。浏览器只保存活动 job_id 并支持按 run_id 回看，不等于完整任务历史或 URL 路由已实现。
 

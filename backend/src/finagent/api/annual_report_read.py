@@ -19,7 +19,11 @@ _MAX_MANIFEST_BYTES = 2 * 1024 * 1024
 _MAX_REPORT_BYTES = 32 * 1024 * 1024
 _MAX_SOURCE_PDF_BYTES = 256 * 1024 * 1024
 _MAX_PREVIEW_PIXELS = 12_000_000
+_MAX_NARRATIVE_EVIDENCES = 8
+_MAX_NARRATIVE_EVIDENCE_CHARS = 4000
+_MAX_NARRATIVE_SNIPPET_CHARS = 1200
 _REPARSE_POINT_ATTRIBUTE = 0x400
+NARRATIVE_EVIDENCE_INTERPRETATION = "原文片段定位/模型观点引用，非独立因果核验"
 
 
 class AnnualReportReadError(Exception):
@@ -38,6 +42,7 @@ class AnnualReportArchive:
     report: dict[str, Any]
     manifest_summary: dict[str, Any]
     verification_evidences: tuple[dict[str, Any], ...]
+    narrative_evidences: tuple[dict[str, Any], ...]
     source_pdf_bytes: bytes
 
 
@@ -130,6 +135,13 @@ def load_annual_report(project_root: Path, run_id: str) -> AnnualReportArchive:
         raise AnnualReportReadError(409, "report_identity_mismatch", "报告与 manifest 的 run_id、来源哈希或文档元数据不一致。")
 
     verification_evidences = _collect_verified_evidences(report, manifest_source_sha256.lower())
+    narrative_evidences = _collect_narrative_evidences(
+        report,
+        source_pdf_bytes,
+        expected_document_id=manifest["document_id"],
+        expected_sha256=manifest_source_sha256.lower(),
+        verified_evidence_ids={item["evidence_id"] for item in verification_evidences},
+    )
     manifest_summary = {
         "run_id": checked_run_id,
         "status": manifest["status"],
@@ -148,11 +160,17 @@ def load_annual_report(project_root: Path, run_id: str) -> AnnualReportArchive:
         report=report,
         manifest_summary=manifest_summary,
         verification_evidences=verification_evidences,
+        narrative_evidences=narrative_evidences,
         source_pdf_bytes=source_pdf_bytes,
     )
 
 
-def render_evidence_preview(archive: AnnualReportArchive, evidence_id: str) -> tuple[bytes, int]:
+def render_evidence_preview(
+    archive: AnnualReportArchive,
+    evidence_id: str,
+    *,
+    focus: bool = False,
+) -> tuple[bytes, int]:
     """只渲染 value_region 所在页，并仅标出该值的 bbox。页码从 1 开始。"""
 
     if not isinstance(evidence_id, str) or len(evidence_id) > 256:
@@ -187,41 +205,116 @@ def render_evidence_preview(archive: AnnualReportArchive, evidence_id: str) -> t
     x0, y0, x1, y1 = coordinates
     if x0 < 0 or y0 < 0 or x1 <= x0 or y1 <= y0:
         raise AnnualReportReadError(422, "evidence_region_invalid", "证据 value_region 坐标超出页面范围。")
+    if focus:
+        return _render_page_region_preview(
+            archive.source_pdf_bytes,
+            page_number,
+            (x0, y0, x1, y1),
+            focus=True,
+            narrative=False,
+        )
+    return _render_page_region_preview(
+        archive.source_pdf_bytes,
+        page_number,
+        (x0, y0, x1, y1),
+        focus=False,
+        narrative=False,
+    )
 
+
+def render_narrative_evidence_preview(
+    archive: AnnualReportArchive,
+    evidence_id: str,
+    *,
+    focus: bool = False,
+) -> tuple[bytes, int]:
+    """Render only a source-bound narrative block; this is not verification evidence."""
+
+    if not isinstance(evidence_id, str) or len(evidence_id) > 256:
+        raise AnnualReportReadError(404, "narrative_evidence_not_found", "该同源叙述证据不存在。")
+    evidence = next(
+        (item for item in archive.narrative_evidences if item.get("evidence_id") == evidence_id),
+        None,
+    )
+    if evidence is None:
+        raise AnnualReportReadError(404, "narrative_evidence_not_found", "该同源叙述证据不存在。")
+    bbox = evidence.get("bbox")
+    page_number = evidence.get("pdf_page")
+    if type(page_number) is not int or not isinstance(bbox, Mapping):
+        raise AnnualReportReadError(422, "narrative_evidence_region_invalid", "叙述证据的页码或坐标无效。")
+    coordinates = tuple(bbox.get(key) for key in ("x0", "y0", "x1", "y1"))
+    if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in coordinates):
+        raise AnnualReportReadError(422, "narrative_evidence_region_invalid", "叙述证据坐标无效。")
+    return _render_page_region_preview(
+        archive.source_pdf_bytes,
+        page_number,
+        tuple(float(value) for value in coordinates),
+        focus=focus,
+        narrative=True,
+    )
+
+
+def _render_page_region_preview(
+    source_pdf_bytes: bytes,
+    page_number: int,
+    coordinates: tuple[float, float, float, float],
+    *,
+    focus: bool,
+    narrative: bool,
+) -> tuple[bytes, int]:
+    error_code = "narrative_evidence_region_invalid" if narrative else "evidence_region_invalid"
     try:
         import pymupdf
 
-        document = pymupdf.open(stream=archive.source_pdf_bytes, filetype="pdf")
+        document = pymupdf.open(stream=source_pdf_bytes, filetype="pdf")
     except Exception:
         raise AnnualReportReadError(422, "source_pdf_invalid", "归档 PDF 无法打开。") from None
 
     try:
         if document.needs_pass:
             raise AnnualReportReadError(422, "source_pdf_invalid", "归档 PDF 受密码保护，无法生成预览。")
-        if page_number > document.page_count:
-            raise AnnualReportReadError(422, "evidence_region_invalid", "证据页码超出 PDF 页数。")
+        if page_number < 1 or page_number > document.page_count:
+            raise AnnualReportReadError(422, error_code, "证据页码超出 PDF 页数。")
         page = document[page_number - 1]
-        rect = pymupdf.Rect(x0, y0, x1, y1)
+        rect = pymupdf.Rect(*coordinates)
+        visible_region = rect * page.rotation_matrix
         page_bounds = page.rect
-        if rect.x1 > page_bounds.x1 or rect.y1 > page_bounds.y1:
-            raise AnnualReportReadError(422, "evidence_region_invalid", "证据 value_region 坐标超出 PDF 页面范围。")
-
-        # Independent evidence records may also carry earlier-page title or
-        # column-header coordinates. The preview intentionally uses only the
-        # value bbox and its 1-based page number above.
+        if (
+            rect.x0 < 0
+            or rect.y0 < 0
+            or rect.x1 <= rect.x0
+            or rect.y1 <= rect.y0
+            or visible_region.x0 < -0.1
+            or visible_region.y0 < -0.1
+            or visible_region.x1 > page_bounds.x1 + 0.1
+            or visible_region.y1 > page_bounds.y1 + 0.1
+        ):
+            raise AnnualReportReadError(422, error_code, "证据坐标与 PDF 页面范围不一致。")
         page.draw_rect(
             rect,
-            color=(0.82, 0.12, 0.12),
-            fill=(1.0, 0.92, 0.25),
-            fill_opacity=0.35,
+            color=(0.16, 0.31, 0.72) if narrative else (0.82, 0.12, 0.12),
+            fill=(0.84, 0.89, 1.0) if narrative else (1.0, 0.92, 0.25),
+            fill_opacity=0.22 if narrative else 0.35,
             width=1.4,
             overlay=True,
         )
-        width, height = float(page.rect.width), float(page.rect.height)
+        render_region = page_bounds
+        if focus:
+            margin_x = min(48.0, max(18.0, visible_region.width * 0.04))
+            margin_y = min(36.0, max(14.0, visible_region.height * 0.8))
+            padded_region = visible_region + (-margin_x, -margin_y, margin_x, margin_y)
+            render_region = padded_region & page_bounds
+        width, height = float(render_region.width), float(render_region.height)
         if width <= 0 or height <= 0:
-            raise AnnualReportReadError(422, "source_pdf_invalid", "PDF 页面尺寸无效。")
-        scale = min(1.5, math.sqrt(_MAX_PREVIEW_PIXELS / (width * height)))
-        pixmap = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False, annots=True)
+            raise AnnualReportReadError(422, "source_pdf_invalid", "PDF 页面区域尺寸无效。")
+        scale_ceiling = 3.0 if focus else 1.5
+        scale = min(scale_ceiling, math.sqrt(_MAX_PREVIEW_PIXELS / (width * height)))
+        pixmap = page.get_pixmap(
+            matrix=pymupdf.Matrix(scale, scale),
+            clip=render_region if focus else None,
+            alpha=False,
+            annots=True,
+        )
         return pixmap.tobytes("png"), page_number
     except AnnualReportReadError:
         raise
@@ -383,4 +476,132 @@ def _collect_verified_evidences(report: Mapping[str, Any], expected_sha256: str)
             if existing is not None and existing != normalized:
                 raise AnnualReportReadError(409, "evidence_id_conflict", "报告中存在内容不一致的重复 evidence_id。")
             evidence_by_id[evidence_id] = normalized
+    return tuple(evidence_by_id[key] for key in sorted(evidence_by_id))
+
+
+def _collect_narrative_evidences(
+    report: Mapping[str, Any],
+    source_pdf_bytes: bytes,
+    *,
+    expected_document_id: str,
+    expected_sha256: str,
+    verified_evidence_ids: set[str],
+) -> tuple[dict[str, Any], ...]:
+    """Return only cited narrative blocks that still match their archived PDF."""
+
+    investigation = report.get("model_investigation")
+    if not isinstance(investigation, Mapping):
+        return ()
+    # Old reports never stored the block text needed for safe narrative preview.
+    if "narrative_evidences" not in investigation:
+        return ()
+    records = investigation.get("narrative_evidences")
+    items = investigation.get("items")
+    if not isinstance(records, list) or len(records) > _MAX_NARRATIVE_EVIDENCES:
+        raise AnnualReportReadError(422, "report_invalid", "模型调查的叙述证据归档结构无效。")
+    if not isinstance(items, list):
+        raise AnnualReportReadError(422, "report_invalid", "模型调查的引用列表结构无效。")
+
+    cited_by: dict[str, set[str]] = {}
+    for item in items:
+        if not isinstance(item, Mapping) or item.get("status") != "interpretation":
+            continue
+        signal_id = item.get("signal_id")
+        evidence_ids = item.get("narrative_evidence_ids")
+        if not isinstance(signal_id, str) or not isinstance(evidence_ids, list):
+            continue
+        for evidence_id in evidence_ids:
+            if isinstance(evidence_id, str) and evidence_id.startswith("nctx-"):
+                cited_by.setdefault(evidence_id, set()).add(signal_id)
+    if not cited_by:
+        return ()
+
+    try:
+        import pymupdf
+
+        document = pymupdf.open(stream=source_pdf_bytes, filetype="pdf")
+    except Exception:
+        raise AnnualReportReadError(422, "source_pdf_invalid", "归档 PDF 无法复核叙述证据。") from None
+
+    evidence_by_id: dict[str, dict[str, Any]] = {}
+    total_chars = 0
+    try:
+        if document.needs_pass:
+            raise AnnualReportReadError(422, "source_pdf_invalid", "归档 PDF 受密码保护，无法复核叙述证据。")
+        for record in records:
+            if not isinstance(record, Mapping):
+                raise AnnualReportReadError(422, "report_invalid", "模型调查的叙述证据记录无效。")
+            evidence_id = record.get("evidence_id")
+            if not isinstance(evidence_id, str) or evidence_id not in cited_by:
+                continue
+            if evidence_id in verified_evidence_ids:
+                raise AnnualReportReadError(409, "evidence_id_conflict", "叙述证据 ID 与独立核验证据 ID 冲突。")
+            if record.get("source_document_id") != expected_document_id or record.get("source_sha256") != expected_sha256:
+                raise AnnualReportReadError(409, "narrative_evidence_source_mismatch", "叙述证据与归档原文来源不一致。")
+            if not evidence_id.startswith("nctx-"):
+                raise AnnualReportReadError(422, "report_invalid", "叙述证据 ID 不属于叙述证据命名空间。")
+            page_number = record.get("pdf_page")
+            raw_text = record.get("raw_text")
+            selection_reason = record.get("selection_reason")
+            section_label = record.get("section_label")
+            bbox = record.get("bbox")
+            signal_ids = record.get("signal_ids")
+            if (
+                type(page_number) is not int
+                or page_number < 1
+                or page_number > document.page_count
+                or not isinstance(raw_text, str)
+                or not raw_text.strip()
+                or len(raw_text) > _MAX_NARRATIVE_SNIPPET_CHARS
+                or not isinstance(selection_reason, str)
+                or not selection_reason.strip()
+                or len(selection_reason) > 500
+                or not isinstance(section_label, str)
+                or section_label not in {"mda", "financial_notes"}
+                or not isinstance(bbox, Mapping)
+                or not isinstance(signal_ids, list)
+                or any(not isinstance(value, str) for value in signal_ids)
+            ):
+                raise AnnualReportReadError(422, "report_invalid", "模型调查的叙述证据字段无效。")
+            coordinates: list[float] = []
+            for key in ("x0", "y0", "x1", "y1"):
+                value = bbox.get(key)
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+                    raise AnnualReportReadError(422, "narrative_evidence_region_invalid", "叙述证据坐标无效。")
+                coordinates.append(float(value))
+            x0, y0, x1, y1 = coordinates
+            if x0 < 0 or y0 < 0 or x1 <= x0 or y1 <= y0:
+                raise AnnualReportReadError(422, "narrative_evidence_region_invalid", "叙述证据坐标超出页面范围。")
+            page = document[page_number - 1]
+            source_block_matches = False
+            for block in page.get_text("blocks"):
+                if len(block) < 5 or str(block[4]).strip() != raw_text.strip():
+                    continue
+                if all(abs(float(actual) - expected) <= 0.1 for actual, expected in zip(block[:4], coordinates)):
+                    source_block_matches = True
+                    break
+            if not source_block_matches:
+                raise AnnualReportReadError(409, "narrative_evidence_source_mismatch", "叙述文本或坐标与归档 PDF 不一致。")
+            total_chars += len(raw_text)
+            if total_chars > _MAX_NARRATIVE_EVIDENCE_CHARS:
+                raise AnnualReportReadError(422, "report_invalid", "模型调查的叙述证据超过文本上限。")
+            normalized = {
+                "evidence_id": evidence_id,
+                "source_document_id": expected_document_id,
+                "source_sha256": expected_sha256,
+                "signal_ids": list(dict.fromkeys(signal_ids)),
+                "section_label": section_label,
+                "pdf_page": page_number,
+                "bbox": {key: coordinates[index] for index, key in enumerate(("x0", "y0", "x1", "y1"))},
+                "raw_text": raw_text,
+                "selection_reason": selection_reason,
+                "cited_by_signal_ids": sorted(cited_by[evidence_id]),
+            }
+            existing = evidence_by_id.get(evidence_id)
+            if existing is not None and existing != normalized:
+                raise AnnualReportReadError(409, "evidence_id_conflict", "报告中存在内容不一致的重复叙述证据 ID。")
+            evidence_by_id[evidence_id] = normalized
+    finally:
+        document.close()
+
     return tuple(evidence_by_id[key] for key in sorted(evidence_by_id))

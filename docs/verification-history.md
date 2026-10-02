@@ -18,6 +18,24 @@
 
 annual-analysis 运行与报告分别在 `artifacts/runs/<run_id>/`、`artifacts/reports/<run_id>/`；评估位于 `artifacts/evaluations/<evaluation_id>/`。M4 协议与数据分母见 [数据规则](data-policy.md)，不是舞弊识别准确率或多公司泛化证明。
 
+## 2026-10-02 A-02 年报叙述证据与在线评审验收
+
+对海天 603288 的 2024 年报执行了四次完整 Web `model_investigation` 任务，每次实际三个模型请求；旧 job/run 和原审计归档均保留，累计十二次尝试。前三次用于定位严格归档和输出契约问题，最终一次在提示词补足既有解析边界后复验。前三次状态如下：
+
+| Job / run | 状态 | 模型评审 | 发现 |
+| --- | --- | --- | --- |
+| `annual-job-94fdb4e4e5fc44778192c590d41fe3e0` / `annual-analysis-828c06f0-1247-48fc-bbf1-a170204a4583` | failed | completed | 报告原文尾随换行与 PDF 文本块比较方式不一致，归档读取报告 `narrative_evidence_source_mismatch`；只修正为两端均忽略首尾空白并继续完整比对文本及坐标，旧归档未改。 |
+| `annual-job-0afd1c16237148a795ec20b76817512b` / `annual-analysis-9b18ef83-58a7-4f80-9321-fa13d5fbfc24` | completed_with_issues | failed | 最终评审请求曾包含模型不可引用的叙述 `nctx-*` ID；从最终评审输入移除，保留 `investigation:<signal_id>` 引用，白名单解析保持严格。 |
+| `annual-job-ff5d592924ec4e8a8b95771f620bbb7b` / `annual-analysis-a153e463-bd0f-4b0a-88ec-b311b662bf7e` | completed_with_issues | failed | 实际响应只含白名单 ID，但有一条理由引用九项，解析器按八项上限拒绝；据此在 `annual_review_v1` 明示引用数量、唯一性和逐字段文本/数组限额，并增加八项通过、九项及重复项拒绝回归。 |
+
+最后一次有界复验为 job `annual-job-618e6dd4fa984e1dbabecf13a2ece4d8`、run `annual-analysis-8036d75c-6a13-432a-b602-5f869f9396ce`：job、调查和最终评审均 completed，评审 assessment 为 `prioritize_review`；调查两次调用，最终评审一次，总计三次。运行归档含四条被引用叙述片段与八条独立核验金额证据。GET 报告、叙述索引及两种 focus 页图均由真实 HTTP 读取；四条片段均与归档 PDF 的原文及 bbox 相符。金额和叙述白名单保持分离；旧报告读取仍兼容。
+
+页 154 记载预收款在签订合同时收取、相关合同收入在履约义务完成后确认。这支持收入确认与现金收取可能跨期的机制假说，不证明其造成经营活动现金流下降；同一模型解释也明确原因无法确认。收入调查另有一句限制称“候选差异为计算字段，尚未核验；原文片段不足以确认任何因果关系或异常情形。”结构化报告中的相应事实核验均为 verified，净利润、营业收入及经营活动现金流三个年度差额均为 `succeeded` 且独立重算为 verified。该句作为未核实模型措辞保留，不覆盖确定性核验状态，也不作为系统级计算缺口。
+
+正式证据在 `artifacts/evaluations/a02-live-web-20261002-annual-analysis-8036d75c-6a13-432a-b602-5f869f9396ce/`，其中保存尝试历史、核验摘要，以及第 154 页叙述焦点图和已核验金额焦点图；原始审计与 PDF 位于相应 `artifacts/runs/<run_id>/`。最终 Web 服务通过 `scripts/start.ps1 -NoBrowser` 启动，API PID 为 32276，启动日志位于 `artifacts/tmp/startup-c6e19440d0e841dc91945bceb757e3b5/`。Python 3.14.3、FastAPI 0.136.3、PyMuPDF 1.27.2.3、LangGraph 1.2.12、pytest 9.0.3、Node 24.14.1；审计请求/输出的常见凭据模式扫描结果为 absent（布尔值）。评审提示文件 SHA256 记于同目录 `evaluation-evidence.json`。
+
+A-02 相关后端测试聚焦集合为 95 passed、1 skipped；跳过来自 Windows 环境无法创建测试所需 symlink/junction 的平台守卫，原 `-q` 输出未给出具体 nodeid。提示修正后评审单元与任务集成为 15 passed。准确命令、退出码、跳过说明及未执行完整套件的边界见同目录 `checks.json`。完整后端套件待历史 API 接入后的集成阶段运行；上述在线结果不是多公司或因果识别验收。
+
 ## 2026-09-30 检查快照
 
 - 完整后端：344 passed、2 skipped，exit 0，97.35 秒。两个跳过均因 Windows 无法创建符号链接，覆盖设置文件和源 PDF。

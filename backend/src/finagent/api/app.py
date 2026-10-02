@@ -23,8 +23,10 @@ from finagent.api.annual_precheck import (
 )
 from finagent.api.annual_report_read import (
     AnnualReportReadError,
+    NARRATIVE_EVIDENCE_INTERPRETATION,
     load_annual_report,
     render_evidence_preview,
+    render_narrative_evidence_preview,
 )
 from finagent.api.annual_analysis_jobs import (
     AnnualAnalysisJobError,
@@ -238,22 +240,95 @@ def create_app(project_root: Path | None = None) -> FastAPI:
                 detail={"code": exc.code, "message": exc.message},
             ) from None
 
-    @app.get("/v1/annual-analyses/{run_id}/evidence/{evidence_id}/preview.png")
-    def get_annual_analysis_evidence_preview(run_id: str, evidence_id: str) -> Response:
+    @app.get("/v1/annual-analyses/{run_id}/narrative-evidences")
+    def get_annual_analysis_narrative_evidences(run_id: str) -> dict:
         try:
             archive = load_annual_report(app.state.project_root, run_id)
-            image, page_number = render_evidence_preview(archive, evidence_id)
         except AnnualReportReadError as exc:
             raise HTTPException(
                 status_code=exc.status_code,
                 detail={"code": exc.code, "message": exc.message},
             ) from None
+        items = [
+            {
+                **item,
+                "preview_url": (
+                    f"/v1/annual-analyses/{run_id}/narrative-evidences/"
+                    f"{item['evidence_id']}/preview.png"
+                ),
+            }
+            for item in archive.narrative_evidences
+        ]
+        return {
+            "run_id": archive.run_id,
+            "source_document_id": archive.manifest_summary["document_id"],
+            "source_sha256": archive.manifest_summary["source_pdf_sha256"],
+            "interpretation_label": NARRATIVE_EVIDENCE_INTERPRETATION,
+            "items": items,
+        }
+
+    @app.get("/v1/annual-analyses/{run_id}/narrative-evidences/{evidence_id}/preview.png")
+    def get_annual_analysis_narrative_evidence_preview(
+        run_id: str,
+        evidence_id: str,
+        focus: bool = False,
+    ) -> Response:
+        try:
+            archive = load_annual_report(app.state.project_root, run_id)
+            image, page_number = render_narrative_evidence_preview(archive, evidence_id, focus=focus)
+        except AnnualReportReadError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": exc.message},
+            ) from None
+        evidence = next(item for item in archive.narrative_evidences if item["evidence_id"] == evidence_id)
+        return Response(
+            content=image,
+            media_type="image/png",
+            headers={
+                "Cache-Control": "no-store",
+                "X-PDF-Page": str(page_number),
+                "X-Report-SHA256": archive.manifest_summary["report_sha256"],
+                "X-Evidence-Kind": "narrative_context",
+                "X-Evidence-Interpretation-Code": "original_text_location_model_opinion_not_independent_causal_verification",
+                "X-Preview-Mode": "focus" if focus else "full_page",
+                "X-Preview-Region": json.dumps(
+                    {"bbox": evidence["bbox"], "coordinate_space": "unrotated_pdf_points"},
+                    separators=(",", ":"),
+                ),
+            },
+        )
+
+    @app.get("/v1/annual-analyses/{run_id}/evidence/{evidence_id}/preview.png")
+    def get_annual_analysis_evidence_preview(
+        run_id: str,
+        evidence_id: str,
+        focus: bool = False,
+    ) -> Response:
+        try:
+            archive = load_annual_report(app.state.project_root, run_id)
+            image, page_number = render_evidence_preview(archive, evidence_id, focus=focus)
+        except AnnualReportReadError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": exc.message},
+            ) from None
+        evidence = next(item for item in archive.verification_evidences if item["evidence_id"] == evidence_id)
         return Response(
             content=image,
             media_type="image/png",
             headers={
                 "X-PDF-Page": str(page_number),
                 "X-Report-SHA256": archive.manifest_summary["report_sha256"],
+                "X-Evidence-Kind": "verified_financial_value",
+                "X-Preview-Mode": "focus" if focus else "full_page",
+                "X-Preview-Region": json.dumps(
+                    {
+                        "bbox": evidence["value_region"]["bbox"],
+                        "coordinate_space": "unrotated_pdf_points",
+                    },
+                    separators=(",", ":"),
+                ),
             },
         )
 
@@ -272,6 +347,10 @@ def create_app(project_root: Path | None = None) -> FastAPI:
             # This curated index contains only evidence_ids attached to a
             # verified record under report.confirmed.metrics[*].
             "verification_evidences": list(archive.verification_evidences),
+            "narrative_evidences": {
+                "interpretation_label": NARRATIVE_EVIDENCE_INTERPRETATION,
+                "items": list(archive.narrative_evidences),
+            },
         }
 
     return app

@@ -318,6 +318,16 @@ def test_result_to_dict_is_json_serializable_and_never_verified() -> None:
                 narrative_evidence_ids=("nctx-test-p15",),
             ),
         ),
+        narrative_evidences=(
+            NarrativeSnippet(
+                "nctx-test-p15", SOURCE_ID, SOURCE_SHA, ("profit_up_cash_down",), "mda", 15,
+                (1.0, 2.0, 3.0, 4.0), "经营活动现金流量净额下降。", "local-term-match",
+            ),
+            NarrativeSnippet(
+                "nctx-uncited", SOURCE_ID, SOURCE_SHA, ("profit_up_cash_down",), "mda", 16,
+                (1.0, 2.0, 3.0, 4.0), "未被引用的原文。", "local-term-match",
+            ),
+        ),
         audit_artifacts=(
             AuditArtifact(
                 "artifacts/runs/run-test/audit-id",
@@ -338,6 +348,8 @@ def test_result_to_dict_is_json_serializable_and_never_verified() -> None:
     assert decoded["fraud_conclusion"] is None
     assert decoded["model_call_attempt_count"] == 1
     assert decoded["audit_artifacts"][0]["response_path"].endswith("response.json")
+    assert [item["evidence_id"] for item in decoded["narrative_evidences"]] == ["nctx-test-p15"]
+    assert decoded["narrative_evidences"][0]["bbox"] == {"x0": 1.0, "y0": 2.0, "x1": 3.0, "y1": 4.0}
 
 
 def test_request_persistence_failure_does_not_claim_model_was_called(

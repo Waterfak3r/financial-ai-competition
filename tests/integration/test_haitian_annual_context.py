@@ -31,8 +31,24 @@ def test_haitian_archived_report_retrieves_bound_mda_and_note_context() -> None:
     assert result.sections_found == ("mda", "financial_notes")
     assert len(result.snippets) <= 4
     assert sum(len(item.raw_text) for item in result.snippets) <= 2600
-    assert any(item.pdf_page in {15, 21} and item.section_label == "mda" for item in result.snippets)
-    assert any(item.section_label == "financial_notes" for item in result.snippets)
+    assert any(
+        item.section_label == "mda"
+        and any(term in item.raw_text for term in ("营业收入", "净利润"))
+        for item in result.snippets
+    )
+    assert all(item.pdf_page != 16 for item in result.snippets)
+    note_snippets = [item for item in result.snippets if item.section_label == "financial_notes"]
+    assert note_snippets
+    assert any(
+        item.pdf_page == 154
+        and "包括在合同负债期初账面价值中的金额所确认的收入" in item.raw_text
+        for item in note_snippets
+    ), [item.raw_text for item in note_snippets]
+    assert any(
+        item.pdf_page == 154
+        and any(term in item.raw_text for term in ("因收到现金", "履行履约义务后确认"))
+        for item in note_snippets
+    ), [item.raw_text for item in note_snippets]
     assert all(item.source_document_id == source_record["document_id"] for item in result.snippets)
     assert all(item.source_sha256 == source_record["sha256"] for item in result.snippets)
     assert all(item.pdf_page > 0 and all(math.isfinite(value) for value in item.bbox) for item in result.snippets)
@@ -54,7 +70,12 @@ def test_haitian_archived_analysis_json_screening_is_also_candidate_only() -> No
     assert result.status == "retrieved", result.reason
     assert result.source_document_id == source_record["document_id"]
     assert result.source_sha256 == source_record["sha256"]
-    assert any(item.pdf_page in {15, 21} and item.section_label == "mda" for item in result.snippets)
+    assert any(
+        item.section_label == "mda"
+        and any(term in item.raw_text for term in ("营业收入", "净利润"))
+        for item in result.snippets
+    )
+    assert all(item.pdf_page != 16 for item in result.snippets)
     assert all(
         signal.signal_id in {"profit_up_cash_down", "revenue_up_cash_down"}
         for signal in result.signal_results
