@@ -84,7 +84,7 @@ class AnnualAnalysisJobService:
 
     def create(self, request: Mapping[str, Any]) -> dict[str, Any]:
         normalized = validate_job_request(self.project_root, request)
-        if normalized["mode"] == "model_investigation":
+        if normalized["mode"] in {"model_investigation", "integrated_analysis"}:
             capability = get_annual_analysis_capabilities(self.project_root)
             if not capability["model_investigation"]["available"]:
                 dependency_missing = capability["model_investigation"]["status"] == "dependency_unavailable"
@@ -350,11 +350,16 @@ def validate_job_request(project_root: Path, request: Mapping[str, Any]) -> dict
         raise AnnualAnalysisJobError(400, "invalid_report_year", "report_year 必须是 1900 到 2100 的整数。")
     if not isinstance(document_id, str) or _DOCUMENT_ID.fullmatch(document_id) is None or ".." in document_id:
         raise AnnualAnalysisJobError(400, "invalid_document_id", "document_id 格式无效。")
-    if not isinstance(mode, str) or mode not in {"deterministic", "m3_screening", "model_investigation"}:
+    if not isinstance(mode, str) or mode not in {
+        "deterministic",
+        "m3_screening",
+        "model_investigation",
+        "integrated_analysis",
+    }:
         raise AnnualAnalysisJobError(
             400,
             "invalid_mode",
-            "mode 只能是 deterministic、m3_screening 或 model_investigation。",
+            "mode 只能是 deterministic、m3_screening、model_investigation 或 integrated_analysis。",
         )
     if not isinstance(sha256, str) or _SHA256.fullmatch(sha256) is None:
         raise AnnualAnalysisJobError(400, "invalid_sha256", "sha256 必须是 64 位十六进制字符串。")
@@ -489,10 +494,10 @@ def _invoke_cli(project_root: Path, artifacts_root: Path, request: Mapping[str, 
         "--artifacts-root",
         str(artifacts_root),
     ]
-    if request["mode"] == "m3_screening":
+    if request["mode"] in {"m3_screening", "integrated_analysis"}:
         command.append("--with-m3-screening")
     environment = _cli_environment_without_credentials()
-    if request["mode"] == "model_investigation":
+    if request["mode"] in {"model_investigation", "integrated_analysis"}:
         source_record = source_pdf.parent / "source.json"
         command.extend(["--with-model", "--source-record", str(source_record)])
         settings = resolve_model_settings(project_root)
@@ -531,7 +536,7 @@ def _configured_cli_timeout_seconds() -> int:
 
 
 def _cli_environment_without_credentials() -> dict[str, str]:
-    # Deterministic and M3 CLI paths do not need any model configuration.
+    # Only explicitly selected AI modes receive model configuration.
     blocked = {
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",

@@ -73,8 +73,6 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--with-model 需要同时提供 --source-record。")
     if args.source_record is not None and not args.with_model:
         parser.error("--source-record 仅能与 --with-model 一起使用。")
-    if args.with_model and _m3_requested(args):
-        parser.error("--with-model 与 --with-m3-screening 暂不支持同次运行；请分别运行。")
     try:
         return _run(args)
     except (OSError, ValueError) as exc:
@@ -134,8 +132,6 @@ def _run(args: argparse.Namespace) -> int:
         raise ValueError("--with-model 需要同时提供 --source-record。")
     if args.source_record is not None and not args.with_model:
         raise ValueError("--source-record 仅能与 --with-model 一起使用。")
-    if args.with_model and _m3_requested(args):
-        raise ValueError("--with-model 与 --with-m3-screening 暂不支持同次运行；请分别运行。")
 
     artifacts_root = _safe_artifacts_root(args.artifacts_root)
     source_sha256 = _sha256(source_pdf)
@@ -144,6 +140,7 @@ def _run(args: argparse.Namespace) -> int:
     created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     actual_copy_sha256: str | None = None
     investigation: dict[str, object] | None = None
+    investigation_started = False
     m3_screening: dict[str, object] | None = None
     result = None
     try:
@@ -169,27 +166,8 @@ def _run(args: argparse.Namespace) -> int:
         analysis_payload = result.archive_dict()
         report_payload = result.report
         markdown = result.markdown
-        if args.with_model:
-            investigation = run_annual_investigation_appendix(
-                report_payload,
-                archived_pdf_path=input_copy,
-                original_pdf_path=source_pdf,
-                source_record_path=args.source_record.expanduser().resolve(),
-                run_dir=run_dir,
-                artifacts_root=artifacts_root,
-            )
-            _write_json_new(run_dir / "investigation.json", investigation)
-            investigation_path = _relative_or_absolute(
-                run_dir / "investigation.json", artifacts_root
-            )
-            report_payload, analysis_payload = attach_investigation_to_report(
-                report_payload,
-                analysis_payload,
-                investigation,
-                investigation_path=investigation_path,
-            )
-            markdown = render_report_with_investigation(report_payload, investigation)
-        elif _m3_requested(args):
+        base_report_payload = report_payload
+        if _m3_requested(args):
             try:
                 m3_screening = run_m3_annual_screening(
                     input_copy,
@@ -208,9 +186,37 @@ def _run(args: argparse.Namespace) -> int:
                     source_sha256=actual_copy_sha256,
                     error=exc,
                 )
+            m3_screening["run_id"] = run_id
             _write_json_new(run_dir / "m3_screening.json", m3_screening)
             analysis_payload["m3_screening"] = m3_screening
             report_payload = attach_m3_screening_to_report(report_payload, m3_screening)
+
+        if args.with_model:
+            # The AI investigation sees only the standard, deterministically
+            # verified report. M3 stays an independently archived audit layer.
+            investigation_started = True
+            investigation = run_annual_investigation_appendix(
+                base_report_payload,
+                archived_pdf_path=input_copy,
+                original_pdf_path=source_pdf,
+                source_record_path=args.source_record.expanduser().resolve(),
+                run_dir=run_dir,
+                artifacts_root=artifacts_root,
+            )
+            _write_json_new(run_dir / "investigation.json", investigation)
+            investigation_path = _relative_or_absolute(
+                run_dir / "investigation.json", artifacts_root
+            )
+            report_payload, analysis_payload = attach_investigation_to_report(
+                report_payload,
+                analysis_payload,
+                investigation,
+                investigation_path=investigation_path,
+            )
+
+        if investigation is not None:
+            markdown = render_report_with_investigation(report_payload, investigation)
+        if m3_screening is not None:
             markdown = render_report_with_m3_screening(markdown, m3_screening)
 
         _write_json_new(run_dir / "parsed_text_pdf.json", result.parsed_pdf.to_dict())
@@ -222,7 +228,7 @@ def _run(args: argparse.Namespace) -> int:
             completed_status = "completed_with_issues"
         if investigation is not None and investigation.get("final_review", {}).get("status") != "completed":
             completed_status = "completed_with_issues"
-        if m3_screening is not None and m3_screening.get("status") != "completed":
+        if m3_screening is not None and _m3_has_issue(m3_screening):
             completed_status = "completed_with_issues"
         manifest = _manifest(
             status=completed_status,
@@ -274,7 +280,7 @@ def _run(args: argparse.Namespace) -> int:
         return 2 if (
             (investigation is not None and _investigation_has_issue(investigation))
             or (investigation is not None and investigation.get("final_review", {}).get("status") != "completed")
-            or (m3_screening is not None and m3_screening.get("status") != "completed")
+            or (m3_screening is not None and _m3_has_issue(m3_screening))
         ) else 0
     except Exception as exc:
         if _m3_requested(args) and m3_screening is None:
@@ -285,6 +291,7 @@ def _run(args: argparse.Namespace) -> int:
                 source_sha256=actual_copy_sha256 or source_sha256,
                 error=exc,
             )
+            m3_screening["run_id"] = run_id
             try:
                 _write_json_new(run_dir / "m3_screening.json", m3_screening)
             except OSError:
@@ -292,7 +299,7 @@ def _run(args: argparse.Namespace) -> int:
         deterministic_archived = (run_dir / "analysis.json").is_file() and (
             report_dir / "report.json"
         ).is_file()
-        if args.with_model and investigation is None:
+        if args.with_model and investigation is None and not investigation_started:
             investigation = {
                 "kind": "fintrace_annual_investigation",
                 "run_id": run_id,
@@ -311,21 +318,89 @@ def _run(args: argparse.Namespace) -> int:
                 "archive_path": _relative_or_absolute(
                     run_dir / "investigation.json", artifacts_root
                 ),
+                "final_review": {
+                    "status": "not_called",
+                    "reason": "deterministic_analysis_failed_before_investigation",
+                    "assessment": None,
+                    "summary": None,
+                    "reasons": [],
+                    "follow_up_items": [],
+                    "limitations": [],
+                    "model_called": False,
+                    "call_count": 0,
+                    "call_attempt_count": 0,
+                    "audit_artifacts": [],
+                    "source_identity": {
+                        "run_id": run_id,
+                        "company_id": args.company_id,
+                        "report_year": args.report_year,
+                        "source_document_id": args.document_id,
+                        "source_sha256": actual_copy_sha256 or source_sha256,
+                    },
+                },
             }
             try:
                 _write_json_new(run_dir / "investigation.json", investigation)
             except OSError:
                 pass
-        model_called = bool(investigation and investigation.get("model_called"))
+        elif args.with_model and investigation is None and investigation_started:
+            unknown_call_audit_limitation = (
+                "调查流程异常退出，模型调用审计状态未知；不得据此断言未发起调用或将调用次数记为零。"
+            )
+            investigation = {
+                "kind": "fintrace_annual_investigation",
+                "run_id": run_id,
+                "company_id": args.company_id,
+                "report_year": args.report_year,
+                "source_document_id": args.document_id,
+                "source_sha256": actual_copy_sha256 or source_sha256,
+                "status": "failed",
+                "call_audit_status": "unknown",
+                "items": [],
+                "audit_artifacts": [],
+                "fraud_conclusion": None,
+                "reason": "model_investigation_interrupted_with_unknown_call_audit",
+                "limitations": [unknown_call_audit_limitation],
+                "archive_path": _relative_or_absolute(
+                    run_dir / "investigation.json", artifacts_root
+                ),
+                "final_review": {
+                    "status": "failed",
+                    "reason": "model_investigation_interrupted_with_unknown_call_audit",
+                    "assessment": None,
+                    "summary": None,
+                    "reasons": [],
+                    "follow_up_items": [],
+                    "limitations": [unknown_call_audit_limitation],
+                    "audit_artifacts": [],
+                    "source_identity": {
+                        "run_id": run_id,
+                        "company_id": args.company_id,
+                        "report_year": args.report_year,
+                        "source_document_id": args.document_id,
+                        "source_sha256": actual_copy_sha256 or source_sha256,
+                    },
+                },
+            }
+            try:
+                _write_json_new(run_dir / "investigation.json", investigation)
+            except OSError:
+                pass
+        call_audit_unknown = bool(investigation and investigation.get("call_audit_status") == "unknown")
+        model_called = None if call_audit_unknown else bool(investigation and investigation.get("model_called"))
         failure = {
             "run_id": run_id,
             "status": "failed",
-            "model_called": model_called,
             "reason": str(exc),
             "error_type": type(exc).__name__,
             "source_sha256": actual_copy_sha256 or source_sha256,
             "expected_sha256": args.expected_sha256,
         }
+        if model_called is None:
+            failure["model_call_audit_status"] = "unknown"
+            failure["limitations"] = [unknown_call_audit_limitation]
+        else:
+            failure["model_called"] = model_called
         if m3_screening is not None:
             failure["m3_screening_status"] = m3_screening.get("status")
             failure["m3_screening_path"] = _relative_or_absolute(
@@ -340,7 +415,7 @@ def _run(args: argparse.Namespace) -> int:
             _write_json_new(run_dir / "failure.json", failure)
             _write_json_new(report_dir / "failure.json", failure)
             failure_manifest = _manifest(
-                status=("completed_with_issues" if deterministic_archived else "failed"),
+                status=("completed_with_issues" if deterministic_archived and not call_audit_unknown else "failed"),
                 run_id=run_id,
                 created_at=created_at,
                 args=args,
@@ -353,7 +428,7 @@ def _run(args: argparse.Namespace) -> int:
                 error=str(exc),
                 m3_screening=m3_screening,
             )
-            if investigation is not None:
+            if investigation is not None and not call_audit_unknown:
                 _add_investigation_manifest(
                     failure_manifest,
                     investigation,
@@ -361,6 +436,19 @@ def _run(args: argparse.Namespace) -> int:
                     artifacts_root=artifacts_root,
                     run_dir=run_dir,
                 )
+            elif call_audit_unknown:
+                failure_manifest["model_investigation_status"] = "failed"
+                failure_manifest["model_call_audit_status"] = "unknown"
+                failure_manifest["model_investigation"] = {
+                    "requested": True,
+                    "status": "failed",
+                    "model_call_audit_status": "unknown",
+                    "limitations": investigation.get("limitations", []),
+                    "output_path": _relative_or_absolute(
+                        run_dir / "investigation.json", artifacts_root
+                    ),
+                }
+                failure_manifest.pop("model_called", None)
             if m3_screening is not None:
                 _add_m3_manifest(failure_manifest, m3_screening, artifacts_root=artifacts_root, run_dir=run_dir)
             _write_json_new(run_dir / "manifest.json", failure_manifest)
@@ -375,6 +463,15 @@ def _run(args: argparse.Namespace) -> int:
         print(f"run_dir={run_dir}", file=sys.stderr)
         print(f"report_dir={report_dir}", file=sys.stderr)
         return 2
+
+
+def _m3_has_issue(m3_screening: dict[str, object]) -> bool:
+    screening = m3_screening.get("screening")
+    return (
+        m3_screening.get("status") != "completed"
+        or not isinstance(screening, dict)
+        or screening.get("status") != "completed"
+    )
 
 
 def _safe_artifacts_root(value: Path) -> Path:
@@ -453,6 +550,7 @@ def _manifest(
         source_hashes[relative] = _sha256(source) if source.is_file() else None
     payload: dict[str, object] = {
         "run_id": run_id,
+        "mode": _mode_from_args(args),
         "status": status,
         "created_at": created_at,
         "model_called": False,
@@ -511,6 +609,7 @@ def _add_m3_manifest(
         )
     manifest["m3_screening"] = {
         "requested": True,
+        "run_id": m3_screening.get("run_id"),
         "status": m3_screening.get("status"),
         "total_score": m3_screening.get("screening", {}).get("total_score"),
         "maximum_score": m3_screening.get("screening", {}).get("maximum_score"),
@@ -522,6 +621,16 @@ def _add_m3_manifest(
 def _m3_requested(args: argparse.Namespace) -> bool:
     # 老测试或旧调用方可能直接传入构造好的 Namespace，没有新字段。
     return bool(getattr(args, "with_m3_screening", False))
+
+
+def _mode_from_args(args: argparse.Namespace) -> str:
+    if args.with_model and _m3_requested(args):
+        return "integrated_analysis"
+    if args.with_model:
+        return "model_investigation"
+    if _m3_requested(args):
+        return "m3_screening"
+    return "deterministic"
 
 
 def _add_investigation_manifest(

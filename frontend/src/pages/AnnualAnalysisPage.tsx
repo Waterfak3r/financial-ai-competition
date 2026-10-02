@@ -211,8 +211,9 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
       setResponse(loaded);
       setRunId(loaded.report.run_id);
       setResultOrigin(createdJobIds.current.has(completedJob.job_id) ? "new" : "history");
-      if (completedJob.request.mode === "m3_screening" && loaded.report.m3_screening == null) {
-        setJobError("任务已完成，但报告没有包含所选的四项试行筛查结果；请按原来源重新提交。候选线索不是已核验事实。");
+      const missingLayers = missingRequestedReportLayers(completedJob.request.mode, loaded.report);
+      if (missingLayers.length > 0) {
+        setJobError(`任务已完成，但报告缺少所选的${missingLayers.join("、")}；请核对归档后再重试。`);
       }
     } catch (error) {
       if (taskGeneration.current === generation && reportRequest.current === requestId) {
@@ -423,7 +424,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
     if (jobSubmitLock.current || jobRefreshLock.current) {
       return;
     }
-    if (mode === "model_investigation" && modelCapability !== "ready") {
+    if (modeUsesModel(mode) && modelCapability !== "ready") {
       setJobError(
         modelCapability === "not_configured"
           ? "AI 分析不可用：后端尚未配置云端模型。标准分析仍可单独运行。"
@@ -937,12 +938,23 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
                 />
                 <span><strong>AI 调查与最终评审</strong><small>实际调用云端模型，仅发送本次所需年报片段；服务 ready 后可选。</small></span>
               </label>
+              <label className={`annual-job-mode-option annual-job-mode-ai${mode === "integrated_analysis" ? " selected" : ""}${modelCapability !== "ready" ? " is-unavailable" : ""}`}>
+                <input
+                  type="radio"
+                  name="annual-analysis-mode"
+                  value="integrated_analysis"
+                  checked={mode === "integrated_analysis"}
+                  disabled={modelCapability !== "ready"}
+                  onChange={() => setMode("integrated_analysis")}
+                />
+                <span><strong>四规则试行 + AI 调查与最终评审</strong><small>同一报告分别归档两层结果；AI 只读取标准核验报告并会调用已配置模型。</small></span>
+              </label>
             </div>
             <p className={`annual-job-capability${modelCapability === "ready" ? " is-ready" : ""}`} role="status">
               {modelCapabilityLoading
                 ? "正在检查 AI 服务状态…"
                 : modelCapability === "ready"
-                  ? "模型已就绪。选择 AI 模式后会实际调用已配置服务，并发送必要的年报片段。"
+                  ? "模型已就绪。选择 AI 或集成模式后会实际调用已配置服务，并发送必要的年报片段。"
                   : modelCapability === "not_configured"
                     ? "当前不可用：后端尚未配置云端模型。标准分析和试行筛查仍可使用。"
                     : modelCapability === "dependency_unavailable"
@@ -1111,8 +1123,8 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
 
       {response !== null ? (
         <>
-          {job !== null && job.run_id === response.report.run_id && job.request.mode === "m3_screening" && response.report.m3_screening == null ? (
-            <p className="alert" role="alert">本次任务选择了四项试行筛查，但报告没有对应结果。当前报告仍可查看；请核对任务归档后再重试。</p>
+          {job !== null && job.run_id === response.report.run_id && missingRequestedReportLayers(job.request.mode, response.report).length > 0 ? (
+            <p className="alert" role="alert">本次任务选择的{missingRequestedReportLayers(job.request.mode, response.report).join("、")}没有完整归档。当前报告仍可查看；请核对任务归档后再重试。</p>
           ) : null}
           <AnnualReportView
             response={response}
@@ -1583,6 +1595,8 @@ function JobStatusPanel({
       <p className="annual-job-status-note">
         {job.request.mode === "m3_screening"
           ? "本次运行标准分析和四项试行筛查；规则只提示可继续核对的数据组合。"
+          : job.request.mode === "integrated_analysis"
+            ? "本次分别运行四项试行筛查和 AI 调查/最终评审；AI 读取标准核验报告，M3 分数不作为模型结论或风险概率。"
           : job.request.mode === "model_investigation"
             ? "本次由本机完成数据核对，并使用云端模型分析年报相关片段、给出评审意见。"
             : "本次使用标准分析，在本机核对年报数据、计算和引用。"}
@@ -1662,9 +1676,10 @@ function AnnualReportView({
   const sourceMatches = report.source_sha256 === manifest.source_pdf_sha256;
   const companyName = trustedCompanyName(report.company_id, report.source_document_id, report.source_sha256);
   const mode = activeMode ?? selectedHistoryItem?.run_mode ?? selectedHistoryItem?.mode ??
-    (report.m3_screening !== null && report.m3_screening !== undefined ? "m3_screening" : null);
+    response.manifest.mode ?? (report.m3_screening !== null && report.m3_screening !== undefined ? "m3_screening" : null);
   const modeText = mode === "deterministic" ? "标准分析" : mode === "m3_screening" ? "四规则试行" :
-    mode === "model_investigation" ? "AI 调查与评审" : report.model_called ? "模型调用记录" : "模式未记录";
+    mode === "model_investigation" ? "AI 调查与评审" : mode === "integrated_analysis" ? "四规则试行 + AI 调查与评审" :
+      mode === "unknown" ? "模式未记录" : report.model_called ? "模型调用记录" : "模式未记录";
   const headlineRates = coreMetrics
     .filter((item) => item.yoy !== null)
     .map((item) => `${item.label}同比 ${formatSignedPercent(item.yoy!.output_value)}`);
@@ -1695,6 +1710,12 @@ function AnnualReportView({
           {manifestStatusText(manifest.status)}
         </span>
       </header>
+
+      {mode === "integrated_analysis" ? (
+        <p className="annual-scope-summary" role="note">
+          本报告分别呈现标准事实核验、M3 四规则审计和 AI 调查/最终评审。AI 只引用标准报告的证据白名单；模型评审不提升 M3 或事实核验状态。M3 分数为试行规则计分，不是风险概率。
+        </p>
+      ) : null}
 
       {selectedHistoryItem?.issues.length ? (
         <ul className="annual-report-history-issues" aria-label="历史归档问题">
@@ -4064,6 +4085,28 @@ function isActiveJob(job: AnnualAnalysisJob): boolean {
   return job.status === "queued" || job.status === "running";
 }
 
+function modeUsesModel(mode: AnnualAnalysisJobMode): boolean {
+  return mode === "model_investigation" || mode === "integrated_analysis";
+}
+
+function missingRequestedReportLayers(
+  mode: AnnualAnalysisJobMode,
+  report: AnnualAnalysisResponse["report"],
+): string[] {
+  const missing: string[] = [];
+  if ((mode === "m3_screening" || mode === "integrated_analysis") && report.m3_screening == null) {
+    missing.push("M3 四规则审计");
+  }
+  if (modeUsesModel(mode)) {
+    if (report.model_investigation == null) {
+      missing.push("AI 调查记录");
+    } else if (report.model_review == null) {
+      missing.push("AI 最终评审");
+    }
+  }
+  return missing;
+}
+
 function isSuccessfulJob(job: AnnualAnalysisJob): boolean {
   return job.status === "completed" || job.status === "completed_with_issues";
 }
@@ -4218,6 +4261,7 @@ function historyModeText(mode: AnnualAnalysisHistoryItem["mode"]): string {
     deterministic: "标准分析",
     m3_screening: "标准分析 + 四规则试行",
     model_investigation: "AI 调查与最终评审",
+    integrated_analysis: "四规则试行 + AI 调查与最终评审",
     unknown: "未记录模式",
   };
   return labels[mode];

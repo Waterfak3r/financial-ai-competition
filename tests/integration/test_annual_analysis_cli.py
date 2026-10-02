@@ -7,9 +7,11 @@ import json
 import re
 import subprocess
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
+from scripts import analyze_annual as annual_cli
 
 _ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = _ROOT / "scripts" / "analyze_annual.py"
@@ -396,38 +398,239 @@ def test_cli_m3_source_hash_failure_is_explicitly_archived(tmp_path: Path) -> No
     assert m3["screening"]["total_score"] is None
 
 
-def test_cli_rejects_model_and_deterministic_m3_in_one_run(tmp_path: Path) -> None:
-    if not _PDF.is_file():
-        pytest.skip("本机没有海天 2024 原始 PDF。")
-    source_record = _ROOT / "data" / "raw" / "603288" / "2024" / "cninfo-1222994233" / "source.json"
-    completed = subprocess.run(
+def test_cli_parser_accepts_model_and_m3_in_one_run(tmp_path: Path) -> None:
+    args = annual_cli._parser().parse_args(
         [
-            sys.executable,
-            str(_SCRIPT),
-            "--source-pdf",
-            str(_PDF),
-            "--company-id",
-            "603288",
-            "--report-year",
-            "2024",
-            "--document-id",
-            "cninfo-1222994233",
-            "--artifacts-root",
-            str(tmp_path / "artifacts"),
+            "--source-pdf", str(tmp_path / "report.pdf"),
+            "--company-id", "603288",
+            "--report-year", "2024",
+            "--document-id", "doc-1",
             "--with-model",
-            "--source-record",
-            str(source_record),
+            "--source-record", str(tmp_path / "source.json"),
             "--with-m3-screening",
-        ],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        check=False,
+        ]
     )
 
-    assert completed.returncode == 2
-    assert "--with-model 与 --with-m3-screening 暂不支持同次运行" in completed.stderr
-    assert not (tmp_path / "artifacts" / "runs").exists()
+    assert args.with_model is True
+    assert args.with_m3_screening is True
+    assert annual_cli._mode_from_args(args) == "integrated_analysis"
+
+
+def test_unexpected_investigation_exception_keeps_call_audit_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source_pdf = tmp_path / "report.pdf"
+    source_pdf.write_bytes(b"%PDF-mock-input")
+    source_record = tmp_path / "source.json"
+    source_record.write_text("{}", encoding="utf-8")
+    source_sha256 = _sha256(source_pdf)
+    monkeypatch.setattr(
+        annual_cli,
+        "analyze_annual_pdf",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            parsed_pdf=SimpleNamespace(source_sha256=source_sha256, to_dict=lambda: {}),
+            archive_dict=lambda: {"facts": []},
+            report={"confirmed": {"metrics": [], "analyses": []}},
+            markdown="# standard report",
+        ),
+    )
+
+    def unexpected_investigation(*_args, **_kwargs):
+        raise RuntimeError("unexpected after model flow started")
+
+    monkeypatch.setattr(annual_cli, "run_annual_investigation_appendix", unexpected_investigation)
+    args = SimpleNamespace(
+        source_pdf=source_pdf,
+        company_id="603288",
+        report_year=2024,
+        document_id="doc-1",
+        expected_sha256=None,
+        artifacts_root=tmp_path / "artifacts",
+        with_model=True,
+        source_record=source_record,
+        with_m3_screening=False,
+    )
+
+    assert annual_cli._run(args) == 2
+    output = capsys.readouterr()
+    match = _RUN_ID.search(output.err)
+    assert match is not None, output.err
+    run_dir = tmp_path / "artifacts" / "runs" / match.group(1)
+    manifest = _read_json(run_dir / "manifest.json")
+    failure = _read_json(run_dir / "failure.json")
+    investigation = _read_json(run_dir / "investigation.json")
+
+    assert manifest["status"] == "failed"
+    assert manifest["mode"] == "model_investigation"
+    assert manifest["model_call_audit_status"] == "unknown"
+    assert "model_called" not in manifest
+    assert "model_call_count" not in manifest["model_investigation"]
+    assert "model_call_attempt_count" not in manifest["model_investigation"]
+    assert failure["model_call_audit_status"] == "unknown"
+    assert "model_called" not in failure
+    assert investigation["call_audit_status"] == "unknown"
+    assert "model_called" not in investigation
+    assert "model_call_count" not in investigation
+    assert "不得据此断言未发起调用" in investigation["limitations"][0]
+
+
+@pytest.mark.parametrize("failed_layer", [None, "m3_screening", "model_investigation"])
+def test_cli_integrates_m3_and_investigation_with_independent_failure_propagation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    failed_layer: str | None,
+) -> None:
+    source_pdf = tmp_path / "report.pdf"
+    source_pdf.write_bytes(b"%PDF-mock-integrated-input")
+    source_record = tmp_path / "source.json"
+    source_record.write_text("{}", encoding="utf-8")
+    source_sha256 = _sha256(source_pdf)
+    base_report = {
+        "kind": "fintrace_annual_analysis_report",
+        "run_id": "placeholder",
+        "company_id": "603288",
+        "report_year": 2024,
+        "source_document_id": "doc-1",
+        "source_sha256": source_sha256,
+        "scope": {"note": "standard scope"},
+        "confirmed": {"metrics": [], "analyses": []},
+        "limitations": [],
+    }
+    def mock_analysis(*_args, **kwargs):
+        base_report["run_id"] = kwargs["run_id"]
+        return SimpleNamespace(
+            parsed_pdf=SimpleNamespace(source_sha256=source_sha256, to_dict=lambda: {"source_sha256": source_sha256}),
+            archive_dict=lambda: {"kind": "mock_analysis"},
+            report=base_report,
+            markdown="# standard report",
+            facts=[],
+            evidences=[],
+            fact_verifications=[],
+            calculations=[],
+            screening=[],
+            status="completed",
+        )
+
+    monkeypatch.setattr(annual_cli, "analyze_annual_pdf", mock_analysis)
+    seen: dict[str, object] = {"m3_calls": 0, "model_calls": 0}
+
+    def mock_m3(*_args, **_kwargs):
+        seen["m3_calls"] = int(seen["m3_calls"]) + 1
+        if failed_layer == "m3_screening":
+            raise RuntimeError("mock M3 failure")
+        return {
+            "kind": "fintrace_m3_annual_screening",
+            "status": "completed",
+            "source_document_id": "doc-1",
+            "source_sha256": source_sha256,
+            "screening": {
+                "status": "completed",
+                "rule_version": "mock-m3-v1",
+                "total_score": 25,
+                "maximum_score": 100,
+                "rules": [],
+            },
+            "extraction": {"new_fact_count": 0, "expected_new_fact_count": 10, "issues": []},
+            "explicit_unit_facts": {"fact_count": 0, "issues": []},
+            "verification": {"errors": []},
+            "comparability_proof_audit": {"status": "matched"},
+            "parent_profit_semantic_mapping_audit": {"status": "matched"},
+        }
+
+    def mock_investigation(report, **_kwargs):
+        seen["model_calls"] = int(seen["model_calls"]) + 1
+        seen["model_input_had_m3"] = "m3_screening" in report
+        review_status = "failed" if failed_layer == "model_investigation" else "completed"
+        return {
+            "kind": "fintrace_annual_investigation",
+            "run_id": report["run_id"],
+            "company_id": report["company_id"],
+            "report_year": report["report_year"],
+            "source_document_id": report["source_document_id"],
+            "source_sha256": source_sha256,
+            "status": review_status,
+            "model_called": True,
+            "model_call_count": 1,
+            "model_call_attempt_count": 1,
+            "items": [],
+            "audit_artifacts": [{"audit_id": "mock-audit", "status": "completed"}],
+            "fraud_conclusion": None,
+            "reason": "mock_failure" if review_status == "failed" else None,
+            "archive_path": "investigation.json",
+            "final_review": {
+                "status": review_status,
+                "model_called": True,
+                "call_count": 1,
+                "call_attempt_count": 1,
+                "assessment": "review",
+                "summary": "mock final review",
+                "reasons": [],
+                "follow_up_items": [],
+                "limitations": [],
+                "source_identity": {
+                    "run_id": report["run_id"],
+                    "company_id": report["company_id"],
+                    "report_year": report["report_year"],
+                    "source_document_id": report["source_document_id"],
+                    "source_sha256": source_sha256,
+                },
+            },
+        }
+
+    def mock_render_investigation(report, investigation):
+        assert "m3_screening" in report
+        assert investigation["source_sha256"] == source_sha256
+        return "# standard report\n\n## AI investigation\n"
+
+    monkeypatch.setattr(annual_cli, "run_m3_annual_screening", mock_m3)
+    monkeypatch.setattr(annual_cli, "run_annual_investigation_appendix", mock_investigation)
+    monkeypatch.setattr(annual_cli, "render_report_with_investigation", mock_render_investigation)
+    args = SimpleNamespace(
+        source_pdf=source_pdf,
+        company_id="603288",
+        report_year=2024,
+        document_id="doc-1",
+        expected_sha256=None,
+        artifacts_root=tmp_path / "artifacts",
+        with_model=True,
+        source_record=source_record,
+        with_m3_screening=True,
+    )
+
+    return_code = annual_cli._run(args)
+    output = capsys.readouterr()
+    match = _RUN_ID.search(output.out)
+    assert match is not None, output.out
+    run_id = match.group(1)
+    run_dir = tmp_path / "artifacts" / "runs" / run_id
+    report_dir = tmp_path / "artifacts" / "reports" / run_id
+    manifest = _read_json(run_dir / "manifest.json")
+    analysis = _read_json(run_dir / "analysis.json")
+    report = _read_json(report_dir / "report.json")
+    markdown = (report_dir / "report.md").read_text(encoding="utf-8")
+    m3 = _read_json(run_dir / "m3_screening.json")
+    investigation = _read_json(run_dir / "investigation.json")
+
+    assert seen["m3_calls"] == seen["model_calls"] == 1
+    assert seen["model_input_had_m3"] is False
+    assert manifest["mode"] == "integrated_analysis"
+    assert manifest["run_id"] == m3["run_id"] == report["run_id"] == investigation["run_id"] == run_id
+    assert manifest["m3_screening"]["run_id"] == run_id
+    assert manifest["model_investigation"]["output_path"] == f"runs/{run_id}/investigation.json"
+    assert "m3_screening" in analysis and "m3_screening" in report
+    assert report["model_investigation"]["status"] == investigation["status"]
+    assert "## AI investigation" in markdown
+    assert "## M3 四条年度规则筛查" in markdown
+    if failed_layer is None:
+        assert return_code == 0
+        assert manifest["status"] == "completed"
+        assert m3["status"] == investigation["status"] == "completed"
+    else:
+        assert return_code == 2
+        assert manifest["status"] == "completed_with_issues"
+        assert m3["status"] == ("failed" if failed_layer == "m3_screening" else "completed")
+        assert investigation["status"] == ("failed" if failed_layer == "model_investigation" else "completed")
 
 
 def _invoke(

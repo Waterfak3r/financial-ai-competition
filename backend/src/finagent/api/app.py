@@ -70,7 +70,7 @@ class AnnualAnalysisJobRequest(BaseModel):
     document_id: str
     source_pdf_path: str = Field(..., description="相对 data/raw 的 PDF 路径")
     sha256: str
-    mode: Literal["deterministic", "m3_screening", "model_investigation"] = "deterministic"
+    mode: Literal["deterministic", "m3_screening", "model_investigation", "integrated_analysis"] = "deterministic"
 
 
 def create_app(project_root: Path | None = None) -> FastAPI:

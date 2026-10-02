@@ -215,6 +215,23 @@ def test_manifest_without_explicit_mode_is_unknown_even_if_job_request_has_mode(
     assert row["result_available"] is True
 
 
+@pytest.mark.parametrize(
+    ("manifest", "expected"),
+    (
+        ({"mode": "integrated_analysis", "m3_screening": {"requested": True}, "model_investigation": {"requested": True}}, "integrated_analysis"),
+        ({"mode": "integrated_analysis", "m3_screening": {"requested": True}}, "unknown"),
+        ({"mode": "deterministic", "m3_screening": {"requested": True}}, "unknown"),
+        ({"mode": "model_investigation", "model_investigation": {"requested": True}}, "model_investigation"),
+        ({"mode": "m3_screening", "m3_screening": {"requested": True}}, "m3_screening"),
+        ({"m3_screening": {"requested": True}, "model_investigation": {"requested": True}}, "integrated_analysis"),
+    ),
+)
+def test_manifest_mode_is_checked_against_independent_layer_markers(
+    manifest: dict[str, object], expected: str
+) -> None:
+    assert history_module._infer_mode(manifest) == expected
+
+
 def test_pagination_uses_created_at_stably_and_reports_real_total(tmp_path: Path) -> None:
     old_id = _write_run(tmp_path, 20, created_at="2026-01-01T00:00:00+00:00")
     newest_id = _write_run(tmp_path, 21, created_at="2026-03-01T00:00:00+00:00", document_id="doc-2")

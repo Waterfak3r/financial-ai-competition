@@ -78,6 +78,7 @@ def _write_success_archive(
     manifest = {
         "run_id": run_id,
         "status": status,
+        "mode": request.get("mode", "deterministic"),
         "company_id": request["company_id"],
         "report_year": request["report_year"],
         "document_id": request["document_id"],
@@ -100,6 +101,16 @@ def _write_success_archive(
         "source_sha256": request["sha256"],
         "confirmed": {"metrics": [], "analyses": []},
     }
+    mode = request.get("mode", "deterministic")
+    if mode in {"m3_screening", "integrated_analysis"}:
+        manifest["m3_screening"] = {"requested": True, "status": "completed"}
+        report["m3_screening"] = {"status": "completed", "score": 25, "rules": []}
+    if mode in {"model_investigation", "integrated_analysis"}:
+        manifest["model_investigation"] = {"requested": True, "status": "completed"}
+        manifest["model_called"] = True
+        report["model_called"] = True
+        report["model_investigation"] = {"status": "completed", "items": []}
+        report["model_review"] = {"status": "completed", "assessment": "review", "reasons": []}
     (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     (report_dir / "report.json").write_text(json.dumps(report), encoding="utf-8")
     return run_id
@@ -143,6 +154,36 @@ def test_successful_job_returns_existing_report_run_id(tmp_path: Path, monkeypat
     assert report.json()["report"]["source_sha256"] == source["sha256"]
     state_file = tmp_path / "artifacts" / "annual-analysis-jobs" / initial["job_id"] / "job.json"
     assert json.loads(state_file.read_text(encoding="utf-8"))["status"] == "completed"
+
+
+def test_integrated_mode_passes_http_contract_and_returns_both_layers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _make_source(tmp_path)
+    monkeypatch.setattr(
+        jobs_module,
+        "get_annual_analysis_capabilities",
+        lambda _project_root=None: {"model_investigation": {"available": True, "status": "ready"}},
+    )
+    monkeypatch.setattr(jobs_module, "_invoke_cli", _successful_runner)
+    client = TestClient(create_app(tmp_path))
+
+    created = client.post(
+        "/v1/annual-analysis-jobs",
+        json=_request(source, mode="integrated_analysis"),
+    )
+
+    assert created.status_code == 202
+    state = _wait_terminal(client, created.json()["job_id"])
+    assert state["status"] == "completed"
+    report_response = client.get(state["result_url"])
+    assert report_response.status_code == 200
+    archive = report_response.json()
+    assert archive["manifest"]["mode"] == "integrated_analysis"
+    assert archive["report"]["m3_screening"]["status"] == "completed"
+    assert archive["report"]["model_investigation"]["status"] == "completed"
+    assert archive["report"]["model_review"]["status"] == "completed"
+    assert archive["report"]["model_called"] is True
 
 
 @pytest.mark.parametrize(
@@ -393,6 +434,43 @@ def test_model_cli_uses_saved_settings_snapshot_and_screening_drops_all_model_va
     assert "saved-private-key" not in json.dumps(observed[0]["command"])
     assert "environment-private-key" not in json.dumps(model_environment)
     assert not any(key.startswith("MODEL_") for key in deterministic_environment)
+
+
+def test_integrated_cli_combines_both_switches_and_injects_credentials_only_for_ai(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _make_source(tmp_path)
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "analyze_annual.py").write_text("# mock cli", encoding="utf-8")
+    monkeypatch.setenv("MODEL_BASE_URL", "https://model.example.invalid/v1")
+    monkeypatch.setenv("MODEL_API_KEY", "integrated-private-key")
+    monkeypatch.setenv("MODEL_NAME", "integrated-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-provider-secret")
+    observed: list[dict[str, object]] = []
+
+    def fake_run(command, *, cwd, env, timeout, **kwargs):
+        observed.append({"command": command, "env": env})
+        return SimpleNamespace(returncode=0, stdout="run_id=annual-analysis-00000000-0000-0000-0000-000000000000", stderr="")
+
+    monkeypatch.setattr(jobs_module.subprocess, "run", fake_run)
+
+    jobs_module._invoke_cli(tmp_path, tmp_path / "artifacts", _request(source, mode="deterministic"))
+    jobs_module._invoke_cli(tmp_path, tmp_path / "artifacts", _request(source, mode="m3_screening"))
+    jobs_module._invoke_cli(tmp_path, tmp_path / "artifacts", _request(source, mode="integrated_analysis"))
+
+    deterministic_command, m3_command, integrated_command = [item["command"] for item in observed]
+    deterministic_env, m3_env, integrated_env = [item["env"] for item in observed]
+    assert "--with-model" not in deterministic_command and "--with-m3-screening" not in deterministic_command
+    assert "--with-model" not in m3_command and "--with-m3-screening" in m3_command
+    assert "--with-model" in integrated_command and "--with-m3-screening" in integrated_command
+    assert not any(key.startswith("MODEL_") for env in (deterministic_env, m3_env) for key in env)
+    assert integrated_env["MODEL_API_KEY"] == "integrated-private-key"
+    assert integrated_env["MODEL_BASE_URL"] == "https://model.example.invalid/v1"
+    assert integrated_env["MODEL_NAME"] == "integrated-model"
+    assert "OPENAI_API_KEY" not in integrated_env
+    assert "integrated-private-key" not in json.dumps(integrated_command)
+    assert "unrelated-provider-secret" not in json.dumps(integrated_env)
 
 
 def test_invalid_cli_timeout_configuration_fails_closed(monkeypatch) -> None:

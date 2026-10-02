@@ -1,6 +1,6 @@
 # 架构与模块边界
 
-本文描述当前模块与行为契约，不保存逐次测试流水。能力摘要、启动与配置见 [README](../README.md)，实现里程碑见 [roadmap.md](roadmap.md)，既往结果见 [验收记录](verification-history.md)。计划中的季度分析、历史列表、产品级导出不可写成现有接口。
+本文描述当前模块与行为契约，不保存逐次测试流水。能力摘要、启动与配置见 [README](../README.md)，实现里程碑见 [roadmap.md](roadmap.md)，既往结果见 [验收记录](verification-history.md)。计划中的季度分析与产品级导出不可写成现有接口。
 
 ## 1. 系统与流程
 
@@ -17,10 +17,13 @@ flowchart TD
     F --> H
     E -->|model_investigation| G["同源候选调查与结构化最终评审"]
     G --> H
+    E -->|integrated_analysis| J["保留同一基础报告并分别运行两层"]
+    J --> F
+    J --> G
     H --> I["Web 报告与已核验证据页图"]
 ```
 
-三种模式互斥：deterministic 是默认年度路径；m3_screening 增加扩展字段与四规则；model_investigation 增加候选调查与最终评审。后两者不能在同次 CLI 运行组合。默认路径及四规则不调用模型。
+四种模式为 deterministic、m3_screening、model_investigation 与 integrated_analysis。集成模式在同一 run/report 中保留基础确定性结果，并分别归档 M3 规则审计和 AI 调查/最终评审；AI 仅接收标准确定性报告，不把 M3 分数或状态作为事实输入。任一附加层失败或有缺口时，另一层和基础报告仍保留，任务状态反映问题。deterministic 与独立 M3 模式不调用模型；model_investigation 与 integrated_analysis 会调用模型。
 
 旧年度预检是独立兼容流程：旧事实、旧同比、引用坐标金额与单位换算复核、可选 screening。上传与创建预检分步，不能把旧预检复核描述为 v2 独立事实核验。类型风险见 [历史字段审计](current-schema-audit.md)。
 
@@ -54,7 +57,7 @@ flowchart TD
 | POST /v1/text-pdf-uploads | multipart PDF、company_id、report_year；上限 32 MiB；新建 raw/processed 文件，不覆盖旧输入，不自动开始分析 |
 | POST /v1/annual-prechecks | 创建旧预检 |
 | GET /v1/annual-prechecks/{run_id} | 读取旧预检归档 |
-| POST /v1/annual-analysis-jobs | 以已存来源创建 deterministic / m3_screening / model_investigation 任务 |
+| POST /v1/annual-analysis-jobs | 以已存来源创建 deterministic / m3_screening / model_investigation / integrated_analysis 任务 |
 | GET /v1/annual-analysis-jobs/{job_id} | 查询阶段、状态、结果 run_id / result_url |
 | GET /v1/annual-analysis-history?limit=20&offset=0 | 只读本机年度任务与报告索引，按创建时间分页并报告总条数 |
 | GET /v1/annual-analyses/{run_id} | 只读已归档的 v2 报告 |
@@ -69,7 +72,7 @@ flowchart TD
 
 有界队列为单进程最多一个运行任务、三个排队任务。job.json 写入 `artifacts/annual-analysis-jobs/<job_id>/`；服务重启时遗留 queued/running 转为 interrupted。状态为 queued、running、completed、completed_with_issues、failed、interrupted。模型配置或 LangGraph 未就绪时创建模型任务返回 503。
 
-Web 模型任务按 README 的本机文件优先/环境回退规则注入配置；deterministic 与 M3 子进程移除 MODEL_*。CLI 仍只读环境。设置读取 API 不回显密钥并禁止缓存；设置路由检查 loopback Host，修改与测试还检查本机 Origin。这些是设置路由的约束，不代表所有 API 有相同防护。应用不全局强制 host，按启动命令绑定 127.0.0.1。
+Web 模型任务（model_investigation 与 integrated_analysis）按 README 的本机文件优先/环境回退规则注入配置；deterministic 与独立 M3 子进程移除 MODEL_*。集成模式的 M3 计算不使用模型配置，只有调查/评审调用模型。CLI 仍只读环境。设置读取 API 不回显密钥并禁止缓存；设置路由检查 loopback Host，修改与测试还检查本机 Origin。这些是设置路由的约束，不代表所有 API 有相同防护。应用不全局强制 host，按启动命令绑定 127.0.0.1。
 
 `GET /v1/annual-analysis-history` 的 `limit` 默认 20、允许 1–50；`offset` 默认 0、须为非负整数。HTTP 查询值越界或无法解析返回 422。响应顶层为 `{items, total, limit, offset}`；每项主要包含 `item_id`、公司代码/年报年份/类型、来源文档编号和文件名、总状态、独立的 `job_status` 与 `run_status`、任务 `mode` 与归档 `run_mode`、`created_at`、`job_id`/`run_id`、`replay`、`result_available` 和 `{code, message}` 形式的 `issues`。缺失或无效的创建时间排在有效时间之后；有效时间按新到旧排序，同时间以条目标识稳定排序。
 

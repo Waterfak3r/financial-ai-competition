@@ -142,9 +142,15 @@ def load_annual_report(project_root: Path, run_id: str) -> AnnualReportArchive:
         expected_sha256=manifest_source_sha256.lower(),
         verified_evidence_ids={item["evidence_id"] for item in verification_evidences},
     )
+    raw_mode = manifest.get("mode")
+    supported_modes = {"deterministic", "m3_screening", "model_investigation", "integrated_analysis"}
+    manifest_mode = raw_mode if isinstance(raw_mode, str) and raw_mode in supported_modes else None
+    if raw_mode is not None and manifest_mode is None:
+        manifest_mode = "unknown"
     manifest_summary = {
         "run_id": checked_run_id,
         "status": manifest["status"],
+        "mode": manifest_mode,
         "company_id": manifest["company_id"],
         "report_year": manifest["report_year"],
         "document_id": manifest["document_id"],

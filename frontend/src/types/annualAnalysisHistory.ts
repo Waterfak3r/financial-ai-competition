@@ -1,4 +1,9 @@
-export type AnnualHistoryMode = "deterministic" | "m3_screening" | "model_investigation" | "unknown";
+export type AnnualHistoryMode =
+  | "deterministic"
+  | "m3_screening"
+  | "model_investigation"
+  | "integrated_analysis"
+  | "unknown";
 
 export interface AnnualAnalysisHistoryIssue {
   code: string;

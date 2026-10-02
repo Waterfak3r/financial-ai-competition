@@ -246,9 +246,20 @@ function readAnnualAnalysisResponse(value: unknown, expectedRunId: string): Annu
 }
 
 function readManifest(value: Record<string, unknown>, path: string): AnnualAnalysisManifest {
+  const rawMode = value.mode;
+  const supportedModes = ["deterministic", "m3_screening", "model_investigation", "integrated_analysis"];
+  let mode: AnnualAnalysisManifest["mode"] = null;
+  if (rawMode !== undefined && rawMode !== null) {
+    if (rawMode === "unknown" || (typeof rawMode === "string" && supportedModes.includes(rawMode))) {
+      mode = rawMode as NonNullable<AnnualAnalysisManifest["mode"]>;
+    } else {
+      throw invalidResponse(path + ".mode");
+    }
+  }
   const manifest: AnnualAnalysisManifest = {
     run_id: requireString(value.run_id, path + ".run_id"),
     status: requireString(value.status, path + ".status"),
+    mode,
     company_id: requireString(value.company_id, path + ".company_id"),
     report_year: requireInteger(value.report_year, path + ".report_year"),
     document_id: requireString(value.document_id, path + ".document_id"),

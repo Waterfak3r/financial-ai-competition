@@ -134,7 +134,7 @@ function parseIssue(value: unknown): AnnualAnalysisHistoryIssue {
 
 function requireMode(value: unknown, path: string): AnnualHistoryMode {
   const mode = requireString(value, path);
-  if (["deterministic", "m3_screening", "model_investigation", "unknown"].includes(mode)) {
+  if (["deterministic", "m3_screening", "model_investigation", "integrated_analysis", "unknown"].includes(mode)) {
     return mode as AnnualHistoryMode;
   }
   return "unknown";

@@ -3,6 +3,7 @@ export type AnnualReportRecord = Record<string, unknown>;
 export interface AnnualAnalysisManifest {
   run_id: string;
   status: string;
+  mode?: "deterministic" | "m3_screening" | "model_investigation" | "integrated_analysis" | "unknown" | null;
   company_id: string;
   report_year: number;
   document_id: string;

@@ -194,6 +194,24 @@ def test_report_api_returns_manifest_binding_and_only_verified_evidence(tmp_path
     assert "D:\\private\\source.pdf" not in response.text
 
 
+@pytest.mark.parametrize("invalid_mode", [[], {}, ["integrated_analysis"], 3, "future_mode"])
+def test_report_api_maps_non_string_or_unknown_manifest_mode_to_unknown(
+    tmp_path: Path, invalid_mode: object
+) -> None:
+    run_id = "synthetic-unknown-mode-001"
+    _make_archive(tmp_path, run_id)
+    manifest_path = tmp_path / "artifacts" / "runs" / run_id / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["mode"] = invalid_mode
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    client = TestClient(create_app(tmp_path))
+
+    response = client.get(f"/v1/annual-analyses/{run_id}")
+
+    assert response.status_code == 200
+    assert response.json()["manifest"]["mode"] == "unknown"
+
+
 def test_preview_is_png_and_uses_value_region_page_only(tmp_path: Path) -> None:
     run_id = "synthetic-preview-001"
     created = _make_archive(tmp_path, run_id)

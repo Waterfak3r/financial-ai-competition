@@ -74,6 +74,18 @@ A-02 相关后端测试聚焦集合为 95 passed、1 skipped；跳过来自 Wind
 
 A-02 真实 AI 归档保持其原始 manifest：`git_head=921aa19d98161a54b7afcd426c567949f6173615`、`git_dirty=true`。本轮重算确认 manifest 指定的 29 个分析源码/提示词 SHA256 与对应文件一致；这只覆盖 29 个分析链文件，不包含后续 history API 或前端，故 A-02 run 不是由冻结提交 `682471b71b2ee1b235abba317ab599caa42091f0` 生成。原 manifest 未修改。
 
+## 2026-10-02 A-06 M3 与 AI 同任务集成
+
+在专用本机 Web/API 端口创建且只创建一个 `integrated_analysis` 任务：job `annual-job-afb9c788597f4e7f956d28fa9006a080` 返回 HTTP 202，run `annual-analysis-ae6587e1-b25b-4ac6-8eb2-1520803f663f` 最终为 `completed`。公司/期间为海天味业 603288 / 2024，来源文档 `cninfo-1222994233`，PDF SHA256 为 `5a97b13534438f5e85249752ef492fbd9e23af73e67845e47bad1ab7d92e20ee`。报告 GET 返回 200；manifest 与 report 绑定同一 run，报告同时包含 M3、AI 调查和最终评审，run 目录分别保留 `m3_screening.json` 与 `investigation.json`。
+
+M3 四条规则均可计算、均未触发，总分 `0 / 100`。该值只表示当前未触发四条试行规则，不代表无风险或风险概率；阈值尚未校准，规则二语义映射仍限海天样例版式。AI 调查/最终评审共实际调用模型三次：两次调查和一次最终评审，三条调用审计均成功，没有传输/供应方错误。一次调查保留未核实解释，另一次因响应未满足结构与同源引用要求而弃权；最终评审保留原因未确认的限制。模型输出和评审没有改变基础事实核验状态，也未把 M3 分数当作证据。
+
+Edge/CDP 检查覆盖四模式表单（桌面 1440×900 两列、390×844 一列）、同一报告的 M3 与 AI 评审区、history mode 行、直接 `run_id` URL、刷新回看及已核验原文页图入口。报告区截图在 390px 视口等待选中报告自动定位后拍摄，heading top 为 15.56px、scrollY 为 4740、文档宽度与视口均为 390px；无横向溢出、console/page error。第 81 页已核验证据页图 GET 返回 200。只读回看没有发起新的任务 POST。
+
+聚焦后端检查命令覆盖 CLI 编排、任务 API（含真实 Pydantic 请求模式）、history 冲突判定和报告 manifest 读取，结果为 71 passed、2 skipped。跳过项为 `test_source_file_symlink_is_rejected`（当前环境不能创建源文件符号链接）与 `test_reparse_point_run_is_ignored_and_invalid_root_link_is_rejected`（当前 Windows 环境未允许创建目录符号链接）；详细输出见 `artifacts/evaluations/a06-integrated-20261002-098a06bb/pytest-focused-skip-reasons.txt`。`npm run typecheck` 与 `npm run build` 均 exit 0。该聚焦检查不是完整后端套件。
+
+正式 JSON 证据与桌面/窄屏模式、报告、层、历史和页图截图位于 `artifacts/evaluations/a06-integrated-20261002-098a06bb/`，其中 `integrated-report-390.png` 是自动定位到集成报告后的 390px 报告截图，另存有历史列表截图 `history-list-390.png`；临时 CDP 脚本与过程日志在 `artifacts/tmp/a06-integrated-20261002/`。初次 UI 执行器在唯一任务被 HTTP 202 接收后因本地进度记录参数错误中止，随后通过 GET-only 轮询恢复并完成验收，没有重提任务。原 run manifest 记录 `git_head=f90e789175bc1cc37f9a3d830a9d750b51a3ef54`、`git_dirty=true`，其中 `scripts/analyze_annual.py` SHA256 为 `88724734fae64c8a6b185b887e30406b1795699dd96980203f0a604f76d34d50`；manifest 与代码快照见运行产物，未回写历史归档。
+
 ## 2026-09-30 检查快照
 
 - 完整后端：344 passed、2 skipped，exit 0，97.35 秒。两个跳过均因 Windows 无法创建符号链接，覆盖设置文件和源 PDF。

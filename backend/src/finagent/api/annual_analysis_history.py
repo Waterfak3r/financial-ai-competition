@@ -32,7 +32,7 @@ _JOB_STATUSES = {
     "interrupted",
 }
 _RUN_STATUSES = {"running", "completed", "completed_with_issues", "failed", "interrupted"}
-_MODES = {"deterministic", "m3_screening", "model_investigation"}
+_MODES = {"deterministic", "m3_screening", "model_investigation", "integrated_analysis"}
 
 
 class AnnualAnalysisHistoryError(Exception):
@@ -484,18 +484,14 @@ def _add_issue(item: dict[str, Any], code: str, message: str) -> None:
 
 
 def _infer_mode(manifest: Mapping[str, Any]) -> str:
-    candidates: set[str] = set()
     direct_mode = manifest.get("mode")
-    if isinstance(direct_mode, str) and direct_mode in _MODES:
-        candidates.add(direct_mode)
     m3 = manifest.get("m3_screening")
     rules = manifest.get("rules")
-    if (isinstance(m3, Mapping) and m3.get("requested") is True) or (
+    has_m3 = (isinstance(m3, Mapping) and m3.get("requested") is True) or (
         isinstance(rules, Mapping) and isinstance(rules.get("m3_screening_version"), str)
-    ):
-        candidates.add("m3_screening")
+    )
     investigation = manifest.get("model_investigation")
-    if (
+    has_model = (
         manifest.get("model_called") is True
         or isinstance(investigation, Mapping)
         and (
@@ -503,9 +499,26 @@ def _infer_mode(manifest: Mapping[str, Any]) -> str:
             or isinstance(manifest.get("model_investigation_status"), str)
         )
         or isinstance(manifest.get("model_investigation_status"), str)
-    ):
-        candidates.add("model_investigation")
-    return next(iter(candidates)) if len(candidates) == 1 else "unknown"
+    )
+    inferred = (
+        "integrated_analysis"
+        if has_m3 and has_model
+        else "m3_screening"
+        if has_m3
+        else "model_investigation"
+        if has_model
+        else "deterministic"
+    )
+    if not isinstance(direct_mode, str) or direct_mode not in _MODES:
+        return inferred if inferred != "deterministic" else "unknown"
+    if direct_mode == "integrated_analysis":
+        return "integrated_analysis" if has_m3 and has_model else "unknown"
+    expected_markers = {
+        "deterministic": not has_m3 and not has_model,
+        "m3_screening": has_m3 and not has_model,
+        "model_investigation": has_model and not has_m3,
+    }
+    return direct_mode if expected_markers.get(direct_mode, False) else "unknown"
 
 
 def _safe_company_code(value: Any) -> str | None:
