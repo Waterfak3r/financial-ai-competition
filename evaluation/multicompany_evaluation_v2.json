@@ -1,0 +1,169 @@
+{
+  "schema_version": 2,
+  "protocol_id": "fintrace-multicompany-evaluation-v2",
+  "protocol_version": "2.0.0",
+  "evaluation_type": "three_company_source_reread_and_controlled_error_injection",
+  "purpose": "C-01 多公司来源重读、事实核验覆盖与受控错误拒绝/弃权统计；不是人工 golden、舞弊检测准确率或盲测。",
+  "label_firewall": {
+    "analysis_reads_only": ["source_pdf", "company_id", "report_year", "document_id"],
+    "analysis_excludes": ["evaluation/cases labels", "injected mutations", "human review fields", "fraud or misconduct labels"],
+    "model_called": false,
+    "human_golden_metrics_enabled": false
+  },
+  "holdout_limitations": "603288 为适配参考。600519 与 000858 按公司隔离作为未适配评测参考；仓库已有先前运行和 provisional 转录，本协议运行是 post-hoc holdout，不是未见数据或盲测。",
+  "human_review_gate": {
+    "status": "pending",
+    "reviewer_assignment": "unconfirmed",
+    "reviewer_name": null,
+    "review_date": null,
+    "other_computer_or_network_rules": "unconfirmed",
+    "approval_is_required_before_human_golden_metrics": true
+  },
+  "source_use_boundary": "三份均为真实官方披露的 2024 年年度报告，仅供本地开发与评测；未确认 PDF、原文片段或页图的再分发许可。原始文件和人工复核页图不进入公开 Git。",
+  "sources": [
+    {
+      "company_id": "603288",
+      "company_name": "佛山市海天调味食品股份有限公司",
+      "company_role": "adaptation_reference",
+      "adaptation_status": "adapted_reference",
+      "previous_exposure": "海天是既有年度分析适配与验收样例；本轮为新评测 ID 下的原 PDF 重读。",
+      "report_year": 2024,
+      "report_type": "年度报告",
+      "document_id": "cninfo-1222994233",
+      "source_path": "data/raw/603288/2024/cninfo-1222994233/1222994233.PDF",
+      "source_record_path": "data/raw/603288/2024/cninfo-1222994233/source.json",
+      "source_url": "https://static.cninfo.com.cn/finalpage/2025-04-03/1222994233.PDF",
+      "disclosure_date": "2025-04-03",
+      "sha256": "5a97b13534438f5e85249752ef492fbd9e23af73e67845e47bad1ab7d92e20ee",
+      "byte_size": 4561223,
+      "pdf_pages": 208,
+      "use_condition": "公开披露，仅本地开发使用；未确认再分发许可。",
+      "provisional_disclosures": [
+        {
+          "topic": "会计政策及会计估计变化、重大会计差错更正",
+          "pdf_page": 59,
+          "printed_page": 59,
+          "required_text": "《企业会计准则解释第17号》",
+          "provisional_note": "年报说明 2024 年执行相关准则规定及指引，称对财务状况及经营成果未产生重大影响；同页重大会计差错更正勾选不适用。该事实不等于所有比较数据已由本项目复核。"
+        },
+        {
+          "topic": "重要会计政策、会计估计变更及首次执行准则调整",
+          "pdf_page": 116,
+          "printed_page": 116,
+          "required_text": "(3).2024 年起首次执行新会计准则",
+          "provisional_note": "三项相关栏均勾选不适用；应由人工复核原页及报告期间抬头。"
+        },
+        {
+          "topic": "期初未分配利润调整影响",
+          "pdf_page": 163,
+          "printed_page": 163,
+          "required_text": "由于重大会计差错更正，影响期初未分配利润0 元",
+          "provisional_note": "列示的五项调整影响均为 0 元；保留为报告披露参考。"
+        },
+        {
+          "topic": "前期会计差错追溯重述法",
+          "pdf_page": 197,
+          "printed_page": 197,
+          "required_text": "(1).追溯重述法",
+          "provisional_note": "该栏勾选不适用；比较期独立重算或对照不在本条披露本身之内。"
+        }
+      ]
+    },
+    {
+      "company_id": "600519",
+      "company_name": "贵州茅台酒股份有限公司",
+      "company_role": "company_isolated_post_hoc_holdout",
+      "adaptation_status": "unadapted_evaluation_reference",
+      "previous_exposure": "已有 provisional 事实案例与历史运行；虽按公司隔离，本协议运行不是 blind holdout。",
+      "report_year": 2024,
+      "report_type": "年度报告",
+      "document_id": "moutai-2024-annual",
+      "source_path": "data/raw/600519/2024/moutai-2024-annual/8055b7bed7db41bdbc617f4c9b9ec591.pdf",
+      "source_record_path": "data/raw/600519/2024/moutai-2024-annual/source.json",
+      "source_url": "https://www.moutai.com.cn/mtgf/articleFileDir/2025-04/08/8055b7bed7db41bdbc617f4c9b9ec591.pdf",
+      "disclosure_date": "2025-04-08",
+      "sha256": "5299f4940e2ce4e91084b73dc457d558b9d335fa76fbfee6227e4254eb7f4a30",
+      "byte_size": 3626217,
+      "pdf_pages": 143,
+      "use_condition": "公开披露，仅本地开发与评测使用；未确认再分发许可，不随版本库分发原始 PDF。",
+      "provisional_disclosures": [
+        {
+          "topic": "会计政策、会计估计变化及重大会计差错更正说明",
+          "pdf_page": 41,
+          "printed_page": 41,
+          "required_text": "公司对会计政策、会计估计变更原因及影响的分析说明",
+          "provisional_note": "该节相关事项勾选不适用；仅记录年报原文，不自动升级当前系统可比性证明。"
+        },
+        {
+          "topic": "重要会计政策、会计估计及首次执行准则调整",
+          "pdf_page": 85,
+          "printed_page": 85,
+          "required_text": "2024 年起首次执行新会计准则",
+          "provisional_note": "相关项目勾选不适用；前期差错追溯及期初调整影响仍标 unknown，等待人工核对。"
+        }
+      ]
+    },
+    {
+      "company_id": "000858",
+      "company_name": "宜宾五粮液股份有限公司",
+      "company_role": "company_isolated_post_hoc_holdout",
+      "adaptation_status": "unadapted_evaluation_reference",
+      "previous_exposure": "已有 provisional 事实案例与历史运行；虽按公司隔离，本协议运行不是 blind holdout。",
+      "report_year": 2024,
+      "report_type": "年度报告",
+      "document_id": "cninfo-1223311527",
+      "source_path": "data/raw/000858/2024/cninfo-1223311527/1223311527.PDF",
+      "source_record_path": "data/raw/000858/2024/cninfo-1223311527/source.json",
+      "source_url": "https://static.cninfo.com.cn/finalpage/2025-04-26/1223311527.PDF",
+      "disclosure_date": "2025-04-26",
+      "sha256": "b737191a758994a35e9442d46847de771fe48b758feb9a7f35601def922435e7",
+      "byte_size": 7895552,
+      "pdf_pages": 147,
+      "use_condition": "公开披露，仅本地开发与评测使用；未确认再分发许可，不随版本库分发原始 PDF。",
+      "provisional_disclosures": [
+        {
+          "topic": "是否需追溯调整或重述以前年度会计数据",
+          "pdf_page": 7,
+          "printed_page": 7,
+          "required_text": "公司是否需追溯调整或重述以前年度会计数据",
+          "provisional_note": "表内勾选否；保留为报告原文披露。它不覆盖本系统独立可比性核验的 insufficient_evidence 状态。"
+        },
+        {
+          "topic": "会计政策、会计估计变更或重大会计差错更正情况",
+          "pdf_page": 43,
+          "printed_page": 43,
+          "required_text": "公司报告期无会计政策、会计估计变更或重大会计差错更正的情况",
+          "provisional_note": "报告文字陈述无上述变更或更正；保留为人工待复核的披露参考。"
+        },
+        {
+          "topic": "期初未分配利润调整影响",
+          "pdf_page": 116,
+          "printed_page": 116,
+          "required_text": "由于重大会计差错更正，影响期初未分配利润0.00 元",
+          "provisional_note": "明细列示五项调整影响为 0.00 元；系统由于报告年份抬头无法绑定仍保持 insufficient_evidence / unknown。"
+        }
+      ]
+    }
+  ],
+  "fact_coverage": {
+    "metric_ids": ["revenue", "net_profit_parent", "operating_cash_flow", "non_recurring_total"],
+    "period_roles": ["current", "comparative"],
+    "truth_status": "agent_provisional_pending_human",
+    "fraud_or_misconduct_label": "not_assessed",
+    "scope_note": "披露的非经常性损益合计按原表保留 scope=unknown；不把它直接当作扣非归母净利润。"
+  },
+  "controlled_error_injections": [
+    {"family": "wrong_amount", "kind": "fact", "mutation": "规范金额及原值末位加 0.01"},
+    {"family": "wrong_unit", "kind": "fact", "mutation": "单位字段改为万元，原来源绑定不变"},
+    {"family": "wrong_period", "kind": "fact", "mutation": "将事实期间改成 2023-12-31，保留本期数值和来源绑定"},
+    {"family": "wrong_statement_scope", "kind": "fact", "mutation": "将营业收入口径从 consolidated 改为 parent"},
+    {"family": "unsupported_claim", "kind": "claim", "mutation": "保留引用，构造宣称营业收入证明舞弊的无支持事实 Claim"}
+  ],
+  "denominator_rules": {
+    "provisional_raw_facts": "每条事实状态按直接核验器的 verified/conflict/insufficient_evidence 计覆盖描述；所有 agent provisional facts 排除在人工 golden 准确率、舞弊误报率和舞弊漏报率分母外。",
+    "controlled_injections": "按 3 公司 × 5 错误类型计数；verified=错误接受，conflict=拒绝，insufficient_evidence=弃权。三种结果都以全部注入案例为分母分别报告；弃权不算正确拒绝。",
+    "baseline": "无独立核验基线只代表 schema-only 输入信任，不代表历史产品/模型运行；与当前 PDF 独立核验逐项配对。",
+    "unknown_and_conflict": "unknown / insufficient_evidence 与 conflict 分开统计，不把弃权视为真正确认。",
+    "human_metrics": "在人工复核 gate 放行前，人工 golden accuracy、fraud false-positive / false-negative denominator 均为 0。"
+  }
+}
