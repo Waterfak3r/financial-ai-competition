@@ -293,7 +293,8 @@ def _sample_permission_is_explicit(text: str) -> bool:
 
 
 def _is_original_synthetic(text: str) -> bool:
-    return "原创" in text and "模拟" in text and ("不对应真实" in text or "非真实" in text)
+    explicitly_non_real = any(phrase in text for phrase in ("不对应真实", "非真实", "不是任何真实"))
+    return "原创" in text and "模拟" in text and explicitly_non_real
 
 
 def validate_sample_manifests(

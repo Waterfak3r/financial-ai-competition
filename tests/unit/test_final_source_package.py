@@ -113,7 +113,7 @@ def _write_valid_sample_manifests(root: Path) -> dict[str, bytes]:
     annual_hash = hashlib.sha256(annual_pdf).hexdigest()
     quarterly_hash = hashlib.sha256(quarterly_pdf).hexdigest()
     annual_conditions = "原创模拟，不对应真实公司。可随 FINTRACE 比赛提交件和团队演示包分发。不得作为真实事实或舞弊标签。"
-    quarterly_conditions = "原创人工构造模拟材料；允许随 FINTRACE 比赛提交件和团队演示包分发，不得当作真实财务或舞弊结论。"
+    quarterly_conditions = "可随FINTRACE比赛提交件和团队演示包分发；不可作为真实财务或舞弊结论"
     annual = {
         "schema_version": 1,
         "dataset_id": "fintrace-annual-synthetic-v1",
@@ -143,7 +143,7 @@ def _write_valid_sample_manifests(root: Path) -> dict[str, bytes]:
         "schema_version": 1,
         "dataset_id": "fintrace-quarterly-synthetic-v1",
         "company_id": "SIM-QUARTERLY-TEST",
-        "nature": "原创人工构造模拟样例，不对应真实公司",
+        "nature": "原创人工构造模拟样例，明确不是任何真实公司的财报",
         "use_conditions": quarterly_conditions,
         "generator": "scripts/prepare_quarterly_samples.py",
         "documents": [
@@ -153,7 +153,7 @@ def _write_valid_sample_manifests(root: Path) -> dict[str, bytes]:
                 "source_sha256": quarterly_hash,
                 "source_url": "original-synthetic://fintrace/sim-quarterly-fixture",
                 "nature": "原创人工构造模拟报告；不对应真实公司或真实财务披露",
-                "use_conditions": quarterly_conditions,
+                "use_conditions": "允许随FINTRACE比赛提交件和团队演示包分发；不得当作真实财务事实或舞弊标签",
                 "report_type": "quarterly",
             }
         ],
