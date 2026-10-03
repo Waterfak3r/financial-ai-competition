@@ -63,3 +63,23 @@ Microsoft Visual C++ Runtime DLL 取自经 Authenticode 验证的 Microsoft 官�
 
 北京和新加坡使用当前兼容文档推荐的工作空间专属域名。`{WorkspaceId}` 换成该地域的业务空间 ID，`MODEL_API_KEY` 必须属于同一地域。美国（弗吉尼亚）使用上表中的官方地址。
 
+## 决赛源码包受测环境依赖（2026-10-03）
+
+本次实测解释器为 Windows x64、CPython 3.14.3。源码包 runtime 闭包以 `fastapi`、`python-multipart`、`uvicorn`、`pymupdf`、`langgraph` 为 roots，依 marker 和 distribution `Requires-Dist` 递归读取当前安装元数据；精确闭包版本见 [`backend/requirements-final-win.txt`](../backend/requirements-final-win.txt)。该锁只适用于本次受测环境，不是跨平台/跨 Python 通用锁。
+
+下表的版本、许可字段与上游项目地址取自本机已安装 distribution metadata；PyPI 链接固定到对应版本。它记录的是来源元数据，不表示已完成全面许可审查。
+
+| Runtime root | 本机版本 | metadata 许可字段和值 | PyPI 发布页 | 上游来源 |
+| --- | --- | --- | --- | --- |
+| FastAPI | 0.136.3 | `License-Expression: MIT` | [0.136.3](https://pypi.org/project/fastapi/0.136.3/) | [fastapi/fastapi](https://github.com/fastapi/fastapi) |
+| python-multipart | 0.0.32 | `License-Expression: Apache-2.0` | [0.0.32](https://pypi.org/project/python-multipart/0.0.32/) | [Kludex/python-multipart](https://github.com/Kludex/python-multipart) |
+| Uvicorn | 0.49.0 | `License-Expression: BSD-3-Clause` | [0.49.0](https://pypi.org/project/uvicorn/0.49.0/) | [Kludex/uvicorn](https://github.com/Kludex/uvicorn) |
+| PyMuPDF | 1.27.2.3 | `License: Dual Licensed - GNU AFFERO GPL 3.0 or Artifex Commercial License` | [1.27.2.3](https://pypi.org/project/PyMuPDF/1.27.2.3/) | [pymupdf/pymupdf](https://github.com/pymupdf/pymupdf)；[许可页](https://pymupdf.io/licensing) |
+| LangGraph | 1.2.12 | `License-Expression: MIT` | [1.2.12](https://pypi.org/project/langgraph/1.2.12/) | [LangGraph Python 文档](https://docs.langchain.com/oss/python/langgraph/overview)；[上游源码](https://github.com/langchain-ai/langgraph/tree/main/libs/langgraph) |
+
+构建器只收集这五个 roots 的 runtime dependency 闭包，不打包运行库本身；构建时从闭包各 distribution metadata 记录版本、PyPI/上游链接、许可字段，并复制其已安装许可文本至包内 `THIRD_PARTY_LICENSES/python/`，在 manifest 中登记每个文件的相对来源路径、字节长度与 SHA256。该 manifest 不包含宿主绝对路径。PyMuPDF 声明 AGPLv3 或 Artifex 商业许可，可能影响分发方式；本登记只重述元数据和官方许可页，不声称已取得商业许可或完成法律审查。
+
+`httpx==0.28.1` 在本机 runtime 闭包中，因此包含在上述精确锁里；它同时被 `[test]` extra 用于 `TestClient`。pytest 等测试专属依赖仍单独由 `backend/pyproject.toml` 的 `[test]` extra 声明，未混入 runtime 锁。前端使用仓库已有精确 `frontend/package-lock.json`，源码包不复制 `node_modules`、Python/Node 运行时或已安装依赖。
+
+源码包的包含边界、命令与校验细节见 [决赛源码包说明](final-source-package.md)。
+
