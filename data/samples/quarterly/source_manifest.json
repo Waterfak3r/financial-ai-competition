@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "dataset_id": "fintrace-quarterly-synthetic-v1",
+  "company_id": "SIM-QUARTERLY-001",
+  "company_name": "示例食味有限公司",
+  "nature": "原创人工构造模拟样例，明确不是任何真实公司的财报",
+  "use_conditions": "可随FINTRACE比赛提交件和团队演示包分发；不可作为真实财务或舞弊结论",
+  "generator": "scripts/prepare_quarterly_samples.py",
+  "documents": [
+    {
+      "document_id": "sim-2023-q1",
+      "company_id": "SIM-QUARTERLY-001",
+      "source_pdf": "data/samples/quarterly/sim-2023-q1.pdf",
+      "source_sha256": "68cabea20f885a06c829b060914139fce6232451a2670fcefed9ae010c30f373",
+      "source_url": "original-synthetic://fintrace/sim-2023-q1",
+      "publication_date": "2023-04-28",
+      "report_year": 2023,
+      "report_period": "Q1",
+      "report_type": "quarterly",
+      "report_title": "2023年第一季度报告",
+      "nature": "原创人工构造模拟报告；不对应真实公司或真实财务披露",
+      "use_conditions": "允许随FINTRACE比赛提交件和团队演示包分发；不得当作真实财务事实或舞弊标签"
+    },
+    {
+      "document_id": "sim-2023-h1",
+      "company_id": "SIM-QUARTERLY-001",
+      "source_pdf": "data/samples/quarterly/sim-2023-h1.pdf",
+      "source_sha256": "e792103379cca4a7e8714c8e86307b946ef12cd6c899f56f5a526ab5af0b9f0e",
+      "source_url": "original-synthetic://fintrace/sim-2023-h1",
+      "publication_date": "2023-08-28",
+      "report_year": 2023,
+      "report_period": "H1",
+      "report_type": "half_year",
+      "report_title": "2023年半年度报告",
+      "nature": "原创人工构造模拟报告；不对应真实公司或真实财务披露",
+      "use_conditions": "允许随FINTRACE比赛提交件和团队演示包分发；不得当作真实财务事实或舞弊标签"
+    },
+    {
+      "document_id": "sim-2024-q1",
+      "company_id": "SIM-QUARTERLY-001",
+      "source_pdf": "data/samples/quarterly/sim-2024-q1.pdf",
+      "source_sha256": "06521c459463b2d153f3dc0e26e3eaa9c4ccf873e1dd6560d0adf0ffaf36bfb3",
+      "source_url": "original-synthetic://fintrace/sim-2024-q1",
+      "publication_date": "2024-04-28",
+      "report_year": 2024,
+      "report_period": "Q1",
+      "report_type": "quarterly",
+      "report_title": "2024年第一季度报告",
+      "nature": "原创人工构造模拟报告；不对应真实公司或真实财务披露",
+      "use_conditions": "允许随FINTRACE比赛提交件和团队演示包分发；不得当作真实财务事实或舞弊标签"
+    },
+    {
+      "document_id": "sim-2024-h1",
+      "company_id": "SIM-QUARTERLY-001",
+      "source_pdf": "data/samples/quarterly/sim-2024-h1.pdf",
+      "source_sha256": "ee7a6a01c750a601b8829b1b710ee00d00f49dbdf4772d62198791b21abbfad2",
+      "source_url": "original-synthetic://fintrace/sim-2024-h1",
+      "publication_date": "2024-08-28",
+      "report_year": 2024,
+      "report_period": "H1",
+      "report_type": "half_year",
+      "report_title": "2024年半年度报告",
+      "nature": "原创人工构造模拟报告；不对应真实公司或真实财务披露",
+      "use_conditions": "允许随FINTRACE比赛提交件和团队演示包分发；不得当作真实财务事实或舞弊标签"
+    }
+  ]
+}
