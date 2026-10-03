@@ -177,8 +177,14 @@ def render_html(payload: Mapping[str, Any]) -> str:
     provenance = payload["source_provenance"]
     company = report.get("company_id", "未提供")
     year = report.get("report_year", "未提供")
-    facts = [*report["confirmed"]["metrics"], *report["pending_review"]["facts"]]
-    calculations = [*report["confirmed"]["analyses"], *report["pending_review"]["calculations"]]
+    facts = [
+        *((fact, "已核实") for fact in report["confirmed"]["metrics"]),
+        *((fact, "待核查") for fact in report["pending_review"]["facts"]),
+    ]
+    calculations = [
+        *((item, "已核实") for item in report["confirmed"]["analyses"]),
+        *((item, "待核查") for item in report["pending_review"]["calculations"]),
+    ]
     rows = [
         ("运行 ID", manifest.get("run_id")), ("归档状态", manifest.get("status")),
         ("运行模式", manifest.get("mode")), ("来源文档 ID", manifest.get("document_id")),
@@ -204,11 +210,11 @@ def render_html(payload: Mapping[str, Any]) -> str:
     body.extend(_render_comparability(report.get("comparability")))
     body.append("<h2>指标事实与核验</h2>")
     fact_rows = []
-    for fact in facts:
+    for fact, placement in facts:
         citations = _citation_text(fact.get("verification_evidences", []), fact.get("evidences", []))
         states = ", ".join(str(item.get("status", "未提供")) for item in fact.get("verifications", [])) or "未提供"
         fact_rows.append((
-            fact.get("placement", "待核查"), fact.get("label_raw", fact.get("metric_id", "未提供")),
+            placement, fact.get("label_raw", fact.get("metric_id", "未提供")),
             fact.get("raw_value"), fact.get("normalized_value"), fact.get("unit_multiplier"),
             fact.get("unit"), fact.get("currency"),
             f"{fact.get('period_start')} 至 {fact.get('period_end')} ({fact.get('period_type')})",
@@ -217,11 +223,11 @@ def render_html(payload: Mapping[str, Any]) -> str:
     body.append(_html_table(("分区", "指标", "原始金额", "规范金额", "单位倍率", "单位", "币种", "期间", "口径", "核验状态", "页码 / 证据 ID"), fact_rows))
     body.append("<h2>计算与独立重算</h2>")
     calc_rows = []
-    for item in calculations:
+    for item, placement in calculations:
         independent = item.get("independent_verification") or {}
         check_state = independent.get("status", "未提供")
         check_value = independent.get("recomputed_value")
-        calc_rows.append((item.get("placement", "待核查"), item.get("formula_id"), item.get("formula_expression"), item.get("output_value"), item.get("unit"), item.get("status"), check_state, check_value, ", ".join(item.get("input_fact_ids", []))))
+        calc_rows.append((placement, item.get("formula_id"), item.get("formula_expression"), item.get("output_value"), item.get("unit"), item.get("status"), check_state, check_value, ", ".join(item.get("input_fact_ids", []))))
     body.append(_html_table(("分区", "公式", "表达式", "结果", "单位", "计算状态", "独立核验", "重算值", "输入事实"), calc_rows))
     body.extend(_render_claims("已核实主张与推论假设", [*report.get("verified_claims", []), *report.get("interpretations", [])]))
     body.extend(_render_candidates(report.get("pending_review", {}).get("candidate_signals", [])))
@@ -406,11 +412,18 @@ def _project_investigation(value: Mapping[str, Any], identity: Mapping[str, Any]
         if status == "mismatch":
             result["status"] = "source_mismatch"
         return result
-    for key in ("kind", "run_id", "company_id", "report_year", "source_document_id", "source_sha256", "model_called", "model_call_count", "model_call_attempt_count", "supplementary_retrieval_used", "reason", "reason_detail", "fraud_conclusion"):
+    for key in ("kind", "run_id", "company_id", "report_year", "source_document_id", "source_sha256", "model_called", "model_call_count", "model_call_attempt_count", "investigation_call_count", "investigation_call_attempt_count", "model_review_call_count", "model_review_call_attempt_count", "supplementary_retrieval_used", "reason", "reason_detail", "fraud_conclusion"):
         if key in value:
             safe_value = _pick(value, (key,))
             if key in safe_value:
                 result[key] = safe_value[key]
+    for key in (
+        "model_call_count", "model_call_attempt_count", "investigation_call_count",
+        "investigation_call_attempt_count", "model_review_call_count",
+        "model_review_call_attempt_count",
+    ):
+        if key in result and not _is_nonnegative_int(result[key]):
+            result.pop(key)
     result["items"] = []
     for item in _list_maps(value.get("items")):
         record = _pick(item, ("signal_id", "status", "explanation", "reason", "alternative_explanations", "limitations"))
@@ -439,6 +452,9 @@ def _project_review(value: Mapping[str, Any], identity: Mapping[str, Any], evide
             safe_value = _pick(value, (key,))
             if key in safe_value:
                 result[key] = safe_value[key]
+    for key in ("call_count", "call_attempt_count"):
+        if key in result and not _is_nonnegative_int(result[key]):
+            result.pop(key)
     result["reasons"] = []
     for item in _list_maps(value.get("reasons")):
         result["reasons"].append({**_pick(item, ("text",)), "evidence_ids": [entry for entry in item.get("evidence_ids", []) if entry in evidence_ids] if isinstance(item.get("evidence_ids"), list) else []})
@@ -544,7 +560,28 @@ def _render_model_layer(investigation: Any, review: Any) -> list[str]:
         return []
     lines = ["<h2>AI 调查与最终评审</h2>", "<p><strong>模型解释和最终评审均属观点，未独立核验；引用原文不证明因果。</strong></p>"]
     if isinstance(investigation, Mapping):
-        lines.append(_html_table(("调查状态", "来源绑定", "模型已调用", "调用次数", "状态原因"), [(investigation.get("status"), investigation.get("source_binding_status"), investigation.get("model_called"), investigation.get("model_call_count"), investigation.get("reason"))]))
+        has_review_accounting = (
+            isinstance(review, Mapping)
+            or isinstance(investigation.get("final_review"), Mapping)
+            or any(field in investigation for field in ("model_review_call_count", "model_review_call_attempt_count"))
+        )
+        total_call_label = "总调用次数（含最终评审）" if has_review_accounting else "调查调用次数（调查层归档值）"
+        total_attempt_label = "总调用尝试次数（含最终评审）" if has_review_accounting else "调查调用尝试次数（调查层归档值）"
+        lines.append(_html_table(("调查状态", "来源绑定", "模型已调用", total_call_label, "状态原因"), [(investigation.get("status"), investigation.get("source_binding_status"), investigation.get("model_called"), investigation.get("model_call_count"), investigation.get("reason"))]))
+        call_rows = []
+        for label, field in (
+            ("调查调用次数", "investigation_call_count"),
+            ("调查调用尝试次数", "investigation_call_attempt_count"),
+            ("最终评审调用次数", "model_review_call_count"),
+            ("最终评审调用尝试次数", "model_review_call_attempt_count"),
+        ):
+            if field in investigation:
+                call_rows.append((label, investigation[field]))
+        if "model_call_attempt_count" in investigation:
+            call_rows.insert(0, (total_attempt_label, investigation["model_call_attempt_count"]))
+        if call_rows:
+            lines.append("<h3>模型调用拆分</h3>")
+            lines.append(_html_table(("调用统计", "次数"), call_rows))
         for item in investigation.get("items", []):
             lines.append(f"<article class=\"entry no-break\"><p><strong>{_h(item.get('signal_id'))} · {_h(item.get('status'))}</strong></p><p>{_h(item.get('explanation') or item.get('reason'))}</p><p>叙述证据 ID：{_h(', '.join(item.get('narrative_evidence_ids', [])))}</p></article>")
         if not isinstance(review, Mapping) and isinstance(investigation.get("final_review"), Mapping):
@@ -627,6 +664,10 @@ def _pick(source: Mapping[str, Any], fields: tuple[str, ...]) -> dict[str, Any]:
         ):
             result[field] = value
     return result
+
+
+def _is_nonnegative_int(value: Any) -> bool:
+    return type(value) is int and 0 <= value <= 9_007_199_254_740_991
 
 
 def _string_list(value: Any) -> list[str]:

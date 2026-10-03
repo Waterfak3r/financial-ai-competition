@@ -12,8 +12,10 @@ JSON 只投影年度报告、manifest 摘要、后端来源性质登记、引用
 
 若归档同时含顶层 `model_review` 与调查层嵌套的 `final_review`，导出以顶层评审的来源绑定和状态为准，并同步其受控投影；仅在没有顶层评审记录时，才回退到嵌套记录，兼容旧归档。错源的顶层记录不会被嵌套副本覆盖。
 
+合并调查与评审的归档中，`model_call_count` / `model_call_attempt_count` 是两阶段总数，包含最终评审；导出同时保留归档提供的 `investigation_call_count`、`investigation_call_attempt_count`、`model_review_call_count` 和 `model_review_call_attempt_count`，以区分两阶段。HTML 明示该总数含最终评审，并在拆分字段存在时逐项列出；只有调查记录的旧归档会标明其计数来自调查层。调用计数仅投影 0 到 JSON/JavaScript 安全整数上限内的整数；缺失或类型不符的拆分字段不会被补成 0。
+
 导出列出来源文档 ID 与 PDF SHA256、金额、单位倍率、单位、币种、报告期间和范围口径、计算公式与独立重算状态、原文页码及证据 ID、候选状态、可比性记录及各层限制。M3 是未校准的规则试行分数，不是概率；AI 调查和最终评审是模型观点，不是独立核验或因果结论；候选线索不是确认舞弊。导出仅呈现已校验归档字段，不提升事实、计算或因果核验等级。
 
-Markdown 复用正式年度报告 renderer，并先将归档文本按纯文本处理，避免不可信内容形成 HTML 标签或 Markdown 链接。HTML 将文本按上下文转义，使用内嵌样式、可读表格、章节和打印 CSS，不加载外网资源或脚本。下载 HTML 后可离线查看，也可用浏览器打印成 PDF。
+Markdown 复用正式年度报告 renderer，并先将归档文本按纯文本处理，避免不可信内容形成 HTML 标签或 Markdown 链接。HTML 将文本按上下文转义，使用内嵌样式、可读表格、章节和打印 CSS，不加载外网资源或脚本。事实和计算的“已核实”/“待核查”标签按其所在的 `confirmed` / `pending_review` 容器生成，不依赖可选的 `placement` 字段。下载 HTML 后可离线查看，也可用浏览器打印成 PDF。
 
 Web 年度报告页在核心指标之后提供 JSON、Markdown 和可打印 HTML 下载操作。下载期间显示状态，失败时保留明确错误；来源性质短标记保持可见，样例完整使用条件可展开查看。

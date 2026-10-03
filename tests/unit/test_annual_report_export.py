@@ -176,8 +176,10 @@ def _archive(root: Path, run_id: str = "export-test-001", *, mode: str = "integr
         }
         report["model_investigation"] = {
             "kind": "fintrace_annual_investigation", **source_identity,
-            "status": "completed_with_issues", "model_called": True, "model_call_count": 1,
-            "model_call_attempt_count": 1,
+            "status": "completed_with_issues", "model_called": True, "model_call_count": 3,
+            "model_call_attempt_count": 4, "investigation_call_count": 2,
+            "investigation_call_attempt_count": 3, "model_review_call_count": 1,
+            "model_review_call_attempt_count": 1,
             "items": [{"signal_id": "candidate-001", "status": "interpretation", "explanation": "这是未经独立核验的模型观点。", "narrative_evidence_ids": []}],
             "audit_artifacts": [{"request_path": "private/audit.json", "request_body": {"api_key": "not-exported"}}],
             "final_review": {
@@ -209,6 +211,12 @@ def test_json_export_projects_four_bound_layers_and_strips_extensions(tmp_path: 
     assert report["m3_screening"]["screening"]["rules"][0]["status"] == "insufficient_evidence"
     assert report["model_investigation"]["source_binding_status"] == "matched"
     assert report["model_investigation"]["status"] == "completed_with_issues"
+    assert report["model_investigation"]["model_call_count"] == 3
+    assert report["model_investigation"]["model_call_attempt_count"] == 4
+    assert report["model_investigation"]["investigation_call_count"] == 2
+    assert report["model_investigation"]["investigation_call_attempt_count"] == 3
+    assert report["model_investigation"]["model_review_call_count"] == 1
+    assert report["model_investigation"]["model_review_call_attempt_count"] == 1
     assert report["model_review"]["source_binding_status"] == "matched"
     assert report["model_review"]["assessment"] == "insufficient_evidence"
     assert report["comparability"]["status"] == "verified"
@@ -237,6 +245,107 @@ def test_html_and_markdown_escape_untrusted_html_and_links(tmp_path: Path) -> No
     assert "Content-Security-Policy" in html or "default-src &#x27;none&#x27;" in html
     assert "https://" not in html
     assert "用浏览器打印成 PDF" in html
+    assert "<td>已核实</td><td>營業收入</td>" in html
+    assert "总调用次数（含最终评审）" in html
+    assert "调查调用次数" in html and ">2</td>" in html
+    assert "最终评审调用次数" in html and ">1</td>" in html
+    assert "总调用尝试次数（含最终评审）" in html and ">4</td>" in html
+
+
+def test_call_counter_projection_rejects_bool_negative_and_noninteger_values(tmp_path: Path) -> None:
+    created = _archive(tmp_path)
+    report_path = tmp_path / "artifacts" / "reports" / str(created["run_id"]) / "report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    investigation = report["model_investigation"]
+    investigation["model_call_count"] = True
+    investigation["investigation_call_count"] = -1
+    investigation["investigation_call_attempt_count"] = "3"
+    investigation["model_review_call_count"] = {"api_key": "do-not-project"}
+    investigation["model_review_call_attempt_count"] = 9_007_199_254_740_992
+    investigation["model_call_attempt_count"] = 4
+    report_path.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+
+    content = export_annual_report(tmp_path, str(created["run_id"]), "json").content.decode("utf-8")
+    projected = json.loads(content)["report"]["model_investigation"]
+    assert projected["model_call_attempt_count"] == 4
+    assert "model_call_count" not in projected
+    assert "investigation_call_count" not in projected
+    assert "investigation_call_attempt_count" not in projected
+    assert "model_review_call_count" not in projected
+    assert "model_review_call_attempt_count" not in projected
+    assert "api_key" not in content
+
+
+def test_absent_call_counter_splits_stay_absent_in_json_and_html(tmp_path: Path) -> None:
+    created = _archive(tmp_path)
+    report_path = tmp_path / "artifacts" / "reports" / str(created["run_id"]) / "report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    investigation = report["model_investigation"]
+    for field in (
+        "investigation_call_count", "investigation_call_attempt_count",
+        "model_review_call_count", "model_review_call_attempt_count",
+    ):
+        investigation.pop(field)
+    report_path.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+
+    payload = json.loads(export_annual_report(tmp_path, str(created["run_id"]), "json").content)
+    projected = payload["report"]["model_investigation"]
+    assert "model_call_count" in projected
+    assert all(field not in projected for field in (
+        "investigation_call_count", "investigation_call_attempt_count",
+        "model_review_call_count", "model_review_call_attempt_count",
+    ))
+    html = export_annual_report(tmp_path, str(created["run_id"]), "html").content.decode("utf-8")
+    assert "总调用次数（含最终评审）" in html
+    assert "调查调用次数" not in html
+    assert "最终评审调用次数" not in html
+
+
+def test_investigation_only_html_does_not_claim_review_calls(tmp_path: Path) -> None:
+    created = _archive(tmp_path, mode="model_investigation")
+    report_path = tmp_path / "artifacts" / "reports" / str(created["run_id"]) / "report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report.pop("model_review")
+    investigation = report["model_investigation"]
+    investigation.pop("final_review")
+    investigation["model_call_count"] = 2
+    investigation["model_call_attempt_count"] = 2
+    investigation.pop("model_review_call_count")
+    investigation.pop("model_review_call_attempt_count")
+    report_path.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+
+    html = export_annual_report(tmp_path, str(created["run_id"]), "html").content.decode("utf-8")
+    assert "调查调用次数（调查层归档值）" in html
+    assert "总调用次数（含最终评审）" not in html
+    assert "最终评审调用次数" not in html
+
+
+def test_html_uses_report_section_for_fact_and_calculation_status_without_placement(tmp_path: Path) -> None:
+    created = _archive(tmp_path)
+    report_path = tmp_path / "artifacts" / "reports" / str(created["run_id"]) / "report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["confirmed"]["analyses"].append({
+        "calculation_id": "calc-confirmed-001", "formula_id": "revenue-change",
+        "formula_expression": "(本期-比较期)/比较期", "input_fact_ids": ["fact-revenue-2025"],
+        "output_value": "25%", "unit": None, "status": "verified",
+        "independent_verification": {"status": "verified", "recomputed_value": "25%"},
+    })
+    report["pending_review"]["facts"].append({
+        **report["confirmed"]["metrics"][0], "fact_id": "fact-pending-001", "metric_id": "pending_metric",
+        "label_raw": "待核查事实",
+    })
+    report["pending_review"]["calculations"].append({
+        "calculation_id": "calc-pending-001", "formula_id": "pending-formula",
+        "formula_expression": "待核查表达式", "input_fact_ids": [], "output_value": None,
+        "unit": None, "status": "insufficient_evidence",
+    })
+    report_path.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+
+    html = export_annual_report(tmp_path, str(created["run_id"]), "html").content.decode("utf-8")
+    assert "<td>已核实</td><td>營業收入</td>" in html
+    assert "<td>待核查</td><td>待核查事实</td>" in html
+    assert "<td>已核实</td><td>revenue-change</td>" in html
+    assert "<td>待核查</td><td>pending-formula</td>" in html
 
 
 def test_allowlisted_keys_do_not_allow_nested_secret_objects(tmp_path: Path) -> None:
