@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "fintrace_ui_smoke_code_fingerprint",
+  "software_freeze_commit": "a0b5b3bc26b3004afcd359df48544adb9cba4a13",
+  "run_manifest_git_dirty": true,
+  "runtime_copy_origin": {
+    "package_id": "fintrace-source-candidate-20261003-7d91dad",
+    "candidate_source_commit": "7d91dada2c9d16b661b95cecc629d569a2447b66",
+    "candidate_source_tree": "1174531310ddb4da4caa09e3bee55cdcd578513e",
+    "construction": "accepted candidate source copy; annual_report_export.py synchronized to the exact a0b5b3b frozen blob",
+    "final_delivery_zip_verified": false
+  },
+  "annual_backend_source_files": {
+    "backend/src/finagent/agents/annual_investigation.py": "49cd891b7d91f1abbabe196f5178dd2be9c19f32aed05ae449f00a36ccd10ef6",
+    "backend/src/finagent/agents/annual_review.py": "b0ce3a8ed025f3cf6f3d7444962cae53235f787fa7d9084f74da37750e5541f4",
+    "backend/src/finagent/api/annual_analysis.py": "9a4fd3b7b2f884ebbee8d1eb227b56f570138a5f66bcf8b7f5f905b5cdcc0d6c",
+    "backend/src/finagent/api/annual_report_export.py": "55e127d72f09a93e910d3d7390654c0aaae09a54b86f74938182f412f5109b76",
+    "backend/src/finagent/api/m3_annual.py": "adf40641d1a4db1f4eaf90debc6e57ab7d9cf955e8011926ba7ee79e98cca5fd",
+    "backend/src/finagent/audit/audited_chat.py": "e6445e75aaec4761288c2978ab8735c35d2b3c3348a10b0bf86fcf8bc4001c6f",
+    "backend/src/finagent/core/model_settings.py": "5334444634f9389cedcd7b4f929d6dfe9021a8e8c04970027193d401b3b937bb",
+    "backend/src/finagent/core/sample_provenance.py": "175ec6420d93d7553456df8a3d81198e7a7b7706c10b826e4484c9064f3aaeb5",
+    "backend/src/finagent/finance/m3_screening.py": "bb75e37a25abc56d676ac64fd0808a00143fd70ad63df2fe884fd7418bbc6508",
+    "backend/src/finagent/finance/v2_calculation.py": "1acc2d7a2744f9e6f17d03ce418289b34b311b410a99aeb14475f846194a496a",
+    "backend/src/finagent/finance/v2_screening.py": "2453d4a00b42c1b5cc31e2415b2484c1bb1f0983fe0c6801674051cf15733d78",
+    "backend/src/finagent/ingestion/extract_annual_facts.py": "78a82d5f89610ad1f24a3d55e390cd7c9aa8e549040ebf0fd20d05bdcc41ac9d",
+    "backend/src/finagent/ingestion/parse_text_pdf.py": "f84679026026714ea45e9993ca2c43bf4556d0b8d82ec5c513a70b7d0293f354",
+    "backend/src/finagent/ingestion/v2_balance_sheet.py": "0b4ae8061f8f9e2f5e5d0176fc5f227755b09703b5296029ac0b9e4936d7f74d",
+    "backend/src/finagent/ingestion/v2_income_statement.py": "0939c073bf7741015f6e09af6662f5f3786d040ddaa93f106ca3d0f12885ff43",
+    "backend/src/finagent/ingestion/v2_key_financial_data.py": "81b2ca940de368f3ed8d2e911802a6163986185e23e10c4e1d259d390fae80ad",
+    "backend/src/finagent/llm/chat_completion.py": "e8cfd59624b0395c7e552f5f2c8dc28a75eded816bb7ad7982b206c45fef1f68",
+    "backend/src/finagent/reports/annual_report.py": "d482d6784d9491b44ad0e0a676f3a7a05d711609b21224d81f9b9817f64f3013",
+    "backend/src/finagent/reports/investigation_append.py": "a61937bbdd0540979e51858ca4217b3e8310e287a5fd57aeceb16841e7b3c034",
+    "backend/src/finagent/reports/m3_annual_append.py": "287ed8b0259a7c5ae50f43759a6f680f61296ec1f7b3302c464994fa3e6a6bd7",
+    "backend/src/finagent/retrieval/annual_context.py": "b0040de4ea0e3485a1e9e434c6e5675405f373b2d6f721906e0fe7e903d4ddf9",
+    "backend/src/finagent/schemas/financial_fact.py": "de1a0a339ffad840092298d5795229373455155f6d577a6cf68b1114ad8db2e9",
+    "backend/src/finagent/schemas/financial_fact_v2.py": "956d73b7adff24c8774ae15af6b94673d5e09eda9af5bf375d6e18fe471530d4",
+    "backend/src/finagent/verification/claim.py": "11da2341fb79ba09bd854f5cc4228957379b57b9d0b5dc1e3bb0f68c6475d1c2",
+    "backend/src/finagent/verification/comparability.py": "4a4c96823b207da866d508aa7b62fb3f4c6b2ee4c6e6aedddbeadcd90c9926f5",
+    "backend/src/finagent/verification/independent_calculation.py": "91bea6384a1fc7fca6c0ff20d4a2ba385365e6f72c0fcb33ce21b4ea5dacef38",
+    "backend/src/finagent/verification/independent_fact.py": "8fc75bdc1f5178465698d256350952e8b429cee158cf7e1929ff59586ee4fd70",
+    "backend/src/finagent/verification/m3_semantic_mapping.py": "5909201de95d596f3a99ada2c569c4634a681f178282ac9986329940d0584445",
+    "config/prompts/annual_investigation_v1.md": "b6b7ef0a9f22889335dc3118abacf9b8a453a640966257128e301bc5b8d1dbfc",
+    "config/prompts/annual_review_v1.md": "1b6d1be483fe2f2065090808fe01672ac044d24e941c836265a1218c5a9e9c26",
+    "scripts/analyze_annual.py": "38b546c6849ab1fd83ca0747d158616db906074cf2d6245fac94549055369a7d"
+  },
+  "annual_backend_source_files_match_frozen_commit": true,
+  "frozen_exporter_file": {
+    "path": "backend/src/finagent/api/annual_report_export.py",
+    "sha256": "55e127d72f09a93e910d3d7390654c0aaae09a54b86f74938182f412f5109b76"
+  },
+  "frontend_worktree_source_files": {
+    "frontend/package.json": "dddaf58dfa96de98b0080b6ad58b280e536886a4773ff52bd21d453022bcbbec",
+    "frontend/package-lock.json": "16c0777beb93ec1e2df3e2065dbe238320b7bed88466586f1f6dd1370140260d",
+    "frontend/src/main.tsx": "e4a4151abb0db20050a0786418ff2a68cdb9a893f4fc5eb372f4b56e7ead3b76",
+    "frontend/src/pages/AnnualAnalysisPage.tsx": "84a11c37641853e55ae4fccaf0acd9afb669a334a0b4d118b6fa8e1d57d7ff7b",
+    "frontend/src/api/annualReports.ts": "eea3c01fa947d5cd223b2ce02d686795b659f6705d278324ccad3008853b379b",
+    "frontend/src/styles/app.css": "5fdf75e8d0c507ffca890dfcaa95497539718192aceaa890ddfbc5c90ea1ecc5"
+  },
+  "frontend_worktree_matches_frozen_commit": true,
+  "frontend_commit_tree": "b710ce73036b0d2fe4a2a1b7cb3f1b6ba4123613",
+  "scope_note": "运行是在候选源码副本中进行；与软件冻结提交的年报后端指纹逐项匹配（含导出模块），浏览器前端文件和工作树冻结源码匹配。此记录不是最终文档交付 ZIP 的解压验收，也不是另一台电脑的安装验收。"
+}

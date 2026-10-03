@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1320" height="650" viewBox="0 0 1320 650" role="img" aria-labelledby="title desc">
+  <title id="title">FINTRACE 本地财报分析与证据链架构</title>
+  <desc id="desc">年度 Web 经本机 API 进入确定性财务核验；季度通过独立 CLI 处理。基础报告、M3 与 AI 观点分别进入本机最终产物，AI 只读基础确定性报告，M3 不输入 AI。仅显式模型流程向操作者配置的云端 API 发送获准文本片段。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L10,5 L0,10 z" fill="#536477"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2563a6"/>
+    </marker>
+    <style>
+      .bg { fill:#f4f7fa; }
+      .panel { fill:#ffffff; stroke:#c9d3dd; stroke-width:2; rx:18; }
+      .local { fill:#eaf2f8; stroke:#8eabc2; stroke-width:2; rx:14; }
+      .calc { fill:#eaf5f1; stroke:#72a897; stroke-width:2; rx:14; }
+      .audit { fill:#f7f2e8; stroke:#c0a46d; stroke-width:2; rx:14; }
+      .model { fill:#f1eef8; stroke:#9d8ac4; stroke-width:2; rx:14; }
+      .cloud { fill:#eef4fb; stroke:#7b9ec2; stroke-width:2; rx:14; }
+      .title { font-family:'Microsoft YaHei','Noto Sans CJK SC',sans-serif; font-size:31px; font-weight:700; fill:#172637; }
+      .subtitle { font-family:'Microsoft YaHei','Noto Sans CJK SC',sans-serif; font-size:17px; fill:#536477; }
+      .heading { font-family:'Microsoft YaHei','Noto Sans CJK SC',sans-serif; font-size:21px; font-weight:700; fill:#203246; }
+      .body { font-family:'Microsoft YaHei','Noto Sans CJK SC',sans-serif; font-size:16px; fill:#314457; }
+      .small { font-family:'Microsoft YaHei','Noto Sans CJK SC',sans-serif; font-size:14px; fill:#536477; }
+      .line { stroke:#536477; stroke-width:3; fill:none; marker-end:url(#arrow); }
+      .lineBlue { stroke:#2563a6; stroke-width:3; fill:none; marker-end:url(#arrowBlue); }
+      .dash { stroke-dasharray:8 7; }
+    </style>
+  </defs>
+  <rect class="bg" width="1320" height="650" rx="24"/>
+  <text class="title" x="54" y="56">FINTRACE｜本机财报分析与证据链</text>
+  <text class="subtitle" x="55" y="86">本地计算与归档为主；仅显式模型模式向已配置服务发送必要文本片段</text>
+
+  <rect class="panel" x="44" y="116" width="880" height="475"/>
+  <text class="heading" x="70" y="152">本机工作区</text>
+
+  <rect class="local" x="74" y="190" width="218" height="110"/>
+  <text class="heading" x="98" y="226">年度 Web</text>
+  <text class="body" x="98" y="255">任务、结果与证据浏览</text>
+  <text class="small" x="98" y="280">本机产品交互入口</text>
+
+  <rect class="local" x="350" y="178" width="284" height="138"/>
+  <text class="heading" x="374" y="214">FastAPI 与流程</text>
+  <text class="body" x="374" y="244">上传、任务状态、归档读取</text>
+  <text class="body" x="374" y="271">白名单导出与历史定位</text>
+  <text class="small" x="374" y="297">年度任务、历史与导出 API</text>
+
+  <rect class="calc" x="680" y="178" width="210" height="138"/>
+  <text class="heading" x="704" y="214">确定性核心</text>
+  <text class="body" x="704" y="244">PDF 解析与来源绑定</text>
+  <text class="body" x="704" y="271">Decimal 计算与重算核验</text>
+  <text class="small" x="704" y="297">证据不足时弃权</text>
+
+  <rect class="audit" x="350" y="363" width="250" height="142"/>
+  <text class="heading" x="374" y="399">M3 规则层</text>
+  <text class="body" x="374" y="429">四条试行筛查规则</text>
+  <text class="body" x="374" y="456">独立保存规则审计</text>
+  <text class="small" x="374" y="484">未校准分数，不是概率</text>
+
+  <rect class="model" x="630" y="363" width="260" height="142"/>
+  <text class="heading" x="654" y="399">AI 调查与评审层</text>
+  <text class="body" x="654" y="429">LangGraph 单一编排框架</text>
+  <text class="body" x="654" y="456">只读基础确定性报告</text>
+  <text class="small" x="654" y="484">模型观点，不升级核验状态</text>
+
+  <rect class="local" x="76" y="363" width="220" height="142"/>
+  <text class="heading" x="100" y="399">本机证据与归档</text>
+  <text class="body" x="100" y="429">PDF 哈希、页码、行列</text>
+  <text class="body" x="100" y="456">确定性 / M3 / AI 分层报告</text>
+  <text class="small" x="100" y="484">真实原文仅本地保存</text>
+
+  <path class="line" d="M292 245 H342"/>
+  <path class="line" d="M634 245 H672"/>
+  <path class="line" d="M780 318 V352"/>
+  <path class="line" d="M676 307 C650 330 575 331 500 353"/>
+  <path class="line" d="M350 434 H296"/>
+  <path class="line" d="M760 316 C650 338 410 340 260 363"/>
+  <path class="line" d="M760 505 V548 H220 V512"/>
+
+  <rect class="cloud" x="978" y="194" width="292" height="134"/>
+  <text class="heading" x="1003" y="231">操作者配置的云端 API</text>
+  <text class="body" x="1003" y="262">仅显式模型模式调用</text>
+  <text class="body" x="1003" y="289">必要文本片段 / 纯文本接口</text>
+  <text class="small" x="1003" y="314">供应方与型号不内置</text>
+
+  <path class="lineBlue dash" d="M890 420 C980 415 1031 365 1078 338"/>
+  <path class="lineBlue dash" d="M978 300 C937 308 918 342 880 372"/>
+
+  <rect x="976" y="385" width="294" height="148" rx="14" fill="#fff" stroke="#c9d3dd" stroke-width="2"/>
+  <text class="heading" x="1000" y="422">最终产物</text>
+  <text class="body" x="1000" y="451">分层年度报告与审计记录</text>
+  <text class="body" x="1000" y="478">季度来源 / 派生 / 比较链</text>
+  <text class="body" x="1000" y="505">JSON、Markdown、离线 HTML</text>
+
+  <path class="line" d="M160 505 V558 H952 V462 H968"/>
+
+  <text class="small" x="56" y="622">年度走 Web/API；季度同比环比由独立 CLI 运行，不经 Web/API。基础、M3、AI 观点分别归档；AI 只读基础报告，不接收 M3。</text>
+</svg>

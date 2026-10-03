@@ -84,7 +84,7 @@ Edge/CDP 检查覆盖四模式表单（桌面 1440×900 两列、390×844 一列
 
 聚焦后端检查命令覆盖 CLI 编排、任务 API（含真实 Pydantic 请求模式）、history 冲突判定和报告 manifest 读取，结果为 71 passed、2 skipped。跳过项为 `test_source_file_symlink_is_rejected`（当前环境不能创建源文件符号链接）与 `test_reparse_point_run_is_ignored_and_invalid_root_link_is_rejected`（当前 Windows 环境未允许创建目录符号链接）；详细输出见 `artifacts/evaluations/a06-integrated-20261002-098a06bb/pytest-focused-skip-reasons.txt`。`npm run typecheck` 与 `npm run build` 均 exit 0。该聚焦检查不是完整后端套件。
 
-正式 JSON 证据与桌面/窄屏模式、报告、层、历史和页图截图位于 `artifacts/evaluations/a06-integrated-20261002-098a06bb/`，其中 `integrated-report-390.png` 是自动定位到集成报告后的 390px 报告截图，另存有历史列表截图 `history-list-390.png`；临时 CDP 脚本与过程日志在 `artifacts/tmp/a06-integrated-20261002/`。初次 UI 执行器在唯一任务被 HTTP 202 接收后因本地进度记录参数错误中止，随后通过 GET-only 轮询恢复并完成验收，没有重提任务。原 run manifest 记录 `git_head=f90e789175bc1cc37f9a3d830a9d750b51a3ef54`、`git_dirty=true`，其中 `scripts/analyze_annual.py` SHA256 为 `88724734fae64c8a6b185b887e30406b1795699dd96980203f0a604f76d34d50`；manifest 与代码快照见运行产物，未回写历史归档。
+正式 JSON 证据与桌面/窄屏模式、报告、层、历史和页图截图位于 `artifacts/evaluations/a06-integrated-20261002-098a06bb/`，其中 `integrated-report-390.png` 是自动定位到集成报告后的 390px 报告截图，另存有历史列表截图 `history-list-390.png`；临时 CDP 脚本与过程日志在 `artifacts/tmp/a06-integrated-20261002/`。初次 UI 执行器在唯一任务被 HTTP 202 接收后因本地进度记录参数错误中止，随后通过 GET-only 轮询恢复并完成验收，没有重提任务。原 run manifest 记录 `git_head=f90e789175bc1cc37f9a3d830a9d750b51a3ef54`、`git_dirty=true`，其中 `scripts/analyze_annual.py` SHA256 为 `88724734fae64c8a6b185b887e30406b1795699dd96980203f0a604f76d34d50`；manifest 与代码快照见运行产物，未回写历史归档。以上 artifact 路径为当前开发机本地验收记录，不随源码分发包提供。
 
 ## 2026-09-30 检查快照
 
@@ -151,6 +151,22 @@ candidate02 的初次运行测试使用中文和空格解压路径；最终 cand
 
 本验收是在现有 Windows x64 主机上用隔离的包内 Python 和裁剪后的子进程环境模拟未安装 Python/Node，不是在干净虚拟机或另一台 Windows 10/11 设备上测试；不能据此声称已验证全新设备的系统 DLL 状态。无需/未执行全后端业务测试，本次改动集中在可复用包装器、构建/分发和文档。本候选以未提交工作树构建；正式提交后如需绑定提交号，可按[便携包说明](portable-package.md)使用新的唯一 package ID 重建，不覆盖本候选。
 
+## 2026-10-03 C-01 多公司与 C-02 季度评测切片
+
+C-01 评测 `multicompany-v2-20261002T150236Z-4585d783` 使用海天味业、贵州茅台和五粮液各一份 2024 年真实公开年报，共 24 条事实参考。海天 8/8、茅台 8/8 独立核验通过；五粮液 8/8 因币种证据不足而弃权，0 条冲突。15 条构造注入错误中 schema-only 接受 15 条，独立核验 `verified` 0 条、`conflict` 11 条、`insufficient_evidence` 4 条。4 条弃权不是正确拒绝。三家公司人工复核包 [`human-review-v2-20261002T150319Z-6190c680`](../artifacts/evaluations/human-review-v2-20261002T150319Z-6190c680/) 含 24 条待复核记录，字段仍为 pending；该评测不是盲测，且没有可用于舞弊准确率、误报率或漏报率的人工分母。协议细节见[多公司评测](multicompany-evaluation.md)。
+
+C-02 独立季度 CLI 已以 `af13785d9ba9d635ea79e670c42beb54415d9bbd` 提交。该切片将来源观察、季度派生、比较可比性与同比/环比结果分层保存，不改年度 `FinancialFactV2`。聚焦测试为 26 passed（2.51 秒），不是完整后端套件。原创季度 Q2 模拟运行 [`quarterly-analysis-6e7807fc-f25c-4dbc-bf80-5323fc902296`](../artifacts/reports/quarterly-analysis-6e7807fc-f25c-4dbc-bf80-5323fc902296/review-evidence.md) 对 24 个来源观察、9 个派生季度及 6 个比较均核验通过；经营现金流环比基数为 −20,000 元，差额 +160,000 元，增长率弃权。海天真实公开材料运行 [`quarterly-analysis-8118d2c1-aa50-4c2f-a6c2-7775b0557253`](../artifacts/reports/quarterly-analysis-8118d2c1-aa50-4c2f-a6c2-7775b0557253/quarterly-analysis.md) 的 24 个来源观察与 9 个派生季度通过核验；三项同比 verified，三项环比因未追溯/可比性证据不足为 `insufficient_evidence` 并弃权。真实来源仅本地使用，哈希与官方来源见[数据规则](data-policy.md)；不把模拟 Q2 环比结果替代真实完整环比或真人复核。
+
+上述 C01/C02 聚焦验证不覆盖完整后端套件、前端 typecheck/build 与年度导出完整浏览器矩阵；最终冻结检查见随后单独记录。本节的历史聚焦测试和样例运行不能代替那些关卡。
+
+## 2026-10-03 C-03 候选源码包同机复制演练
+
+源码包候选 `fintrace-source-candidate-20261003-7d91dad` 基于提交 `7d91dada2c9d16b661b95cecc629d569a2447b66`、tree `1174531310ddb4da4caa09e3bee55cdcd578513e` 构建，ZIP SHA256 为 `3a8e12c0a75ac300a9c3439d3ec7ead2b71b14d9b99e61c758005d72ed2a4f9f`，248 项清单；Windows x64 / CPython 3.14.3 runtime 锁 SHA256 为 `81851b1d4d0953cb74633846f27a2ea20d665fdeb9f1e2f487465dfe254c8b7b`。源码包构建器的 19 项聚焦单测通过。本机原始校验日志与 smoke JSON 保存在 `artifacts/evaluations/final-source-package-candidate-20261003-7d91dad/`；随提交件分发的脱敏候选 smoke 摘要见[源码包证据索引](../submission/final/evidence/source-copy-smoke-candidate.json)。
+
+从 ZIP 在同一台 Windows 主机的中文与空格路径下解压后，以隔离子进程环境运行原创年度 CLI、季度 CLI 及本机 API：两个 CLI 和 deterministic Web job 均 `completed`；年度归档重读、来源证据路由与白名单导出返回成功状态，导出入口结构符合约定；复制运行含 18 条来源证据、16 条已核验 Claim 和 32 条 `verified` 核验记录，`model_called=false`。该烟测未安装依赖、未使用 `.env` 或模型配置，用户 proposal 未进入副本。
+
+这仅验证上述提交快照在当前主机的源码包构建、解压路径、隔离运行闭环；没有在另一台电脑或干净 Windows 系统验证，也不覆盖后续文档/证据交付快照。最终交付 ZIP 需在文档与证据冻结后使用唯一新 package ID 重建。冻结版本完整后端套件、前端 typecheck/build、最终导出浏览器矩阵及正式报告逐页验收另行记录，不由本候选演练替代。
+
 ## 原文涉及的运行标识索引
 
 仅用于定位历史文件，列出不表示该运行成功、最新或可重新执行。摘录未展开的旧运行也保留在本地；不覆盖失败记录。
@@ -176,3 +192,19 @@ candidate02 的初次运行测试使用中文和空格解压路径；最终 cand
 - `annual-precheck-603288-2024-20260925-105059`
 - `deepseek-live-m3-603288-20260928-a32c16a7`
 - `verification-ablation-m4-20260928T072029Z-825a8c4b`
+
+## 2026-10-03 C-03 软件冻结、导出验收与浏览器演练
+
+主控接受软件快照 `a0b5b3bc26b3004afcd359df48544adb9cba4a13`。从 `backend/` 执行 `python -m pytest -q`，结果为 **467 passed、3 skipped，149.57 秒**；三个 skip 分别是 `test_reparse_point_run_is_ignored_and_invalid_root_link_is_rejected`、`test_symlinked_settings_file_is_rejected` 和 `test_source_file_symlink_is_rejected`，均由当前 Windows 无法创建相应目录/文件符号链接触发。测试文件条件见后端源码；这不是后端套件失败。前端 `npm run typecheck` 和 `npm run build` 均 exit 0（Node v24.14.1、npm 11.11.0、Vite 8.3.0）。详细过程日志保留在 `artifacts/tmp/final-delivery-20261003/full-checks-a0b5b3b/`；分发摘要及精确 skip 原因见[正式软件检查摘要](../submission/final/evidence/software-freeze-checks.json)。
+
+年度报告导出提交 `90e3a1faf0c80c68bb78e4795b37b7e17c2f95bf` 已由主控接受；调用计数与 HTML 状态修复在冻结提交 `a0b5b3bc26b3004afcd359df48544adb9cba4a13`。最终专项为 55 passed。确定性原创样例 CLI run `annual-analysis-4b7a43fb-e9ad-47b1-9319-5b8b7533211e` 和 Web job/run `annual-job-4303a6f6da3d4f57bc930c6421d3a809` / `annual-analysis-caffff8e-1937-4544-ad2f-b3be7f406c47` 均为 completed、`model_called=false`，各有 8 条已确认事实与 8 项独立核验计算。新导出接口 JSON/Markdown/HTML 均 HTTP 200；非法格式为 422。M3、model investigation 与 integrated historical archives 的三种只读导出均 HTTP 200，来源绑定状态受限规则通过，原归档前后哈希不变。历史 AI 调用展示为调查 2、最终评审 1、总计 3（总数包含最终评审）。详细本机评审文件为 `artifacts/evaluations/report-export-c03-20261003/evidence.json`，SHA256 `dd6922057f20f2e18345900bc890a86a62d599845fe3dd7b03f5c04411bb38a4`；该文件含开发机本地路径，不随源码 ZIP 提供，脱敏摘要见[年度导出验收摘要](../submission/final/evidence/annual-report-export-c03-summary.json)。API 白名单 JSON 为 175,190 字节、SHA256 `2f5801a2e7cbc57946767fab5ad6012d027f58057af16949b5f96779793a3a31`，字节副本位于[年度 API 导出](../submission/final/evidence/annual-sample-api-export-run-caffff8e.json)。
+
+浏览器离线 HTML 打印检查覆盖 12 页 PDF，PDF SHA256 `9463c90aacca32981fbe4b2a5bb0d1ea70303ae74b191c3f3fd795e308d9c26b`、输入 HTML SHA256 `96aee3a2b47c809eb096951afa663235e71ad30bd35eb56f6d66e781978a9559`；8 条事实与 8 项计算在 HTML 中显示为 verified，记录外网请求为 0。主控逐页审阅了主要数据表所在第 3–7 页。
+
+随后通过本地 UI 的“上传年报”实际上传同一原创 PDF，填写 `SIM-ANNUAL-001` / 2025 并选择 deterministic，创建新 job `annual-job-12b2970426b64de7a6b48d5caededfa3`、run `annual-analysis-a96e4ee6-2341-46c6-ac18-7729849a16c0`、upload/document `upload-c00acd385bd348fc8caf635deb4f2d6e`；状态 completed，模型未调用。输入 SHA256 `f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7`。API 白名单导出包含 8 条 confirmed facts、8 项 confirmed calculations、16 条 verified claims 和 2 条候选待核查项。页面实际下载 JSON、Markdown、HTML 的 SHA256 依次为 `a9e0fd8be501bf655f6d2ea579972faaed5c7ed480846f0199387e29afc2a971`、`9a28f5a941d7348fc90f9926b5cccf7441ba2a7c3d3f9c3b43ef630cce8f4a25` 和 `425f60cbd80e2515e9aa0a2e703bfa351ff8559b4da6d0f5529dbc99910f08d6`。实际点击营业收入第 2 页证据后页图 GET HTTP 200，界面展示合并利润表、原值、人民币元、2025 期间及合并口径；刷新 `run_id` URL 后恢复同一归档。Edge 页面仅访问本机，非本机请求为 0、模型请求为 0。1366×900、1440×900、768×1024、390×844 的文档/正文宽度均与视口一致。桌面和 390×844 固定视口截图、run 摘要及 JSON 文件见[UI 演练证据](../submission/final/evidence/README.md#年度原创样例)。
+
+这次 UI 的 API runtime 使用候选源码包 `fintrace-source-candidate-20261003-7d91dad` 的隔离副本，并把导出模块同步为冻结提交的精确文件；运行清单记录 HEAD 为 `a0b5b3bc26b3004afcd359df48544adb9cba4a13`、`git_dirty=true`。主控逐项比对了 31 个年报后端指纹与冻结 Git tree，并确认浏览器前端 6 个受测源码/锁文件匹配冻结提交，详细脱敏列表见[指纹文件](../submission/final/evidence/annual-sample-ui-code-fingerprint.json)。因此这是 a0 软件源码指纹下的同机 UI 演练，不是最终文档包的 ZIP 解压验收，也不是另一台电脑/干净安装通过。
+
+为避免 `core.autocrlf=true` 规范化实际带哈希的 JSON 副本，新增 `submission/final/.gitattributes` 的 `evidence/*.json -text` 属性。季度原创 analysis JSON 的工作文件 SHA256 仍为 `25fc2fe1e5941ea44a3bbc475742b736e8c2f0653d3f3f549d6ea396325e8190`；主控在暂存与最终包生成时仍应分别按 Git blob 原字节和包内字节复核该哈希，不得改写历史运行归档。
+
+最终源码 ZIP 从正式文档交付 commit/tree 构建；确切 package ID、source commit/tree、ZIP SHA256 和包校验结果以包外 manifest、`.sha256` sidecar 与独立验收记录为准。另一台 Windows 电脑干净安装、组委会网络/API 规则、C-01/C-02 真人复核以及非金融用户 30 秒理解试验仍 pending。初赛计划书、MP4 和平台上传仍由各自材料负责人负责。

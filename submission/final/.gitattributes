@@ -1,0 +1,2 @@
+# Preserve byte identity for copied and hashed formal JSON evidence.
+evidence/*.json -text

@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "fintrace_source_package_candidate_copy_smoke",
+  "candidate_only": true,
+  "package": {
+    "package_id": "fintrace-source-candidate-20261003-7d91dad",
+    "source_commit": "7d91dada2c9d16b661b95cecc629d569a2447b66",
+    "source_tree": "1174531310ddb4da4caa09e3bee55cdcd578513e",
+    "zip_sha256": "3a8e12c0a75ac300a9c3439d3ec7ead2b71b14d9b99e61c758005d72ed2a4f9f",
+    "zip_bytes": 13247821,
+    "inventory_file_count": 248,
+    "runtime_lock_sha256": "81851b1d4d0953cb74633846f27a2ea20d665fdeb9f1e2f487465dfe254c8b7b"
+  },
+  "source_copy_smoke": {
+    "status": "passed",
+    "platform": "Windows x64",
+    "python": "3.14.3",
+    "path_nature": "同机源码副本；解压路径包含中文与空格",
+    "dependencies_installed": false,
+    "env_file_present": false,
+    "model_configuration_present": false,
+    "model_called": false,
+    "sample_pdf_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7"
+  },
+  "runs": {
+    "annual_cli": {
+      "run_id": "annual-analysis-6924e756-ebd3-4648-babd-81ebe0270a93",
+      "status": "completed",
+      "facts": 8,
+      "verified_facts": 8,
+      "calculations": 8,
+      "verified_calculations": 8,
+      "candidate_signals": 2,
+      "model_called": false
+    },
+    "quarterly_cli": {
+      "run_id": "quarterly-analysis-d144d5c9-e155-4683-975a-7bbc65ff1a2c",
+      "status": "completed",
+      "source_documents": 4,
+      "observations": 24,
+      "derived_quarters": 9,
+      "comparisons": 6,
+      "model_called": false
+    },
+    "annual_web_api": {
+      "job_id": "annual-job-b217d396a2ce43529456730c987e010b",
+      "run_id": "annual-analysis-d7535034-1da8-4659-bd04-d2f27a7741fd",
+      "status": "completed",
+      "archive_evidence_items": 18,
+      "verified_claims": 16,
+      "verified_checks": 32,
+      "model_called": false,
+      "local_test_client_statuses": {
+        "capabilities_get": 200,
+        "history_get": 200,
+        "upload": 201,
+        "job_create": 202,
+        "archive_read": 200,
+        "evidence_preview": 200,
+        "allowlist_export": 200
+      }
+    }
+  },
+  "limits": [
+    "This smoke validates the identified intermediate source commit and candidate ZIP on the current Windows host only.",
+    "It does not validate a clean install on another computer or a later final delivery snapshot.",
+    "The local API TestClient export response belongs to this smoke run; it is not the formally accepted sample export artifact."
+  ]
+}

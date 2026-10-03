@@ -4,7 +4,7 @@
 
 ## 当前能力与边界
 
-以下为 2026-10-02 文档整理时的实现与验收状态。验收证据与日期集中在 [验收记录](docs/verification-history.md)，不据旧记录推定本机依赖、配置或在线服务当前可用。
+以下为 2026-10-03 决赛交付期间的实现与验收状态。验收证据与日期集中在 [验收记录](docs/verification-history.md)，不据旧记录推定本机依赖、配置或在线服务当前可用。
 
 | 能力 | 状态与边界 |
 | --- | --- |
@@ -13,11 +13,21 @@
 | M3 四规则筛查 | 独立试行模式不调用模型；也可在集成模式中作为独立审计层运行。海天样例四条均可计算且未触发；阈值未校准，部分语义映射只支持该样例 |
 | AI 调查与最终评审 | CLI 和 Web 入口已实现，须模型配置与 LangGraph 就绪。海天 603288 2024 年报已有真实 Web 调查/评审和 M3 同任务集成各一条记录；均为单样例验收，不证明因果或跨公司能力 |
 | Web 使用流程 | 上传/本机样例、任务阶段、活动 job_id 恢复、失败/中断重试、归档读取、已核验证据页图、本机模型设置、叙述原文定位和证据抽屉均已实现；A03–A05 最终浏览器矩阵已接受。非金融使用者的 30 秒理解试验尚未进行 |
-| 历史与导出 | 本机任务历史分页 API、run_id/job_id URL 定位、刷新、前进/后退、归档切换及错误状态处理已验收；A04 API、后端测试和最终浏览器矩阵通过。暂无产品级报告导出 |
-| 跨公司与评测 | 茅台/五粮液有 provisional 事实参考；单公司七案例消融基线已建立；多公司人工 golden 和完整可靠性评测未完成 |
+| 年度导出 | `GET /v1/annual-analyses/{run_id}/export?format=json\|markdown\|html` 与页面下载入口已实现；专项、旧归档来源绑定、离线打印及原创样例 UI 上传/三格式下载已接受，结果见验收记录 |
+| 季度分析 CLI | 独立处理营业收入、归母净利润、经营现金流三类流量指标；累计值、派生单季、期间可比性及同比/环比分层核验。原创模拟季度样例同比/环比完整通过；海天真实材料三项同比通过，三项环比因可比性证据不足弃权。当前无季度 Web/API 流程 |
+| 跨公司与评测 | 三公司 24 条 provisional 事实参考与 15 条受控错误实验已运行；16 条独立核验通过、8 条证据不足，真人复核仍 pending。舞弊准确率分母为零，不能推算可靠性指标 |
 | 旧年度预检 | API、页面及旧归档单独保留；坐标金额复核不等同于 v2 独立事实核验 |
 
-当前以年度比较为中心；季度、半年报与环比属于后续开发。项目无用户账户、模型训练或云部署。前端暂无独立自动化测试套件；已有 typecheck/build 与历史浏览器检查，不能把这些写成持续自动化回归已建立。CI 尚未建立。
+当前主产品流程为年度 Web/API；季度能力是独立 CLI 切片，尚无 Web/API 接入。年度报告导出专项与浏览器验收已接受。决赛软件冻结于 `a0b5b3bc26b3004afcd359df48544adb9cba4a13`；完整后端套件、前端 typecheck/build 已通过，平台相关跳过项和逐项结果见[验收记录](docs/verification-history.md)。项目无用户账户、模型训练或云部署。前端暂无独立自动化测试套件；typecheck/build 和指定浏览器演练不能写成持续自动化回归已建立。CI 尚未建立。
+
+## 决赛交付入口
+
+- 可编辑技术报告：[Markdown](submission/final/FINTRACE-决赛技术报告.md)；排版版：[PDF](submission/final/FINTRACE-决赛技术报告.pdf)。
+- 本机验收步骤、运行记录字段与未完成的外部关卡：[运行与交付验收指南](submission/final/运行与交付验收指南.md)。
+- 原创样例、结构化分析与复现边界：[正式证据索引](submission/final/evidence/README.md)。
+- 年度 JSON/Markdown/离线 HTML 下载行为与来源绑定契约：[年度导出说明](docs/annual-report-export.md)。
+- 季度单季派生、同比/环比公式及运行命令：[季度分析 CLI 说明](docs/quarterly-analysis.md)。该切片独立于年度 Web/API。
+- C01–C03 交付顺序与待完成关卡：[产品交付路线](docs/product-delivery-roadmap.md)。
 
 ## 启动
 
@@ -94,7 +104,15 @@ python scripts/analyze_annual.py --source-pdf data/raw/603288/2024/cninfo-122299
 
 运行记录与报告共享 run_id，分别位于 `artifacts/runs/<run_id>/` 和 `artifacts/reports/<run_id>/`；任务状态位于 `artifacts/annual-analysis-jobs/<job_id>/`。CLI 归档含输入 PDF 副本，原文未确认再分发许可，不能直接作为公开演示包上传。
 
-三份公开年报的来源、哈希、用途与许可边界见 [数据规则](docs/data-policy.md)。原始 PDF、解析数据和运行产物默认不随 Git 分发；克隆后需准备原文。`data/samples/` 尚未形成可交付演示包。没有数据时不能把样例启动失败写成通过。
+运行原创季度样例的 Q2 同比/环比：
+
+```powershell
+python scripts/analyze_quarterly.py --year 2024 --quarter Q2
+```
+
+该命令读取 `data/samples/quarterly/` 中已登记的原创模拟材料，不调用模型；当前季度能力限营业收入、归母净利润和经营活动现金流量净额，运行公式、弃权条件与历史结果见[季度分析 CLI 说明](docs/quarterly-analysis.md)。
+
+三份公开年报与季度真实材料的来源、哈希、用途与许可边界见 [数据规则](docs/data-policy.md)。原创年度、季度模拟 PDF 已登记在 `data/samples/`，可在保留模拟提示与使用条件时随比赛材料/团队演示分发；真实 PDF、整页图和原文归档许可未确认，不随提交件提供。克隆后如需真实案例应按官方来源自行取得并校验哈希。
 
 旧流程与低层 API、类型约定见 [架构](docs/architecture.md)和[旧字段审计](docs/current-schema-audit.md)，不要用旧流程结果冒充 v2 核验。
 

@@ -1,6 +1,6 @@
 # 架构与模块边界
 
-本文描述当前模块与行为契约，不保存逐次测试流水。能力摘要、启动与配置见 [README](../README.md)，实现里程碑见 [roadmap.md](roadmap.md)，既往结果见 [验收记录](verification-history.md)。计划中的季度分析与产品级导出不可写成现有接口。
+本文描述当前模块与行为契约，不保存逐次测试流水。能力摘要、启动与配置见 [README](../README.md)，实现里程碑见 [roadmap.md](roadmap.md)，既往结果见 [验收记录](verification-history.md)。年度是主要 Web/API 分析路径；季度目前是独立 CLI 切片，不复用或改写年度事实契约。
 
 ## 1. 系统与流程
 
@@ -21,9 +21,19 @@ flowchart TD
     J --> F
     J --> G
     H --> I["Web 报告与已核验证据页图"]
+    H --> X["年度白名单导出 API"]
+    Q0["季度 / 半年累计 PDF"] --> Q1["季度 CLI：提取与来源核验"]
+    Q1 --> Q2["季度派生、期间可比与比较核验"]
+    Q2 --> Q3["analysis.json 与 Markdown 归档"]
 ```
 
 四种模式为 deterministic、m3_screening、model_investigation 与 integrated_analysis。集成模式在同一 run/report 中保留基础确定性结果，并分别归档 M3 规则审计和 AI 调查/最终评审；AI 仅接收标准确定性报告，不把 M3 分数或状态作为事实输入。任一附加层失败或有缺口时，另一层和基础报告仍保留，任务状态反映问题。deterministic 与独立 M3 模式不调用模型；model_investigation 与 integrated_analysis 会调用模型。
+
+年度归档读取支持 JSON、Markdown 与离线 HTML 白名单导出：先校验归档 manifest、报告身份和来源 PDF SHA，再输出受控字段；不导出 PDF 正文、整页图、原始模型请求/响应或密钥。PDF 由用户在浏览器打印离线 HTML 产生，服务端没有 PDF 导出端点。导出具体边界见[年度报告下载](annual-report-export.md)。
+
+导出的年度可比性要求其 document_id、source_sha256 与 report_year 完整匹配当前归档；缺少任一来源绑定时结果标为“来源未验证”，任一字段错配则标为“来源错配”，两种情况下都不输出可比性证据。M3、模型调查与最终评审层也校验来源身份；身份缺失或不匹配时只保留受限状态，不投影规则明细或模型意见。归档中若声明顶层 `model_review`，该顶层字段的缺失/错配处理优先于调查层里嵌套的历史评审，避免通过嵌套副本绕过来源检查。该契约的专项与浏览器接受状态见[验收记录](verification-history.md)。
+
+季度是 `scripts/analyze_quarterly.py` 启动的独立本地流程，输入清单限定在 `data/`，只覆盖营业收入、归母净利润和经营活动现金流量净额。每个累计来源事实、派生单季结果、期间可比性和同比/环比结果分层核验，归档到唯一 `quarterly-analysis-<UUID>` 的 JSON 与 Markdown；当前不提供季度 Web 任务 API。公式、proof 和未知可比性的处理见[季度分析切片](quarterly-analysis.md)。
 
 旧年度预检是独立兼容流程：旧事实、旧同比、引用坐标金额与单位换算复核、可选 screening。上传与创建预检分步，不能把旧预检复核描述为 v2 独立事实核验。类型风险见 [历史字段审计](current-schema-audit.md)。
 
@@ -33,17 +43,18 @@ flowchart TD
 
 | 模块 | 职责与边界 |
 | --- | --- |
-| api | 上传、任务队列、设置、能力状态、归档读取及页图；编排现有 CLI，不堆放财务公式 |
+| api | 上传、任务队列、设置、能力状态、归档读取、证据页图与年度导出；编排现有 CLI，不堆放财务公式 |
 | ingestion | 读取文本型 PDF，定位指标、期间、单位/币种、口径与证据；不执行 OCR |
-| schemas | 旧 FinancialFact 与隔离的 v2 事实、TableCellEvidence、计算、核验、Claim 类型 |
-| verification | 独立重读原文、检查行列与字段、年度可比性、重算、支持依据；缺证据时弃权 |
-| finance | Decimal 公式、年度差额/增长率、确定性候选与 M3 试行规则 |
+| schemas | 旧 FinancialFact、隔离的 v2 事实、TableCellEvidence、计算、核验、Claim 及季度 observation/derived/comparison/proof 类型 |
+| verification | 独立重读原文、检查行列与字段、年度及季度可比性、重算、支持依据；缺证据时弃权 |
+| finance | Decimal 公式、年度差额/增长率、季度累计差分与期间比较、确定性候选与 M3 试行规则 |
 | retrieval | 当前同源年报的 MD&A/财务附注片段检索，绑定来源哈希、页码、坐标、证据 ID，并限制数量与字符数；过滤无关投资/筹资现金流说明与只有标题的片段 |
 | agents | LangGraph 候选调查及有限补充检索；调查后结构化最终评审；不把模型意见升级成独立核验 |
 | tools | 将已有业务能力适配为工具，不复制解析、计算或核验实现 |
 | llm | 同步 Chat Completions 纯文本连接器；请求限共有字段，常规默认超时 60 秒 |
 | audit | 模型请求与结果的脱敏调用记录、时间及状态；记录失败不能伪装为审计成功 |
-| reports | 组装 JSON 与 Markdown，保留失败/缺口、来源与可选 model_review |
+| reports | 组装 JSON/Markdown、读取归档并按年度白名单投影 JSON/Markdown/HTML；保留失败/缺口、来源与可选 model_review |
+| quarterly | `ingestion/quarterly.py`、`finance/quarterly.py`、`verification/quarterly.py` 与 `reports/quarterly_analysis.py` 承载季度层，不改变年度 FinancialFactV2 |
 | core | 公共路径、配置、异常等基础能力 |
 
 前端 `pages` 组织年度分析、设置和旧预检；`components` 承载公共组件；`api` 处理请求及错误；`types` 定义读取类型；`styles` 管展示。财务计算和模型调用不在浏览器执行。未来拆分页面应保留现有报告读取、任务恢复与旧归档兼容。
@@ -61,6 +72,7 @@ flowchart TD
 | GET /v1/annual-analysis-jobs/{job_id} | 查询阶段、状态、结果 run_id / result_url |
 | GET /v1/annual-analysis-history?limit=20&offset=0 | 只读本机年度任务与报告索引，按创建时间分页并报告总条数 |
 | GET /v1/annual-analyses/{run_id} | 只读已归档的 v2 报告 |
+| GET /v1/annual-analyses/{run_id}/export?format=json\|markdown\|html | 验证既有年度归档及来源绑定后按白名单导出；不重跑分析、不导出原 PDF/页图、密钥或原始模型请求/响应 |
 | GET /v1/annual-analyses/{run_id}/evidence/{evidence_id}/preview.png | 已核验证据白名单页图 |
 | GET /v1/annual-analyses/{run_id}/narrative-evidences | 读取归档且被模型解释引用的年报原文片段索引 |
 | GET /v1/annual-analyses/{run_id}/narrative-evidences/{evidence_id}/preview.png | 预览上述原文片段的 PDF 页图 |
@@ -90,7 +102,7 @@ Web 模型任务（model_investigation 与 integrated_analysis）按 README 的�
 
 v2 事实核验重新打开原 PDF，检查金额、年度列、期间角色、币种、单位与报表口径；不能把提取器自带坐标或重复使用同一提取值当作独立证据。事实状态为 verified、conflict、insufficient_evidence。财务事实字段与来源要求详见 [数据规则](data-policy.md)。
 
-年度计算需要可比性依据；unknown 不默认可比。当前海天 proof 基于同一 2024 年报第 116、163、197 页，未与单独披露的 2023 年报独立勾稽。proof 绑定来源与期间，由当前进程签发；序列化副本仅供审计，不能在后续进程重建授权。比较期基数非正时保留可支持的差额，增长率弃权。
+年度计算需要可比性依据；unknown 不默认可比。当前海天 proof 基于同一 2024 年报第 116、163、197 页，未与单独披露的 2023 年报独立勾稽。proof 绑定来源与期间，由当前进程签发；序列化副本仅供审计，不能在后续进程重建授权。若两个输入均通过核验且可比性成立，才计算差额；在此基础上，比较基数非正时保留差额并对增长率弃权。若可比性不足或任一输入未核验通过，则差额与增长率都弃权。
 
 M3 使用应收账款净额、存货净额、合并净利润、营业成本、扣非归母净利润等扩展事实。四条试行规则为：
 

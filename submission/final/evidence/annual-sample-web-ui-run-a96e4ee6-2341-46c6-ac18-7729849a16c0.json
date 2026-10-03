@@ -1,0 +1,4365 @@
+{
+  "schema_version": 1,
+  "export_kind": "fintrace_annual_report_export",
+  "report": {
+    "kind": "fintrace_annual_analysis_report",
+    "title": "FINTRACE 年度财报分析报告",
+    "run_id": "annual-analysis-a96e4ee6-2341-46c6-ac18-7729849a16c0",
+    "company_id": "SIM-ANNUAL-001",
+    "report_year": 2025,
+    "source_document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+    "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+    "fraud_conclusion": null,
+    "interpretations": [],
+    "limitations": [
+      "候选异常只在待核查区列出，不写成舞弊结论。",
+      "候选异常和未核验对象都在待核查区，本报告不确认舞弊。"
+    ],
+    "model_called": false,
+    "scope": {
+      "note": "本报告检查事实与引证是否对齐，按受控公式独立重算受支持的年度差额和同比率，并用确定规则核对事实与计算类主张；推论和假设单独列示。报告不调用模型，也不确认舞弊。",
+      "gaps": [
+        "候选异常只在待核查区列出，不写成舞弊结论。"
+      ]
+    },
+    "comparability": {
+      "verification_id": "comparability-2025-f193e7a497fe",
+      "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+      "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+      "report_year": 2025,
+      "current_year": 2025,
+      "comparative_year": 2024,
+      "status": "verified",
+      "restatement_status": "not_restated",
+      "checks": [
+        "major_accounting_policy_change 已从原文定位并明确勾选不适用。",
+        "major_accounting_estimate_change 已从原文定位并明确勾选不适用。",
+        "first_adoption_opening_balance_adjustment 已从原文定位并明确勾选不适用。",
+        "prior_error_retrospective_restatement 已从原文定位并明确勾选不适用。",
+        "五类期初未分配利润调整原因均有原文披露，金额为 0 元。"
+      ],
+      "conflicts": [],
+      "limitations": [
+        "本结论依据本年度报告内的追溯调整披露，不代表已独立重算或勾稽上一年度已披露报告。"
+      ],
+      "source_binding_status": "matched",
+      "evidence": [
+        {
+          "evidence_id": "comp-f193e7a497fe-2025-major_accounting_policy_change-p6",
+          "topic": "major_accounting_policy_change",
+          "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+          "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+          "report_year": 2025,
+          "current_year": 2025,
+          "comparative_year": 2024,
+          "pdf_page": 6,
+          "text": "重要会计政策变更\n□适用 √不适用",
+          "report_year_page": 6,
+          "report_year_text": "澄湾云算股份有限公司（虚构）  2025年年度报告",
+          "bbox": {
+            "x0": 52.0,
+            "y0": 119.04969787597656,
+            "x1": 134.79998779296875,
+            "y1": 150.61000061035156
+          },
+          "report_year_bbox": {
+            "x0": 52.0,
+            "y0": 59.04969787597656,
+            "x1": 279.0169372558594,
+            "y1": 72.70134735107422
+          }
+        },
+        {
+          "evidence_id": "comp-f193e7a497fe-2025-major_accounting_estimate_change-p6",
+          "topic": "major_accounting_estimate_change",
+          "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+          "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+          "report_year": 2025,
+          "current_year": 2025,
+          "comparative_year": 2024,
+          "pdf_page": 6,
+          "text": "重要会计估计变更\n□适用 √不适用",
+          "report_year_page": 6,
+          "report_year_text": "澄湾云算股份有限公司（虚构）  2025年年度报告",
+          "bbox": {
+            "x0": 52.0,
+            "y0": 176.04969787597656,
+            "x1": 134.79998779296875,
+            "y1": 207.61000061035156
+          },
+          "report_year_bbox": {
+            "x0": 52.0,
+            "y0": 59.04969787597656,
+            "x1": 279.0169372558594,
+            "y1": 72.70134735107422
+          }
+        },
+        {
+          "evidence_id": "comp-f193e7a497fe-2025-first_adoption_opening_balance_adjustment-p6",
+          "topic": "first_adoption_opening_balance_adjustment",
+          "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+          "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+          "report_year": 2025,
+          "current_year": 2025,
+          "comparative_year": 2024,
+          "pdf_page": 6,
+          "text": "2025年起首次执行新会计准则或准则解释等涉及调整首次执行当年年初的财务报表\n□适用 √不适用",
+          "report_year_page": 6,
+          "report_year_text": "澄湾云算股份有限公司（虚构）  2025年年度报告",
+          "bbox": {
+            "x0": 52.0,
+            "y0": 235.43020629882812,
+            "x1": 346.38653564453125,
+            "y1": 264.6099853515625
+          },
+          "report_year_bbox": {
+            "x0": 52.0,
+            "y0": 59.04969787597656,
+            "x1": 279.0169372558594,
+            "y1": 72.70134735107422
+          }
+        },
+        {
+          "evidence_id": "comp-f193e7a497fe-2025-prior_error_retrospective_restatement-p6",
+          "topic": "prior_error_retrospective_restatement",
+          "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+          "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+          "report_year": 2025,
+          "current_year": 2025,
+          "comparative_year": 2024,
+          "pdf_page": 6,
+          "text": "追溯重述法\n□适用 √不适用",
+          "report_year_page": 6,
+          "report_year_text": "澄湾云算股份有限公司（虚构）  2025年年度报告",
+          "bbox": {
+            "x0": 52.0,
+            "y0": 308.4200134277344,
+            "x1": 118.4800033569336,
+            "y1": 339.6099853515625
+          },
+          "report_year_bbox": {
+            "x0": 52.0,
+            "y0": 59.04969787597656,
+            "x1": 279.0169372558594,
+            "y1": 72.70134735107422
+          }
+        },
+        {
+          "evidence_id": "comp-f193e7a497fe-2025-opening_retained_earnings_adjustments_zero-p6",
+          "topic": "opening_retained_earnings_adjustments_zero",
+          "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+          "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+          "report_year": 2025,
+          "current_year": 2025,
+          "comparative_year": 2024,
+          "pdf_page": 6,
+          "text": "准则追溯调整影响期初未分配利润0元。\n会计政策变更影响期初未分配利润0元。\n重大会计差错更正影响期初未分配利润0元。\n同一控制合并范围变更影响期初未分配利润0元。\n其他调整合计影响期初未分配利润0元。",
+          "report_year_page": 6,
+          "report_year_text": "澄湾云算股份有限公司（虚构）  2025年年度报告",
+          "bbox": {
+            "x0": 52.0,
+            "y0": 380.4779968261719,
+            "x1": 246.2740020751953,
+            "y1": 496.3489990234375
+          },
+          "report_year_bbox": {
+            "x0": 52.0,
+            "y0": 59.04969787597656,
+            "x1": 279.0169372558594,
+            "y1": 72.70134735107422
+          }
+        }
+      ]
+    },
+    "confirmed": {
+      "metrics": [
+        {
+          "fact_id": "upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2024:comparative",
+          "metric_id": "net_profit_parent",
+          "company_id": "SIM-ANNUAL-001",
+          "label_raw": "归属于母公司股东的净利润",
+          "raw_value": "118,000,000.00",
+          "normalized_value": "118000000.00",
+          "currency": "人民币",
+          "unit_multiplier": "1",
+          "unit": null,
+          "report_year": 2025,
+          "period_start": "2024-01-01",
+          "period_end": "2024-12-31",
+          "period_type": "duration",
+          "frequency": "annual",
+          "statement_type": "income_statement",
+          "scope": "consolidated",
+          "comparison_role": "comparative",
+          "restatement_status": "unknown",
+          "source_document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+          "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+          "evidence_ids": [],
+          "extraction_method": "table_title_and_year_header",
+          "limitations": [
+            "本结果只来自文字块定位，不是独立原文核验。",
+            "按已知流量指标标为 duration，不是因为 period_type 写成了 annual。",
+            "旧事实没有追溯调整证据，restatement_status 保持 unknown。",
+            "旧文字块只作来源候选，不确认行、列、表题或单位，不视为已核验。"
+          ],
+          "schema_version": 2,
+          "placement_reasons": [],
+          "evidences": [],
+          "verification_evidences": [
+            {
+              "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2024:comparative",
+              "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+              "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+              "pdf_page": 2,
+              "printed_page": null,
+              "table_title": "合并利润表",
+              "row_label": "归属于母公司股东的净利润",
+              "column_label": "项目 2025年度 2024年度",
+              "value_raw": "118,000,000.00",
+              "value_normalized": "118000000.00",
+              "unit": "元",
+              "currency": "人民币",
+              "period_start": "2024-01-01",
+              "period_end": "2024-12-31",
+              "period_type": "duration",
+              "legacy_text_region": null,
+              "extraction_method": "independent_pymupdf_words",
+              "surrounding_text": null,
+              "limitations": [
+                "单位、币种和期间来自表头原文，不复制事实字段。"
+              ],
+              "coordinate_system": "pymupdf_page_top_left",
+              "value_region": {
+                "text": "118,000,000.00",
+                "page": 2,
+                "bbox": {
+                  "x0": 444.1357421875,
+                  "y0": 344.4200134277344,
+                  "x1": 515.7955932617188,
+                  "y1": 357.6099853515625
+                }
+              },
+              "row_region": {
+                "text": "归属于母公司股东的净利润",
+                "page": 2,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 344.4200134277344,
+                  "x1": 172.0,
+                  "y1": 357.6099853515625
+                }
+              },
+              "column_region": {
+                "text": "项目 2025年度 2024年度",
+                "page": 2,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 206.04969787597656,
+                  "x1": 502.47137451171875,
+                  "y1": 219.70135498046875
+                }
+              },
+              "title_region": {
+                "text": "合并利润表",
+                "page": 2,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 131.64370727539062,
+                  "x1": 138.75,
+                  "y1": 154.52835083007812
+                }
+              },
+              "unit_region": {
+                "text": "单位：元 币种：人民币",
+                "page": 2,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 170.4199981689453,
+                  "x1": 163.79998779296875,
+                  "y1": 183.61000061035156
+                }
+              }
+            }
+          ],
+          "verifications": [
+            {
+              "verification_id": "verify-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2024:comparative",
+              "target_type": "financial_fact",
+              "target_id": "upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2024:comparative",
+              "status": "verified",
+              "checks": [
+                "source_sha256",
+                "table_title",
+                "row",
+                "column",
+                "unit",
+                "value",
+                "period_end",
+                "scope"
+              ],
+              "conflicts": [],
+              "evidence_ids": [
+                "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2024:comparative"
+              ],
+              "limitations": [
+                "未判断追溯调整，不把 restatement_status 当成已知。",
+                "事实未提供单位；已依据 PDF 单位和 unit_multiplier 核验。"
+              ],
+              "verified_at": "2026-10-03T07:03:14.794876+00:00"
+            }
+          ]
+        },
+        {
+          "fact_id": "upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2025:current",
+          "metric_id": "net_profit_parent",
+          "company_id": "SIM-ANNUAL-001",
+          "label_raw": "归属于母公司股东的净利润",
+          "raw_value": "145,000,000.00",
+          "normalized_value": "145000000.00",
+          "currency": "人民币",
+          "unit_multiplier": "1",
+          "unit": null,
+          "report_year": 2025,
+          "period_start": "2025-01-01",
+          "period_end": "2025-12-31",
+          "period_type": "duration",
+          "frequency": "annual",
+          "statement_type": "income_statement",
+          "scope": "consolidated",
+          "comparison_role": "current",
+          "restatement_status": "unknown",
+          "source_document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+          "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+          "evidence_ids": [],
+          "extraction_method": "table_title_and_year_header",
+          "limitations": [
+            "本结果只来自文字块定位，不是独立原文核验。",
+            "按已知流量指标标为 duration，不是因为 period_type 写成了 annual。",
+            "旧事实没有追溯调整证据，restatement_status 保持 unknown。",
+            "旧文字块只作来源候选，不确认行、列、表题或单位，不视为已核验。"
+          ],
+          "schema_version": 2,
+          "placement_reasons": [],
+          "evidences": [],
+          "verification_evidences": [
+            {
+              "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2025:current",
+              "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+              "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+              "pdf_page": 2,
+              "printed_page": null,
+              "table_title": "合并利润表",
+              "row_label": "归属于母公司股东的净利润",
+              "column_label": "项目 2025年度 2024年度",
+              "value_raw": "145,000,000.00",
+              "value_normalized": "145000000.00",
+              "unit": "元",
+              "currency": "人民币",
+              "period_start": "2025-01-01",
+              "period_end": "2025-12-31",
+              "period_type": "duration",
+              "legacy_text_region": null,
+              "extraction_method": "independent_pymupdf_words",
+              "surrounding_text": null,
+              "limitations": [
+                "单位、币种和期间来自表头原文，不复制事实字段。"
+              ],
+              "coordinate_system": "pymupdf_page_top_left",
+              "value_region": {
+                "text": "145,000,000.00",
+                "page": 2,
+                "bbox": {
+                  "x0": 309.1357421875,
+                  "y0": 344.4200134277344,
+                  "x1": 380.7955627441406,
+                  "y1": 357.6099853515625
+                }
+              },
+              "row_region": {
+                "text": "归属于母公司股东的净利润",
+                "page": 2,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 344.4200134277344,
+                  "x1": 172.0,
+                  "y1": 357.6099853515625
+                }
+              },
+              "column_region": {
+                "text": "项目 2025年度 2024年度",
+                "page": 2,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 206.04969787597656,
+                  "x1": 502.47137451171875,
+                  "y1": 219.70135498046875
+                }
+              },
+              "title_region": {
+                "text": "合并利润表",
+                "page": 2,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 131.64370727539062,
+                  "x1": 138.75,
+                  "y1": 154.52835083007812
+                }
+              },
+              "unit_region": {
+                "text": "单位：元 币种：人民币",
+                "page": 2,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 170.4199981689453,
+                  "x1": 163.79998779296875,
+                  "y1": 183.61000061035156
+                }
+              }
+            }
+          ],
+          "verifications": [
+            {
+              "verification_id": "verify-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2025:current",
+              "target_type": "financial_fact",
+              "target_id": "upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2025:current",
+              "status": "verified",
+              "checks": [
+                "source_sha256",
+                "table_title",
+                "row",
+                "column",
+                "unit",
+                "value",
+                "period_end",
+                "scope"
+              ],
+              "conflicts": [],
+              "evidence_ids": [
+                "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2025:current"
+              ],
+              "limitations": [
+                "未判断追溯调整，不把 restatement_status 当成已知。",
+                "事实未提供单位；已依据 PDF 单位和 unit_multiplier 核验。"
+              ],
+              "verified_at": "2026-10-03T07:03:14.700599+00:00"
+            }
+          ]
+        },
+        {
+          "fact_id": "upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2024:comparative",
+          "metric_id": "non_recurring_total",
+          "company_id": "SIM-ANNUAL-001",
+          "label_raw": "披露的非经常性损益合计",
+          "raw_value": "4,000,000.00",
+          "normalized_value": "4000000.00",
+          "currency": "人民币",
+          "unit_multiplier": "1",
+          "unit": null,
+          "report_year": 2025,
+          "period_start": "2024-01-01",
+          "period_end": "2024-12-31",
+          "period_type": "duration",
+          "frequency": "annual",
+          "statement_type": "non_recurring",
+          "scope": "unknown",
+          "comparison_role": "comparative",
+          "restatement_status": "unknown",
+          "source_document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+          "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+          "evidence_ids": [],
+          "extraction_method": "table_title_and_year_header",
+          "limitations": [
+            "表题未说明合并或母公司，口径记为披露表格口径。",
+            "本结果只来自文字块定位，不是独立原文核验。",
+            "按已知流量指标标为 duration，不是因为 period_type 写成了 annual。",
+            "披露的非经常性损益合计不映射为合并或母公司口径。",
+            "旧事实没有追溯调整证据，restatement_status 保持 unknown。",
+            "旧文字块只作来源候选，不确认行、列、表题或单位，不视为已核验。"
+          ],
+          "schema_version": 2,
+          "placement_reasons": [],
+          "evidences": [],
+          "verification_evidences": [
+            {
+              "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2024:comparative",
+              "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+              "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+              "pdf_page": 5,
+              "printed_page": null,
+              "table_title": "非经常性损益项目和金额",
+              "row_label": "合计",
+              "column_label": "项目 2025年度金额 2024年度金额",
+              "value_raw": "4,000,000.00",
+              "value_normalized": "4000000.00",
+              "unit": "元",
+              "currency": "人民币",
+              "period_start": "2024-01-01",
+              "period_end": "2024-12-31",
+              "period_type": "duration",
+              "legacy_text_region": null,
+              "extraction_method": "independent_pymupdf_words",
+              "surrounding_text": null,
+              "limitations": [
+                "单位、币种和期间来自表头原文，不复制事实字段。"
+              ],
+              "coordinate_system": "pymupdf_page_top_left",
+              "value_region": {
+                "text": "4,000,000.00",
+                "page": 5,
+                "bbox": {
+                  "x0": 450.0,
+                  "y0": 242.4199981689453,
+                  "x1": 509.9398498535156,
+                  "y1": 255.61000061035156
+                }
+              },
+              "row_region": {
+                "text": "合计",
+                "page": 5,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 242.4199981689453,
+                  "x1": 72.0,
+                  "y1": 255.61000061035156
+                }
+              },
+              "column_region": {
+                "text": "项目 2025年度金额 2024年度金额",
+                "page": 5,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 206.04969787597656,
+                  "x1": 512.8213500976562,
+                  "y1": 219.70135498046875
+                }
+              },
+              "title_region": {
+                "text": "非经常性损益项目和金额",
+                "page": 5,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 131.64370727539062,
+                  "x1": 242.85003662109375,
+                  "y1": 154.52835083007812
+                }
+              },
+              "unit_region": {
+                "text": "单位：元 币种：人民币",
+                "page": 5,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 170.4199981689453,
+                  "x1": 163.79998779296875,
+                  "y1": 183.61000061035156
+                }
+              }
+            }
+          ],
+          "verifications": [
+            {
+              "verification_id": "verify-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2024:comparative",
+              "target_type": "financial_fact",
+              "target_id": "upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2024:comparative",
+              "status": "verified",
+              "checks": [
+                "source_sha256",
+                "table_title",
+                "row",
+                "column",
+                "unit",
+                "value",
+                "period_end",
+                "scope"
+              ],
+              "conflicts": [],
+              "evidence_ids": [
+                "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2024:comparative"
+              ],
+              "limitations": [
+                "未判断追溯调整，不把 restatement_status 当成已知。",
+                "事实未提供单位；已依据 PDF 单位和 unit_multiplier 核验。"
+              ],
+              "verified_at": "2026-10-03T07:03:15.168992+00:00"
+            }
+          ]
+        },
+        {
+          "fact_id": "upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2025:current",
+          "metric_id": "non_recurring_total",
+          "company_id": "SIM-ANNUAL-001",
+          "label_raw": "披露的非经常性损益合计",
+          "raw_value": "6,000,000.00",
+          "normalized_value": "6000000.00",
+          "currency": "人民币",
+          "unit_multiplier": "1",
+          "unit": null,
+          "report_year": 2025,
+          "period_start": "2025-01-01",
+          "period_end": "2025-12-31",
+          "period_type": "duration",
+          "frequency": "annual",
+          "statement_type": "non_recurring",
+          "scope": "unknown",
+          "comparison_role": "current",
+          "restatement_status": "unknown",
+          "source_document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+          "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+          "evidence_ids": [],
+          "extraction_method": "table_title_and_year_header",
+          "limitations": [
+            "表题未说明合并或母公司，口径记为披露表格口径。",
+            "本结果只来自文字块定位，不是独立原文核验。",
+            "按已知流量指标标为 duration，不是因为 period_type 写成了 annual。",
+            "披露的非经常性损益合计不映射为合并或母公司口径。",
+            "旧事实没有追溯调整证据，restatement_status 保持 unknown。",
+            "旧文字块只作来源候选，不确认行、列、表题或单位，不视为已核验。"
+          ],
+          "schema_version": 2,
+          "placement_reasons": [],
+          "evidences": [],
+          "verification_evidences": [
+            {
+              "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2025:current",
+              "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+              "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+              "pdf_page": 5,
+              "printed_page": null,
+              "table_title": "非经常性损益项目和金额",
+              "row_label": "合计",
+              "column_label": "项目 2025年度金额 2024年度金额",
+              "value_raw": "6,000,000.00",
+              "value_normalized": "6000000.00",
+              "unit": "元",
+              "currency": "人民币",
+              "period_start": "2025-01-01",
+              "period_end": "2025-12-31",
+              "period_type": "duration",
+              "legacy_text_region": null,
+              "extraction_method": "independent_pymupdf_words",
+              "surrounding_text": null,
+              "limitations": [
+                "单位、币种和期间来自表头原文，不复制事实字段。"
+              ],
+              "coordinate_system": "pymupdf_page_top_left",
+              "value_region": {
+                "text": "6,000,000.00",
+                "page": 5,
+                "bbox": {
+                  "x0": 315.0,
+                  "y0": 242.4199981689453,
+                  "x1": 374.9398498535156,
+                  "y1": 255.61000061035156
+                }
+              },
+              "row_region": {
+                "text": "合计",
+                "page": 5,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 242.4199981689453,
+                  "x1": 72.0,
+                  "y1": 255.61000061035156
+                }
+              },
+              "column_region": {
+                "text": "项目 2025年度金额 2024年度金额",
+                "page": 5,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 206.04969787597656,
+                  "x1": 512.8213500976562,
+                  "y1": 219.70135498046875
+                }
+              },
+              "title_region": {
+                "text": "非经常性损益项目和金额",
+                "page": 5,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 131.64370727539062,
+                  "x1": 242.85003662109375,
+                  "y1": 154.52835083007812
+                }
+              },
+              "unit_region": {
+                "text": "单位：元 币种：人民币",
+                "page": 5,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 170.4199981689453,
+                  "x1": 163.79998779296875,
+                  "y1": 183.61000061035156
+                }
+              }
+            }
+          ],
+          "verifications": [
+            {
+              "verification_id": "verify-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2025:current",
+              "target_type": "financial_fact",
+              "target_id": "upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2025:current",
+              "status": "verified",
+              "checks": [
+                "source_sha256",
+                "table_title",
+                "row",
+                "column",
+                "unit",
+                "value",
+                "period_end",
+                "scope"
+              ],
+              "conflicts": [],
+              "evidence_ids": [
+                "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2025:current"
+              ],
+              "limitations": [
+                "未判断追溯调整，不把 restatement_status 当成已知。",
+                "事实未提供单位；已依据 PDF 单位和 unit_multiplier 核验。"
+              ],
+              "verified_at": "2026-10-03T07:03:15.075747+00:00"
+            }
+          ]
+        },
+        {
+          "fact_id": "upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2024:comparative",
+          "metric_id": "operating_cash_flow",
+          "company_id": "SIM-ANNUAL-001",
+          "label_raw": "经营活动产生的现金流量净额",
+          "raw_value": "90,000,000.00",
+          "normalized_value": "90000000.00",
+          "currency": "人民币",
+          "unit_multiplier": "1",
+          "unit": null,
+          "report_year": 2025,
+          "period_start": "2024-01-01",
+          "period_end": "2024-12-31",
+          "period_type": "duration",
+          "frequency": "annual",
+          "statement_type": "cash_flow_statement",
+          "scope": "consolidated",
+          "comparison_role": "comparative",
+          "restatement_status": "unknown",
+          "source_document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+          "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+          "evidence_ids": [],
+          "extraction_method": "table_title_and_year_header",
+          "limitations": [
+            "行名或金额分布在相邻文字块中，已按阅读顺序拼接。",
+            "本结果只来自文字块定位，不是独立原文核验。",
+            "按已知流量指标标为 duration，不是因为 period_type 写成了 annual。",
+            "旧事实没有追溯调整证据，restatement_status 保持 unknown。",
+            "旧文字块只作来源候选，不确认行、列、表题或单位，不视为已核验。"
+          ],
+          "schema_version": 2,
+          "placement_reasons": [],
+          "evidences": [],
+          "verification_evidences": [
+            {
+              "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2024:comparative",
+              "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+              "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+              "pdf_page": 3,
+              "printed_page": null,
+              "table_title": "合并现金流量表",
+              "row_label": "经营活动产生的现金流量净额",
+              "column_label": "项目 2025年度 2024年度",
+              "value_raw": "90,000,000.00",
+              "value_normalized": "90000000.00",
+              "unit": "元",
+              "currency": "人民币",
+              "period_start": "2024-01-01",
+              "period_end": "2024-12-31",
+              "period_type": "duration",
+              "legacy_text_region": null,
+              "extraction_method": "independent_pymupdf_words",
+              "surrounding_text": null,
+              "limitations": [
+                "单位、币种和期间来自表头原文，不复制事实字段。"
+              ],
+              "coordinate_system": "pymupdf_page_top_left",
+              "value_region": {
+                "text": "90,000,000.00",
+                "page": 3,
+                "bbox": {
+                  "x0": 447.06787109375,
+                  "y0": 242.4199981689453,
+                  "x1": 512.8677368164062,
+                  "y1": 255.61000061035156
+                }
+              },
+              "row_region": {
+                "text": "经营活动产生的现金流量净额",
+                "page": 3,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 242.4199981689453,
+                  "x1": 182.0,
+                  "y1": 255.61000061035156
+                }
+              },
+              "column_region": {
+                "text": "项目 2025年度 2024年度",
+                "page": 3,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 206.04969787597656,
+                  "x1": 502.47137451171875,
+                  "y1": 219.70135498046875
+                }
+              },
+              "title_region": {
+                "text": "合并现金流量表",
+                "page": 3,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 131.64370727539062,
+                  "x1": 173.45001220703125,
+                  "y1": 154.52835083007812
+                }
+              },
+              "unit_region": {
+                "text": "单位：元 币种：人民币",
+                "page": 3,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 170.4199981689453,
+                  "x1": 163.79998779296875,
+                  "y1": 183.61000061035156
+                }
+              }
+            }
+          ],
+          "verifications": [
+            {
+              "verification_id": "verify-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2024:comparative",
+              "target_type": "financial_fact",
+              "target_id": "upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2024:comparative",
+              "status": "verified",
+              "checks": [
+                "source_sha256",
+                "table_title",
+                "row",
+                "column",
+                "unit",
+                "value",
+                "period_end",
+                "scope"
+              ],
+              "conflicts": [],
+              "evidence_ids": [
+                "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2024:comparative"
+              ],
+              "limitations": [
+                "未判断追溯调整，不把 restatement_status 当成已知。",
+                "事实未提供单位；已依据 PDF 单位和 unit_multiplier 核验。"
+              ],
+              "verified_at": "2026-10-03T07:03:14.982081+00:00"
+            }
+          ]
+        },
+        {
+          "fact_id": "upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2025:current",
+          "metric_id": "operating_cash_flow",
+          "company_id": "SIM-ANNUAL-001",
+          "label_raw": "经营活动产生的现金流量净额",
+          "raw_value": "-10,000,000.00",
+          "normalized_value": "-10000000.00",
+          "currency": "人民币",
+          "unit_multiplier": "1",
+          "unit": null,
+          "report_year": 2025,
+          "period_start": "2025-01-01",
+          "period_end": "2025-12-31",
+          "period_type": "duration",
+          "frequency": "annual",
+          "statement_type": "cash_flow_statement",
+          "scope": "consolidated",
+          "comparison_role": "current",
+          "restatement_status": "unknown",
+          "source_document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+          "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+          "evidence_ids": [],
+          "extraction_method": "table_title_and_year_header",
+          "limitations": [
+            "行名或金额分布在相邻文字块中，已按阅读顺序拼接。",
+            "本结果只来自文字块定位，不是独立原文核验。",
+            "按已知流量指标标为 duration，不是因为 period_type 写成了 annual。",
+            "旧事实没有追溯调整证据，restatement_status 保持 unknown。",
+            "旧文字块只作来源候选，不确认行、列、表题或单位，不视为已核验。"
+          ],
+          "schema_version": 2,
+          "placement_reasons": [],
+          "evidences": [],
+          "verification_evidences": [
+            {
+              "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2025:current",
+              "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+              "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+              "pdf_page": 3,
+              "printed_page": null,
+              "table_title": "合并现金流量表",
+              "row_label": "经营活动产生的现金流量净额",
+              "column_label": "项目 2025年度 2024年度",
+              "value_raw": "-10,000,000.00",
+              "value_normalized": "-10000000.00",
+              "unit": "元",
+              "currency": "人民币",
+              "period_start": "2025-01-01",
+              "period_end": "2025-12-31",
+              "period_type": "duration",
+              "legacy_text_region": null,
+              "extraction_method": "independent_pymupdf_words",
+              "surrounding_text": null,
+              "limitations": [
+                "单位、币种和期间来自表头原文，不复制事实字段。"
+              ],
+              "coordinate_system": "pymupdf_page_top_left",
+              "value_region": {
+                "text": "-10,000,000.00",
+                "page": 3,
+                "bbox": {
+                  "x0": 309.90478515625,
+                  "y0": 242.4199981689453,
+                  "x1": 380.0246276855469,
+                  "y1": 255.61000061035156
+                }
+              },
+              "row_region": {
+                "text": "经营活动产生的现金流量净额",
+                "page": 3,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 242.4199981689453,
+                  "x1": 182.0,
+                  "y1": 255.61000061035156
+                }
+              },
+              "column_region": {
+                "text": "项目 2025年度 2024年度",
+                "page": 3,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 206.04969787597656,
+                  "x1": 502.47137451171875,
+                  "y1": 219.70135498046875
+                }
+              },
+              "title_region": {
+                "text": "合并现金流量表",
+                "page": 3,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 131.64370727539062,
+                  "x1": 173.45001220703125,
+                  "y1": 154.52835083007812
+                }
+              },
+              "unit_region": {
+                "text": "单位：元 币种：人民币",
+                "page": 3,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 170.4199981689453,
+                  "x1": 163.79998779296875,
+                  "y1": 183.61000061035156
+                }
+              }
+            }
+          ],
+          "verifications": [
+            {
+              "verification_id": "verify-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2025:current",
+              "target_type": "financial_fact",
+              "target_id": "upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2025:current",
+              "status": "verified",
+              "checks": [
+                "source_sha256",
+                "table_title",
+                "row",
+                "column",
+                "unit",
+                "value",
+                "period_end",
+                "scope"
+              ],
+              "conflicts": [],
+              "evidence_ids": [
+                "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2025:current"
+              ],
+              "limitations": [
+                "未判断追溯调整，不把 restatement_status 当成已知。",
+                "事实未提供单位；已依据 PDF 单位和 unit_multiplier 核验。"
+              ],
+              "verified_at": "2026-10-03T07:03:14.888293+00:00"
+            }
+          ]
+        },
+        {
+          "fact_id": "upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2024:comparative",
+          "metric_id": "revenue",
+          "company_id": "SIM-ANNUAL-001",
+          "label_raw": "营业收入",
+          "raw_value": "1,000,000,000.00",
+          "normalized_value": "1000000000.00",
+          "currency": "人民币",
+          "unit_multiplier": "1",
+          "unit": null,
+          "report_year": 2025,
+          "period_start": "2024-01-01",
+          "period_end": "2024-12-31",
+          "period_type": "duration",
+          "frequency": "annual",
+          "statement_type": "income_statement",
+          "scope": "consolidated",
+          "comparison_role": "comparative",
+          "restatement_status": "unknown",
+          "source_document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+          "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+          "evidence_ids": [],
+          "extraction_method": "table_title_and_year_header",
+          "limitations": [
+            "本结果只来自文字块定位，不是独立原文核验。",
+            "按已知流量指标标为 duration，不是因为 period_type 写成了 annual。",
+            "旧事实没有追溯调整证据，restatement_status 保持 unknown。",
+            "旧文字块只作来源候选，不确认行、列、表题或单位，不视为已核验。"
+          ],
+          "schema_version": 2,
+          "placement_reasons": [],
+          "evidences": [],
+          "verification_evidences": [
+            {
+              "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2024:comparative",
+              "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+              "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+              "pdf_page": 2,
+              "printed_page": null,
+              "table_title": "合并利润表",
+              "row_label": "其中：营业收入",
+              "column_label": "项目 2025年度 2024年度",
+              "value_raw": "1,000,000,000.00",
+              "value_normalized": "1000000000.00",
+              "unit": "元",
+              "currency": "人民币",
+              "period_start": "2024-01-01",
+              "period_end": "2024-12-31",
+              "period_type": "duration",
+              "legacy_text_region": null,
+              "extraction_method": "independent_pymupdf_words",
+              "surrounding_text": null,
+              "limitations": [
+                "单位、币种和期间来自表头原文，不复制事实字段。"
+              ],
+              "coordinate_system": "pymupdf_page_top_left",
+              "value_region": {
+                "text": "1,000,000,000.00",
+                "page": 2,
+                "bbox": {
+                  "x0": 440.0,
+                  "y0": 273.4200134277344,
+                  "x1": 519.9197998046875,
+                  "y1": 286.6099853515625
+                }
+              },
+              "row_region": {
+                "text": "其中：营业收入",
+                "page": 2,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 273.4200134277344,
+                  "x1": 122.0,
+                  "y1": 286.6099853515625
+                }
+              },
+              "column_region": {
+                "text": "项目 2025年度 2024年度",
+                "page": 2,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 206.04969787597656,
+                  "x1": 502.47137451171875,
+                  "y1": 219.70135498046875
+                }
+              },
+              "title_region": {
+                "text": "合并利润表",
+                "page": 2,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 131.64370727539062,
+                  "x1": 138.75,
+                  "y1": 154.52835083007812
+                }
+              },
+              "unit_region": {
+                "text": "单位：元 币种：人民币",
+                "page": 2,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 170.4199981689453,
+                  "x1": 163.79998779296875,
+                  "y1": 183.61000061035156
+                }
+              }
+            }
+          ],
+          "verifications": [
+            {
+              "verification_id": "verify-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2024:comparative",
+              "target_type": "financial_fact",
+              "target_id": "upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2024:comparative",
+              "status": "verified",
+              "checks": [
+                "source_sha256",
+                "table_title",
+                "row",
+                "column",
+                "unit",
+                "value",
+                "period_end",
+                "scope"
+              ],
+              "conflicts": [],
+              "evidence_ids": [
+                "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2024:comparative"
+              ],
+              "limitations": [
+                "未判断追溯调整，不把 restatement_status 当成已知。",
+                "事实未提供单位；已依据 PDF 单位和 unit_multiplier 核验。"
+              ],
+              "verified_at": "2026-10-03T07:03:14.605804+00:00"
+            }
+          ]
+        },
+        {
+          "fact_id": "upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2025:current",
+          "metric_id": "revenue",
+          "company_id": "SIM-ANNUAL-001",
+          "label_raw": "营业收入",
+          "raw_value": "1,250,000,000.00",
+          "normalized_value": "1250000000.00",
+          "currency": "人民币",
+          "unit_multiplier": "1",
+          "unit": null,
+          "report_year": 2025,
+          "period_start": "2025-01-01",
+          "period_end": "2025-12-31",
+          "period_type": "duration",
+          "frequency": "annual",
+          "statement_type": "income_statement",
+          "scope": "consolidated",
+          "comparison_role": "current",
+          "restatement_status": "unknown",
+          "source_document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+          "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+          "evidence_ids": [],
+          "extraction_method": "table_title_and_year_header",
+          "limitations": [
+            "本结果只来自文字块定位，不是独立原文核验。",
+            "按已知流量指标标为 duration，不是因为 period_type 写成了 annual。",
+            "旧事实没有追溯调整证据，restatement_status 保持 unknown。",
+            "旧文字块只作来源候选，不确认行、列、表题或单位，不视为已核验。"
+          ],
+          "schema_version": 2,
+          "placement_reasons": [],
+          "evidences": [],
+          "verification_evidences": [
+            {
+              "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2025:current",
+              "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+              "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+              "pdf_page": 2,
+              "printed_page": null,
+              "table_title": "合并利润表",
+              "row_label": "其中：营业收入",
+              "column_label": "项目 2025年度 2024年度",
+              "value_raw": "1,250,000,000.00",
+              "value_normalized": "1250000000.00",
+              "unit": "元",
+              "currency": "人民币",
+              "period_start": "2025-01-01",
+              "period_end": "2025-12-31",
+              "period_type": "duration",
+              "legacy_text_region": null,
+              "extraction_method": "independent_pymupdf_words",
+              "surrounding_text": null,
+              "limitations": [
+                "单位、币种和期间来自表头原文，不复制事实字段。"
+              ],
+              "coordinate_system": "pymupdf_page_top_left",
+              "value_region": {
+                "text": "1,250,000,000.00",
+                "page": 2,
+                "bbox": {
+                  "x0": 305.0,
+                  "y0": 273.4200134277344,
+                  "x1": 384.9197998046875,
+                  "y1": 286.6099853515625
+                }
+              },
+              "row_region": {
+                "text": "其中：营业收入",
+                "page": 2,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 273.4200134277344,
+                  "x1": 122.0,
+                  "y1": 286.6099853515625
+                }
+              },
+              "column_region": {
+                "text": "项目 2025年度 2024年度",
+                "page": 2,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 206.04969787597656,
+                  "x1": 502.47137451171875,
+                  "y1": 219.70135498046875
+                }
+              },
+              "title_region": {
+                "text": "合并利润表",
+                "page": 2,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 131.64370727539062,
+                  "x1": 138.75,
+                  "y1": 154.52835083007812
+                }
+              },
+              "unit_region": {
+                "text": "单位：元 币种：人民币",
+                "page": 2,
+                "bbox": {
+                  "x0": 52.0,
+                  "y0": 170.4199981689453,
+                  "x1": 163.79998779296875,
+                  "y1": 183.61000061035156
+                }
+              }
+            }
+          ],
+          "verifications": [
+            {
+              "verification_id": "verify-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2025:current",
+              "target_type": "financial_fact",
+              "target_id": "upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2025:current",
+              "status": "verified",
+              "checks": [
+                "source_sha256",
+                "table_title",
+                "row",
+                "column",
+                "unit",
+                "value",
+                "period_end",
+                "scope"
+              ],
+              "conflicts": [],
+              "evidence_ids": [
+                "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2025:current"
+              ],
+              "limitations": [
+                "未判断追溯调整，不把 restatement_status 当成已知。",
+                "事实未提供单位；已依据 PDF 单位和 unit_multiplier 核验。"
+              ],
+              "verified_at": "2026-10-03T07:03:14.511174+00:00"
+            }
+          ]
+        }
+      ],
+      "analyses": [
+        {
+          "calculation_id": "calc:annual_difference:net_profit_parent",
+          "formula_id": "annual_difference",
+          "formula_expression": "current.normalized_value - comparative.normalized_value",
+          "input_fact_ids": [
+            "upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2025:current",
+            "upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2024:comparative"
+          ],
+          "output_value": "27000000.00",
+          "unit": null,
+          "status": "succeeded",
+          "failure_reason": null,
+          "rule_version": "v2-annual-3",
+          "placement_reasons": [],
+          "verifications": [
+            {
+              "verification_id": "verify:calc:annual_difference:net_profit_parent",
+              "target_type": "calculation",
+              "target_id": "calc:annual_difference:net_profit_parent",
+              "status": "verified",
+              "checks": [
+                "按两个已核实事实重新计算年度差额。"
+              ],
+              "conflicts": [],
+              "evidence_ids": [
+                "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2024:comparative",
+                "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2025:current"
+              ],
+              "limitations": [],
+              "verified_at": "2026-10-03T07:03:15.255892+00:00"
+            }
+          ],
+          "independent_verification": {
+            "calculation_id": "calc:annual_difference:net_profit_parent",
+            "status": "verified",
+            "recomputed_value": "27000000.00",
+            "reason": null,
+            "checks": [
+              "按两个已核实事实重新计算年度差额。"
+            ]
+          }
+        },
+        {
+          "calculation_id": "calc:annual_difference:non_recurring_total",
+          "formula_id": "annual_difference",
+          "formula_expression": "current.normalized_value - comparative.normalized_value",
+          "input_fact_ids": [
+            "upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2025:current",
+            "upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2024:comparative"
+          ],
+          "output_value": "2000000.00",
+          "unit": null,
+          "status": "succeeded",
+          "failure_reason": null,
+          "rule_version": "v2-annual-3",
+          "placement_reasons": [],
+          "verifications": [
+            {
+              "verification_id": "verify:calc:annual_difference:non_recurring_total",
+              "target_type": "calculation",
+              "target_id": "calc:annual_difference:non_recurring_total",
+              "status": "verified",
+              "checks": [
+                "按两个已核实事实重新计算年度差额。"
+              ],
+              "conflicts": [],
+              "evidence_ids": [
+                "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2024:comparative",
+                "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2025:current"
+              ],
+              "limitations": [],
+              "verified_at": "2026-10-03T07:03:15.255932+00:00"
+            }
+          ],
+          "independent_verification": {
+            "calculation_id": "calc:annual_difference:non_recurring_total",
+            "status": "verified",
+            "recomputed_value": "2000000.00",
+            "reason": null,
+            "checks": [
+              "按两个已核实事实重新计算年度差额。"
+            ]
+          }
+        },
+        {
+          "calculation_id": "calc:annual_difference:operating_cash_flow",
+          "formula_id": "annual_difference",
+          "formula_expression": "current.normalized_value - comparative.normalized_value",
+          "input_fact_ids": [
+            "upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2025:current",
+            "upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2024:comparative"
+          ],
+          "output_value": "-100000000.00",
+          "unit": null,
+          "status": "succeeded",
+          "failure_reason": null,
+          "rule_version": "v2-annual-3",
+          "placement_reasons": [],
+          "verifications": [
+            {
+              "verification_id": "verify:calc:annual_difference:operating_cash_flow",
+              "target_type": "calculation",
+              "target_id": "calc:annual_difference:operating_cash_flow",
+              "status": "verified",
+              "checks": [
+                "按两个已核实事实重新计算年度差额。"
+              ],
+              "conflicts": [],
+              "evidence_ids": [
+                "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2024:comparative",
+                "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2025:current"
+              ],
+              "limitations": [],
+              "verified_at": "2026-10-03T07:03:15.255961+00:00"
+            }
+          ],
+          "independent_verification": {
+            "calculation_id": "calc:annual_difference:operating_cash_flow",
+            "status": "verified",
+            "recomputed_value": "-100000000.00",
+            "reason": null,
+            "checks": [
+              "按两个已核实事实重新计算年度差额。"
+            ]
+          }
+        },
+        {
+          "calculation_id": "calc:annual_difference:revenue",
+          "formula_id": "annual_difference",
+          "formula_expression": "current.normalized_value - comparative.normalized_value",
+          "input_fact_ids": [
+            "upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2025:current",
+            "upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2024:comparative"
+          ],
+          "output_value": "250000000.00",
+          "unit": null,
+          "status": "succeeded",
+          "failure_reason": null,
+          "rule_version": "v2-annual-3",
+          "placement_reasons": [],
+          "verifications": [
+            {
+              "verification_id": "verify:calc:annual_difference:revenue",
+              "target_type": "calculation",
+              "target_id": "calc:annual_difference:revenue",
+              "status": "verified",
+              "checks": [
+                "按两个已核实事实重新计算年度差额。"
+              ],
+              "conflicts": [],
+              "evidence_ids": [
+                "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2024:comparative",
+                "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2025:current"
+              ],
+              "limitations": [],
+              "verified_at": "2026-10-03T07:03:15.255990+00:00"
+            }
+          ],
+          "independent_verification": {
+            "calculation_id": "calc:annual_difference:revenue",
+            "status": "verified",
+            "recomputed_value": "250000000.00",
+            "reason": null,
+            "checks": [
+              "按两个已核实事实重新计算年度差额。"
+            ]
+          }
+        },
+        {
+          "calculation_id": "calc:annual_yoy_rate:net_profit_parent",
+          "formula_id": "annual_yoy_rate",
+          "formula_expression": "(current.normalized_value - comparative.normalized_value) / comparative.normalized_value；除法使用 Decimal，精度为 max(28, 两边有效数字位数之和再加 8)，结果不是无限位精确分数",
+          "input_fact_ids": [
+            "upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2025:current",
+            "upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2024:comparative"
+          ],
+          "output_value": "0.22881355932203389830508474576",
+          "unit": null,
+          "status": "succeeded",
+          "failure_reason": null,
+          "rule_version": "v2-annual-3",
+          "placement_reasons": [],
+          "verifications": [
+            {
+              "verification_id": "verify:calc:annual_yoy_rate:net_profit_parent",
+              "target_type": "calculation",
+              "target_id": "calc:annual_yoy_rate:net_profit_parent",
+              "status": "verified",
+              "checks": [
+                "按两个已核实事实重新计算同比率，采用受控 Decimal 精度。"
+              ],
+              "conflicts": [],
+              "evidence_ids": [
+                "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2024:comparative",
+                "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2025:current"
+              ],
+              "limitations": [],
+              "verified_at": "2026-10-03T07:03:15.255916+00:00"
+            }
+          ],
+          "independent_verification": {
+            "calculation_id": "calc:annual_yoy_rate:net_profit_parent",
+            "status": "verified",
+            "recomputed_value": "0.22881355932203389830508474576",
+            "reason": null,
+            "checks": [
+              "按两个已核实事实重新计算同比率，采用受控 Decimal 精度。"
+            ]
+          }
+        },
+        {
+          "calculation_id": "calc:annual_yoy_rate:non_recurring_total",
+          "formula_id": "annual_yoy_rate",
+          "formula_expression": "(current.normalized_value - comparative.normalized_value) / comparative.normalized_value；除法使用 Decimal，精度为 max(28, 两边有效数字位数之和再加 8)，结果不是无限位精确分数",
+          "input_fact_ids": [
+            "upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2025:current",
+            "upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2024:comparative"
+          ],
+          "output_value": "0.5",
+          "unit": null,
+          "status": "succeeded",
+          "failure_reason": null,
+          "rule_version": "v2-annual-3",
+          "placement_reasons": [],
+          "verifications": [
+            {
+              "verification_id": "verify:calc:annual_yoy_rate:non_recurring_total",
+              "target_type": "calculation",
+              "target_id": "calc:annual_yoy_rate:non_recurring_total",
+              "status": "verified",
+              "checks": [
+                "按两个已核实事实重新计算同比率，采用受控 Decimal 精度。"
+              ],
+              "conflicts": [],
+              "evidence_ids": [
+                "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2024:comparative",
+                "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2025:current"
+              ],
+              "limitations": [],
+              "verified_at": "2026-10-03T07:03:15.255946+00:00"
+            }
+          ],
+          "independent_verification": {
+            "calculation_id": "calc:annual_yoy_rate:non_recurring_total",
+            "status": "verified",
+            "recomputed_value": "0.5",
+            "reason": null,
+            "checks": [
+              "按两个已核实事实重新计算同比率，采用受控 Decimal 精度。"
+            ]
+          }
+        },
+        {
+          "calculation_id": "calc:annual_yoy_rate:operating_cash_flow",
+          "formula_id": "annual_yoy_rate",
+          "formula_expression": "(current.normalized_value - comparative.normalized_value) / comparative.normalized_value；除法使用 Decimal，精度为 max(28, 两边有效数字位数之和再加 8)，结果不是无限位精确分数",
+          "input_fact_ids": [
+            "upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2025:current",
+            "upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2024:comparative"
+          ],
+          "output_value": "-1.1111111111111111111111111111",
+          "unit": null,
+          "status": "succeeded",
+          "failure_reason": null,
+          "rule_version": "v2-annual-3",
+          "placement_reasons": [],
+          "verifications": [
+            {
+              "verification_id": "verify:calc:annual_yoy_rate:operating_cash_flow",
+              "target_type": "calculation",
+              "target_id": "calc:annual_yoy_rate:operating_cash_flow",
+              "status": "verified",
+              "checks": [
+                "按两个已核实事实重新计算同比率，采用受控 Decimal 精度。"
+              ],
+              "conflicts": [],
+              "evidence_ids": [
+                "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2024:comparative",
+                "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2025:current"
+              ],
+              "limitations": [],
+              "verified_at": "2026-10-03T07:03:15.255976+00:00"
+            }
+          ],
+          "independent_verification": {
+            "calculation_id": "calc:annual_yoy_rate:operating_cash_flow",
+            "status": "verified",
+            "recomputed_value": "-1.1111111111111111111111111111",
+            "reason": null,
+            "checks": [
+              "按两个已核实事实重新计算同比率，采用受控 Decimal 精度。"
+            ]
+          }
+        },
+        {
+          "calculation_id": "calc:annual_yoy_rate:revenue",
+          "formula_id": "annual_yoy_rate",
+          "formula_expression": "(current.normalized_value - comparative.normalized_value) / comparative.normalized_value；除法使用 Decimal，精度为 max(28, 两边有效数字位数之和再加 8)，结果不是无限位精确分数",
+          "input_fact_ids": [
+            "upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2025:current",
+            "upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2024:comparative"
+          ],
+          "output_value": "0.25",
+          "unit": null,
+          "status": "succeeded",
+          "failure_reason": null,
+          "rule_version": "v2-annual-3",
+          "placement_reasons": [],
+          "verifications": [
+            {
+              "verification_id": "verify:calc:annual_yoy_rate:revenue",
+              "target_type": "calculation",
+              "target_id": "calc:annual_yoy_rate:revenue",
+              "status": "verified",
+              "checks": [
+                "按两个已核实事实重新计算同比率，采用受控 Decimal 精度。"
+              ],
+              "conflicts": [],
+              "evidence_ids": [
+                "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2024:comparative",
+                "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2025:current"
+              ],
+              "limitations": [],
+              "verified_at": "2026-10-03T07:03:15.256003+00:00"
+            }
+          ],
+          "independent_verification": {
+            "calculation_id": "calc:annual_yoy_rate:revenue",
+            "status": "verified",
+            "recomputed_value": "0.25",
+            "reason": null,
+            "checks": [
+              "按两个已核实事实重新计算同比率，采用受控 Decimal 精度。"
+            ]
+          }
+        }
+      ]
+    },
+    "verified_claims": [
+      {
+        "claim_id": "claim:calculation:calc:annual_difference:net_profit_parent",
+        "claim_type": "calculation",
+        "text": "net_profit_parent 2025 年本期相对 2024 年比较期的年度差额为 27000000.00。",
+        "supporting_fact_ids": [
+          "upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2025:current",
+          "upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2024:comparative"
+        ],
+        "supporting_evidence_ids": [
+          "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2024:comparative",
+          "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2025:current"
+        ],
+        "calculation_ids": [
+          "calc:annual_difference:net_profit_parent"
+        ],
+        "verification_status": "verified",
+        "limitations": [],
+        "alternative_explanations": [],
+        "follow_up_items": [],
+        "placement": "verified_claims",
+        "placement_reasons": [],
+        "verifications": [
+          {
+            "verification_id": "verify:claim:calculation:calc:annual_difference:net_profit_parent",
+            "target_type": "claim",
+            "target_id": "claim:calculation:calc:annual_difference:net_profit_parent",
+            "status": "verified",
+            "checks": [
+              "按确定性 Claim 规则核对结构化对象、文案和来源引用。"
+            ],
+            "conflicts": [],
+            "evidence_ids": [
+              "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2024:comparative",
+              "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2025:current"
+            ],
+            "limitations": [],
+            "verified_at": "2026-10-03T07:03:15.256623+00:00"
+          }
+        ],
+        "evidences": [
+          {
+            "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2024:comparative",
+            "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+            "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+            "pdf_page": 2,
+            "printed_page": null,
+            "table_title": "合并利润表",
+            "row_label": "归属于母公司股东的净利润",
+            "column_label": "项目 2025年度 2024年度",
+            "value_raw": "118,000,000.00",
+            "value_normalized": "118000000.00",
+            "unit": "元",
+            "currency": "人民币",
+            "period_start": "2024-01-01",
+            "period_end": "2024-12-31",
+            "period_type": "duration",
+            "legacy_text_region": null,
+            "extraction_method": "independent_pymupdf_words",
+            "surrounding_text": null,
+            "limitations": [
+              "单位、币种和期间来自表头原文，不复制事实字段。"
+            ],
+            "coordinate_system": "pymupdf_page_top_left",
+            "value_region": {
+              "text": "118,000,000.00",
+              "page": 2,
+              "bbox": {
+                "x0": 444.1357421875,
+                "y0": 344.4200134277344,
+                "x1": 515.7955932617188,
+                "y1": 357.6099853515625
+              }
+            },
+            "row_region": {
+              "text": "归属于母公司股东的净利润",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 344.4200134277344,
+                "x1": 172.0,
+                "y1": 357.6099853515625
+              }
+            },
+            "column_region": {
+              "text": "项目 2025年度 2024年度",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 206.04969787597656,
+                "x1": 502.47137451171875,
+                "y1": 219.70135498046875
+              }
+            },
+            "title_region": {
+              "text": "合并利润表",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 131.64370727539062,
+                "x1": 138.75,
+                "y1": 154.52835083007812
+              }
+            },
+            "unit_region": {
+              "text": "单位：元 币种：人民币",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 170.4199981689453,
+                "x1": 163.79998779296875,
+                "y1": 183.61000061035156
+              }
+            }
+          },
+          {
+            "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2025:current",
+            "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+            "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+            "pdf_page": 2,
+            "printed_page": null,
+            "table_title": "合并利润表",
+            "row_label": "归属于母公司股东的净利润",
+            "column_label": "项目 2025年度 2024年度",
+            "value_raw": "145,000,000.00",
+            "value_normalized": "145000000.00",
+            "unit": "元",
+            "currency": "人民币",
+            "period_start": "2025-01-01",
+            "period_end": "2025-12-31",
+            "period_type": "duration",
+            "legacy_text_region": null,
+            "extraction_method": "independent_pymupdf_words",
+            "surrounding_text": null,
+            "limitations": [
+              "单位、币种和期间来自表头原文，不复制事实字段。"
+            ],
+            "coordinate_system": "pymupdf_page_top_left",
+            "value_region": {
+              "text": "145,000,000.00",
+              "page": 2,
+              "bbox": {
+                "x0": 309.1357421875,
+                "y0": 344.4200134277344,
+                "x1": 380.7955627441406,
+                "y1": 357.6099853515625
+              }
+            },
+            "row_region": {
+              "text": "归属于母公司股东的净利润",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 344.4200134277344,
+                "x1": 172.0,
+                "y1": 357.6099853515625
+              }
+            },
+            "column_region": {
+              "text": "项目 2025年度 2024年度",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 206.04969787597656,
+                "x1": 502.47137451171875,
+                "y1": 219.70135498046875
+              }
+            },
+            "title_region": {
+              "text": "合并利润表",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 131.64370727539062,
+                "x1": 138.75,
+                "y1": 154.52835083007812
+              }
+            },
+            "unit_region": {
+              "text": "单位：元 币种：人民币",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 170.4199981689453,
+                "x1": 163.79998779296875,
+                "y1": 183.61000061035156
+              }
+            }
+          }
+        ],
+        "independent_verification": {
+          "claim_id": "claim:calculation:calc:annual_difference:net_profit_parent",
+          "status": "verified",
+          "reason": null,
+          "expected_text": "net_profit_parent 2025 年本期相对 2024 年比较期的年度差额为 27000000.00。"
+        }
+      },
+      {
+        "claim_id": "claim:calculation:calc:annual_difference:non_recurring_total",
+        "claim_type": "calculation",
+        "text": "non_recurring_total 2025 年本期相对 2024 年比较期的年度差额为 2000000.00。",
+        "supporting_fact_ids": [
+          "upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2025:current",
+          "upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2024:comparative"
+        ],
+        "supporting_evidence_ids": [
+          "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2024:comparative",
+          "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2025:current"
+        ],
+        "calculation_ids": [
+          "calc:annual_difference:non_recurring_total"
+        ],
+        "verification_status": "verified",
+        "limitations": [],
+        "alternative_explanations": [],
+        "follow_up_items": [],
+        "placement": "verified_claims",
+        "placement_reasons": [],
+        "verifications": [
+          {
+            "verification_id": "verify:claim:calculation:calc:annual_difference:non_recurring_total",
+            "target_type": "claim",
+            "target_id": "claim:calculation:calc:annual_difference:non_recurring_total",
+            "status": "verified",
+            "checks": [
+              "按确定性 Claim 规则核对结构化对象、文案和来源引用。"
+            ],
+            "conflicts": [],
+            "evidence_ids": [
+              "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2024:comparative",
+              "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2025:current"
+            ],
+            "limitations": [],
+            "verified_at": "2026-10-03T07:03:15.256711+00:00"
+          }
+        ],
+        "evidences": [
+          {
+            "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2024:comparative",
+            "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+            "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+            "pdf_page": 5,
+            "printed_page": null,
+            "table_title": "非经常性损益项目和金额",
+            "row_label": "合计",
+            "column_label": "项目 2025年度金额 2024年度金额",
+            "value_raw": "4,000,000.00",
+            "value_normalized": "4000000.00",
+            "unit": "元",
+            "currency": "人民币",
+            "period_start": "2024-01-01",
+            "period_end": "2024-12-31",
+            "period_type": "duration",
+            "legacy_text_region": null,
+            "extraction_method": "independent_pymupdf_words",
+            "surrounding_text": null,
+            "limitations": [
+              "单位、币种和期间来自表头原文，不复制事实字段。"
+            ],
+            "coordinate_system": "pymupdf_page_top_left",
+            "value_region": {
+              "text": "4,000,000.00",
+              "page": 5,
+              "bbox": {
+                "x0": 450.0,
+                "y0": 242.4199981689453,
+                "x1": 509.9398498535156,
+                "y1": 255.61000061035156
+              }
+            },
+            "row_region": {
+              "text": "合计",
+              "page": 5,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 242.4199981689453,
+                "x1": 72.0,
+                "y1": 255.61000061035156
+              }
+            },
+            "column_region": {
+              "text": "项目 2025年度金额 2024年度金额",
+              "page": 5,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 206.04969787597656,
+                "x1": 512.8213500976562,
+                "y1": 219.70135498046875
+              }
+            },
+            "title_region": {
+              "text": "非经常性损益项目和金额",
+              "page": 5,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 131.64370727539062,
+                "x1": 242.85003662109375,
+                "y1": 154.52835083007812
+              }
+            },
+            "unit_region": {
+              "text": "单位：元 币种：人民币",
+              "page": 5,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 170.4199981689453,
+                "x1": 163.79998779296875,
+                "y1": 183.61000061035156
+              }
+            }
+          },
+          {
+            "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2025:current",
+            "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+            "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+            "pdf_page": 5,
+            "printed_page": null,
+            "table_title": "非经常性损益项目和金额",
+            "row_label": "合计",
+            "column_label": "项目 2025年度金额 2024年度金额",
+            "value_raw": "6,000,000.00",
+            "value_normalized": "6000000.00",
+            "unit": "元",
+            "currency": "人民币",
+            "period_start": "2025-01-01",
+            "period_end": "2025-12-31",
+            "period_type": "duration",
+            "legacy_text_region": null,
+            "extraction_method": "independent_pymupdf_words",
+            "surrounding_text": null,
+            "limitations": [
+              "单位、币种和期间来自表头原文，不复制事实字段。"
+            ],
+            "coordinate_system": "pymupdf_page_top_left",
+            "value_region": {
+              "text": "6,000,000.00",
+              "page": 5,
+              "bbox": {
+                "x0": 315.0,
+                "y0": 242.4199981689453,
+                "x1": 374.9398498535156,
+                "y1": 255.61000061035156
+              }
+            },
+            "row_region": {
+              "text": "合计",
+              "page": 5,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 242.4199981689453,
+                "x1": 72.0,
+                "y1": 255.61000061035156
+              }
+            },
+            "column_region": {
+              "text": "项目 2025年度金额 2024年度金额",
+              "page": 5,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 206.04969787597656,
+                "x1": 512.8213500976562,
+                "y1": 219.70135498046875
+              }
+            },
+            "title_region": {
+              "text": "非经常性损益项目和金额",
+              "page": 5,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 131.64370727539062,
+                "x1": 242.85003662109375,
+                "y1": 154.52835083007812
+              }
+            },
+            "unit_region": {
+              "text": "单位：元 币种：人民币",
+              "page": 5,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 170.4199981689453,
+                "x1": 163.79998779296875,
+                "y1": 183.61000061035156
+              }
+            }
+          }
+        ],
+        "independent_verification": {
+          "claim_id": "claim:calculation:calc:annual_difference:non_recurring_total",
+          "status": "verified",
+          "reason": null,
+          "expected_text": "non_recurring_total 2025 年本期相对 2024 年比较期的年度差额为 2000000.00。"
+        }
+      },
+      {
+        "claim_id": "claim:calculation:calc:annual_difference:operating_cash_flow",
+        "claim_type": "calculation",
+        "text": "operating_cash_flow 2025 年本期相对 2024 年比较期的年度差额为 -100000000.00。",
+        "supporting_fact_ids": [
+          "upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2025:current",
+          "upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2024:comparative"
+        ],
+        "supporting_evidence_ids": [
+          "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2024:comparative",
+          "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2025:current"
+        ],
+        "calculation_ids": [
+          "calc:annual_difference:operating_cash_flow"
+        ],
+        "verification_status": "verified",
+        "limitations": [],
+        "alternative_explanations": [],
+        "follow_up_items": [],
+        "placement": "verified_claims",
+        "placement_reasons": [],
+        "verifications": [
+          {
+            "verification_id": "verify:claim:calculation:calc:annual_difference:operating_cash_flow",
+            "target_type": "claim",
+            "target_id": "claim:calculation:calc:annual_difference:operating_cash_flow",
+            "status": "verified",
+            "checks": [
+              "按确定性 Claim 规则核对结构化对象、文案和来源引用。"
+            ],
+            "conflicts": [],
+            "evidence_ids": [
+              "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2024:comparative",
+              "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2025:current"
+            ],
+            "limitations": [],
+            "verified_at": "2026-10-03T07:03:15.256798+00:00"
+          }
+        ],
+        "evidences": [
+          {
+            "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2024:comparative",
+            "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+            "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+            "pdf_page": 3,
+            "printed_page": null,
+            "table_title": "合并现金流量表",
+            "row_label": "经营活动产生的现金流量净额",
+            "column_label": "项目 2025年度 2024年度",
+            "value_raw": "90,000,000.00",
+            "value_normalized": "90000000.00",
+            "unit": "元",
+            "currency": "人民币",
+            "period_start": "2024-01-01",
+            "period_end": "2024-12-31",
+            "period_type": "duration",
+            "legacy_text_region": null,
+            "extraction_method": "independent_pymupdf_words",
+            "surrounding_text": null,
+            "limitations": [
+              "单位、币种和期间来自表头原文，不复制事实字段。"
+            ],
+            "coordinate_system": "pymupdf_page_top_left",
+            "value_region": {
+              "text": "90,000,000.00",
+              "page": 3,
+              "bbox": {
+                "x0": 447.06787109375,
+                "y0": 242.4199981689453,
+                "x1": 512.8677368164062,
+                "y1": 255.61000061035156
+              }
+            },
+            "row_region": {
+              "text": "经营活动产生的现金流量净额",
+              "page": 3,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 242.4199981689453,
+                "x1": 182.0,
+                "y1": 255.61000061035156
+              }
+            },
+            "column_region": {
+              "text": "项目 2025年度 2024年度",
+              "page": 3,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 206.04969787597656,
+                "x1": 502.47137451171875,
+                "y1": 219.70135498046875
+              }
+            },
+            "title_region": {
+              "text": "合并现金流量表",
+              "page": 3,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 131.64370727539062,
+                "x1": 173.45001220703125,
+                "y1": 154.52835083007812
+              }
+            },
+            "unit_region": {
+              "text": "单位：元 币种：人民币",
+              "page": 3,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 170.4199981689453,
+                "x1": 163.79998779296875,
+                "y1": 183.61000061035156
+              }
+            }
+          },
+          {
+            "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2025:current",
+            "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+            "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+            "pdf_page": 3,
+            "printed_page": null,
+            "table_title": "合并现金流量表",
+            "row_label": "经营活动产生的现金流量净额",
+            "column_label": "项目 2025年度 2024年度",
+            "value_raw": "-10,000,000.00",
+            "value_normalized": "-10000000.00",
+            "unit": "元",
+            "currency": "人民币",
+            "period_start": "2025-01-01",
+            "period_end": "2025-12-31",
+            "period_type": "duration",
+            "legacy_text_region": null,
+            "extraction_method": "independent_pymupdf_words",
+            "surrounding_text": null,
+            "limitations": [
+              "单位、币种和期间来自表头原文，不复制事实字段。"
+            ],
+            "coordinate_system": "pymupdf_page_top_left",
+            "value_region": {
+              "text": "-10,000,000.00",
+              "page": 3,
+              "bbox": {
+                "x0": 309.90478515625,
+                "y0": 242.4199981689453,
+                "x1": 380.0246276855469,
+                "y1": 255.61000061035156
+              }
+            },
+            "row_region": {
+              "text": "经营活动产生的现金流量净额",
+              "page": 3,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 242.4199981689453,
+                "x1": 182.0,
+                "y1": 255.61000061035156
+              }
+            },
+            "column_region": {
+              "text": "项目 2025年度 2024年度",
+              "page": 3,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 206.04969787597656,
+                "x1": 502.47137451171875,
+                "y1": 219.70135498046875
+              }
+            },
+            "title_region": {
+              "text": "合并现金流量表",
+              "page": 3,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 131.64370727539062,
+                "x1": 173.45001220703125,
+                "y1": 154.52835083007812
+              }
+            },
+            "unit_region": {
+              "text": "单位：元 币种：人民币",
+              "page": 3,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 170.4199981689453,
+                "x1": 163.79998779296875,
+                "y1": 183.61000061035156
+              }
+            }
+          }
+        ],
+        "independent_verification": {
+          "claim_id": "claim:calculation:calc:annual_difference:operating_cash_flow",
+          "status": "verified",
+          "reason": null,
+          "expected_text": "operating_cash_flow 2025 年本期相对 2024 年比较期的年度差额为 -100000000.00。"
+        }
+      },
+      {
+        "claim_id": "claim:calculation:calc:annual_difference:revenue",
+        "claim_type": "calculation",
+        "text": "revenue 2025 年本期相对 2024 年比较期的年度差额为 250000000.00。",
+        "supporting_fact_ids": [
+          "upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2025:current",
+          "upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2024:comparative"
+        ],
+        "supporting_evidence_ids": [
+          "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2024:comparative",
+          "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2025:current"
+        ],
+        "calculation_ids": [
+          "calc:annual_difference:revenue"
+        ],
+        "verification_status": "verified",
+        "limitations": [],
+        "alternative_explanations": [],
+        "follow_up_items": [],
+        "placement": "verified_claims",
+        "placement_reasons": [],
+        "verifications": [
+          {
+            "verification_id": "verify:claim:calculation:calc:annual_difference:revenue",
+            "target_type": "claim",
+            "target_id": "claim:calculation:calc:annual_difference:revenue",
+            "status": "verified",
+            "checks": [
+              "按确定性 Claim 规则核对结构化对象、文案和来源引用。"
+            ],
+            "conflicts": [],
+            "evidence_ids": [
+              "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2024:comparative",
+              "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2025:current"
+            ],
+            "limitations": [],
+            "verified_at": "2026-10-03T07:03:15.256880+00:00"
+          }
+        ],
+        "evidences": [
+          {
+            "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2024:comparative",
+            "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+            "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+            "pdf_page": 2,
+            "printed_page": null,
+            "table_title": "合并利润表",
+            "row_label": "其中：营业收入",
+            "column_label": "项目 2025年度 2024年度",
+            "value_raw": "1,000,000,000.00",
+            "value_normalized": "1000000000.00",
+            "unit": "元",
+            "currency": "人民币",
+            "period_start": "2024-01-01",
+            "period_end": "2024-12-31",
+            "period_type": "duration",
+            "legacy_text_region": null,
+            "extraction_method": "independent_pymupdf_words",
+            "surrounding_text": null,
+            "limitations": [
+              "单位、币种和期间来自表头原文，不复制事实字段。"
+            ],
+            "coordinate_system": "pymupdf_page_top_left",
+            "value_region": {
+              "text": "1,000,000,000.00",
+              "page": 2,
+              "bbox": {
+                "x0": 440.0,
+                "y0": 273.4200134277344,
+                "x1": 519.9197998046875,
+                "y1": 286.6099853515625
+              }
+            },
+            "row_region": {
+              "text": "其中：营业收入",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 273.4200134277344,
+                "x1": 122.0,
+                "y1": 286.6099853515625
+              }
+            },
+            "column_region": {
+              "text": "项目 2025年度 2024年度",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 206.04969787597656,
+                "x1": 502.47137451171875,
+                "y1": 219.70135498046875
+              }
+            },
+            "title_region": {
+              "text": "合并利润表",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 131.64370727539062,
+                "x1": 138.75,
+                "y1": 154.52835083007812
+              }
+            },
+            "unit_region": {
+              "text": "单位：元 币种：人民币",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 170.4199981689453,
+                "x1": 163.79998779296875,
+                "y1": 183.61000061035156
+              }
+            }
+          },
+          {
+            "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2025:current",
+            "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+            "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+            "pdf_page": 2,
+            "printed_page": null,
+            "table_title": "合并利润表",
+            "row_label": "其中：营业收入",
+            "column_label": "项目 2025年度 2024年度",
+            "value_raw": "1,250,000,000.00",
+            "value_normalized": "1250000000.00",
+            "unit": "元",
+            "currency": "人民币",
+            "period_start": "2025-01-01",
+            "period_end": "2025-12-31",
+            "period_type": "duration",
+            "legacy_text_region": null,
+            "extraction_method": "independent_pymupdf_words",
+            "surrounding_text": null,
+            "limitations": [
+              "单位、币种和期间来自表头原文，不复制事实字段。"
+            ],
+            "coordinate_system": "pymupdf_page_top_left",
+            "value_region": {
+              "text": "1,250,000,000.00",
+              "page": 2,
+              "bbox": {
+                "x0": 305.0,
+                "y0": 273.4200134277344,
+                "x1": 384.9197998046875,
+                "y1": 286.6099853515625
+              }
+            },
+            "row_region": {
+              "text": "其中：营业收入",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 273.4200134277344,
+                "x1": 122.0,
+                "y1": 286.6099853515625
+              }
+            },
+            "column_region": {
+              "text": "项目 2025年度 2024年度",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 206.04969787597656,
+                "x1": 502.47137451171875,
+                "y1": 219.70135498046875
+              }
+            },
+            "title_region": {
+              "text": "合并利润表",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 131.64370727539062,
+                "x1": 138.75,
+                "y1": 154.52835083007812
+              }
+            },
+            "unit_region": {
+              "text": "单位：元 币种：人民币",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 170.4199981689453,
+                "x1": 163.79998779296875,
+                "y1": 183.61000061035156
+              }
+            }
+          }
+        ],
+        "independent_verification": {
+          "claim_id": "claim:calculation:calc:annual_difference:revenue",
+          "status": "verified",
+          "reason": null,
+          "expected_text": "revenue 2025 年本期相对 2024 年比较期的年度差额为 250000000.00。"
+        }
+      },
+      {
+        "claim_id": "claim:calculation:calc:annual_yoy_rate:net_profit_parent",
+        "claim_type": "calculation",
+        "text": "net_profit_parent 2025 年本期相对 2024 年比较期的同比率（比值）为 0.22881355932203389830508474576。",
+        "supporting_fact_ids": [
+          "upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2025:current",
+          "upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2024:comparative"
+        ],
+        "supporting_evidence_ids": [
+          "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2024:comparative",
+          "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2025:current"
+        ],
+        "calculation_ids": [
+          "calc:annual_yoy_rate:net_profit_parent"
+        ],
+        "verification_status": "verified",
+        "limitations": [],
+        "alternative_explanations": [],
+        "follow_up_items": [],
+        "placement": "verified_claims",
+        "placement_reasons": [],
+        "verifications": [
+          {
+            "verification_id": "verify:claim:calculation:calc:annual_yoy_rate:net_profit_parent",
+            "target_type": "claim",
+            "target_id": "claim:calculation:calc:annual_yoy_rate:net_profit_parent",
+            "status": "verified",
+            "checks": [
+              "按确定性 Claim 规则核对结构化对象、文案和来源引用。"
+            ],
+            "conflicts": [],
+            "evidence_ids": [
+              "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2024:comparative",
+              "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2025:current"
+            ],
+            "limitations": [],
+            "verified_at": "2026-10-03T07:03:15.256669+00:00"
+          }
+        ],
+        "evidences": [
+          {
+            "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2024:comparative",
+            "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+            "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+            "pdf_page": 2,
+            "printed_page": null,
+            "table_title": "合并利润表",
+            "row_label": "归属于母公司股东的净利润",
+            "column_label": "项目 2025年度 2024年度",
+            "value_raw": "118,000,000.00",
+            "value_normalized": "118000000.00",
+            "unit": "元",
+            "currency": "人民币",
+            "period_start": "2024-01-01",
+            "period_end": "2024-12-31",
+            "period_type": "duration",
+            "legacy_text_region": null,
+            "extraction_method": "independent_pymupdf_words",
+            "surrounding_text": null,
+            "limitations": [
+              "单位、币种和期间来自表头原文，不复制事实字段。"
+            ],
+            "coordinate_system": "pymupdf_page_top_left",
+            "value_region": {
+              "text": "118,000,000.00",
+              "page": 2,
+              "bbox": {
+                "x0": 444.1357421875,
+                "y0": 344.4200134277344,
+                "x1": 515.7955932617188,
+                "y1": 357.6099853515625
+              }
+            },
+            "row_region": {
+              "text": "归属于母公司股东的净利润",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 344.4200134277344,
+                "x1": 172.0,
+                "y1": 357.6099853515625
+              }
+            },
+            "column_region": {
+              "text": "项目 2025年度 2024年度",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 206.04969787597656,
+                "x1": 502.47137451171875,
+                "y1": 219.70135498046875
+              }
+            },
+            "title_region": {
+              "text": "合并利润表",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 131.64370727539062,
+                "x1": 138.75,
+                "y1": 154.52835083007812
+              }
+            },
+            "unit_region": {
+              "text": "单位：元 币种：人民币",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 170.4199981689453,
+                "x1": 163.79998779296875,
+                "y1": 183.61000061035156
+              }
+            }
+          },
+          {
+            "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2025:current",
+            "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+            "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+            "pdf_page": 2,
+            "printed_page": null,
+            "table_title": "合并利润表",
+            "row_label": "归属于母公司股东的净利润",
+            "column_label": "项目 2025年度 2024年度",
+            "value_raw": "145,000,000.00",
+            "value_normalized": "145000000.00",
+            "unit": "元",
+            "currency": "人民币",
+            "period_start": "2025-01-01",
+            "period_end": "2025-12-31",
+            "period_type": "duration",
+            "legacy_text_region": null,
+            "extraction_method": "independent_pymupdf_words",
+            "surrounding_text": null,
+            "limitations": [
+              "单位、币种和期间来自表头原文，不复制事实字段。"
+            ],
+            "coordinate_system": "pymupdf_page_top_left",
+            "value_region": {
+              "text": "145,000,000.00",
+              "page": 2,
+              "bbox": {
+                "x0": 309.1357421875,
+                "y0": 344.4200134277344,
+                "x1": 380.7955627441406,
+                "y1": 357.6099853515625
+              }
+            },
+            "row_region": {
+              "text": "归属于母公司股东的净利润",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 344.4200134277344,
+                "x1": 172.0,
+                "y1": 357.6099853515625
+              }
+            },
+            "column_region": {
+              "text": "项目 2025年度 2024年度",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 206.04969787597656,
+                "x1": 502.47137451171875,
+                "y1": 219.70135498046875
+              }
+            },
+            "title_region": {
+              "text": "合并利润表",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 131.64370727539062,
+                "x1": 138.75,
+                "y1": 154.52835083007812
+              }
+            },
+            "unit_region": {
+              "text": "单位：元 币种：人民币",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 170.4199981689453,
+                "x1": 163.79998779296875,
+                "y1": 183.61000061035156
+              }
+            }
+          }
+        ],
+        "independent_verification": {
+          "claim_id": "claim:calculation:calc:annual_yoy_rate:net_profit_parent",
+          "status": "verified",
+          "reason": null,
+          "expected_text": "net_profit_parent 2025 年本期相对 2024 年比较期的同比率（比值）为 0.22881355932203389830508474576。"
+        }
+      },
+      {
+        "claim_id": "claim:calculation:calc:annual_yoy_rate:non_recurring_total",
+        "claim_type": "calculation",
+        "text": "non_recurring_total 2025 年本期相对 2024 年比较期的同比率（比值）为 0.5。",
+        "supporting_fact_ids": [
+          "upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2025:current",
+          "upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2024:comparative"
+        ],
+        "supporting_evidence_ids": [
+          "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2024:comparative",
+          "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2025:current"
+        ],
+        "calculation_ids": [
+          "calc:annual_yoy_rate:non_recurring_total"
+        ],
+        "verification_status": "verified",
+        "limitations": [],
+        "alternative_explanations": [],
+        "follow_up_items": [],
+        "placement": "verified_claims",
+        "placement_reasons": [],
+        "verifications": [
+          {
+            "verification_id": "verify:claim:calculation:calc:annual_yoy_rate:non_recurring_total",
+            "target_type": "claim",
+            "target_id": "claim:calculation:calc:annual_yoy_rate:non_recurring_total",
+            "status": "verified",
+            "checks": [
+              "按确定性 Claim 规则核对结构化对象、文案和来源引用。"
+            ],
+            "conflicts": [],
+            "evidence_ids": [
+              "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2024:comparative",
+              "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2025:current"
+            ],
+            "limitations": [],
+            "verified_at": "2026-10-03T07:03:15.256756+00:00"
+          }
+        ],
+        "evidences": [
+          {
+            "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2024:comparative",
+            "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+            "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+            "pdf_page": 5,
+            "printed_page": null,
+            "table_title": "非经常性损益项目和金额",
+            "row_label": "合计",
+            "column_label": "项目 2025年度金额 2024年度金额",
+            "value_raw": "4,000,000.00",
+            "value_normalized": "4000000.00",
+            "unit": "元",
+            "currency": "人民币",
+            "period_start": "2024-01-01",
+            "period_end": "2024-12-31",
+            "period_type": "duration",
+            "legacy_text_region": null,
+            "extraction_method": "independent_pymupdf_words",
+            "surrounding_text": null,
+            "limitations": [
+              "单位、币种和期间来自表头原文，不复制事实字段。"
+            ],
+            "coordinate_system": "pymupdf_page_top_left",
+            "value_region": {
+              "text": "4,000,000.00",
+              "page": 5,
+              "bbox": {
+                "x0": 450.0,
+                "y0": 242.4199981689453,
+                "x1": 509.9398498535156,
+                "y1": 255.61000061035156
+              }
+            },
+            "row_region": {
+              "text": "合计",
+              "page": 5,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 242.4199981689453,
+                "x1": 72.0,
+                "y1": 255.61000061035156
+              }
+            },
+            "column_region": {
+              "text": "项目 2025年度金额 2024年度金额",
+              "page": 5,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 206.04969787597656,
+                "x1": 512.8213500976562,
+                "y1": 219.70135498046875
+              }
+            },
+            "title_region": {
+              "text": "非经常性损益项目和金额",
+              "page": 5,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 131.64370727539062,
+                "x1": 242.85003662109375,
+                "y1": 154.52835083007812
+              }
+            },
+            "unit_region": {
+              "text": "单位：元 币种：人民币",
+              "page": 5,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 170.4199981689453,
+                "x1": 163.79998779296875,
+                "y1": 183.61000061035156
+              }
+            }
+          },
+          {
+            "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2025:current",
+            "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+            "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+            "pdf_page": 5,
+            "printed_page": null,
+            "table_title": "非经常性损益项目和金额",
+            "row_label": "合计",
+            "column_label": "项目 2025年度金额 2024年度金额",
+            "value_raw": "6,000,000.00",
+            "value_normalized": "6000000.00",
+            "unit": "元",
+            "currency": "人民币",
+            "period_start": "2025-01-01",
+            "period_end": "2025-12-31",
+            "period_type": "duration",
+            "legacy_text_region": null,
+            "extraction_method": "independent_pymupdf_words",
+            "surrounding_text": null,
+            "limitations": [
+              "单位、币种和期间来自表头原文，不复制事实字段。"
+            ],
+            "coordinate_system": "pymupdf_page_top_left",
+            "value_region": {
+              "text": "6,000,000.00",
+              "page": 5,
+              "bbox": {
+                "x0": 315.0,
+                "y0": 242.4199981689453,
+                "x1": 374.9398498535156,
+                "y1": 255.61000061035156
+              }
+            },
+            "row_region": {
+              "text": "合计",
+              "page": 5,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 242.4199981689453,
+                "x1": 72.0,
+                "y1": 255.61000061035156
+              }
+            },
+            "column_region": {
+              "text": "项目 2025年度金额 2024年度金额",
+              "page": 5,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 206.04969787597656,
+                "x1": 512.8213500976562,
+                "y1": 219.70135498046875
+              }
+            },
+            "title_region": {
+              "text": "非经常性损益项目和金额",
+              "page": 5,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 131.64370727539062,
+                "x1": 242.85003662109375,
+                "y1": 154.52835083007812
+              }
+            },
+            "unit_region": {
+              "text": "单位：元 币种：人民币",
+              "page": 5,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 170.4199981689453,
+                "x1": 163.79998779296875,
+                "y1": 183.61000061035156
+              }
+            }
+          }
+        ],
+        "independent_verification": {
+          "claim_id": "claim:calculation:calc:annual_yoy_rate:non_recurring_total",
+          "status": "verified",
+          "reason": null,
+          "expected_text": "non_recurring_total 2025 年本期相对 2024 年比较期的同比率（比值）为 0.5。"
+        }
+      },
+      {
+        "claim_id": "claim:calculation:calc:annual_yoy_rate:operating_cash_flow",
+        "claim_type": "calculation",
+        "text": "operating_cash_flow 2025 年本期相对 2024 年比较期的同比率（比值）为 -1.1111111111111111111111111111。",
+        "supporting_fact_ids": [
+          "upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2025:current",
+          "upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2024:comparative"
+        ],
+        "supporting_evidence_ids": [
+          "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2024:comparative",
+          "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2025:current"
+        ],
+        "calculation_ids": [
+          "calc:annual_yoy_rate:operating_cash_flow"
+        ],
+        "verification_status": "verified",
+        "limitations": [],
+        "alternative_explanations": [],
+        "follow_up_items": [],
+        "placement": "verified_claims",
+        "placement_reasons": [],
+        "verifications": [
+          {
+            "verification_id": "verify:claim:calculation:calc:annual_yoy_rate:operating_cash_flow",
+            "target_type": "claim",
+            "target_id": "claim:calculation:calc:annual_yoy_rate:operating_cash_flow",
+            "status": "verified",
+            "checks": [
+              "按确定性 Claim 规则核对结构化对象、文案和来源引用。"
+            ],
+            "conflicts": [],
+            "evidence_ids": [
+              "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2024:comparative",
+              "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2025:current"
+            ],
+            "limitations": [],
+            "verified_at": "2026-10-03T07:03:15.256840+00:00"
+          }
+        ],
+        "evidences": [
+          {
+            "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2024:comparative",
+            "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+            "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+            "pdf_page": 3,
+            "printed_page": null,
+            "table_title": "合并现金流量表",
+            "row_label": "经营活动产生的现金流量净额",
+            "column_label": "项目 2025年度 2024年度",
+            "value_raw": "90,000,000.00",
+            "value_normalized": "90000000.00",
+            "unit": "元",
+            "currency": "人民币",
+            "period_start": "2024-01-01",
+            "period_end": "2024-12-31",
+            "period_type": "duration",
+            "legacy_text_region": null,
+            "extraction_method": "independent_pymupdf_words",
+            "surrounding_text": null,
+            "limitations": [
+              "单位、币种和期间来自表头原文，不复制事实字段。"
+            ],
+            "coordinate_system": "pymupdf_page_top_left",
+            "value_region": {
+              "text": "90,000,000.00",
+              "page": 3,
+              "bbox": {
+                "x0": 447.06787109375,
+                "y0": 242.4199981689453,
+                "x1": 512.8677368164062,
+                "y1": 255.61000061035156
+              }
+            },
+            "row_region": {
+              "text": "经营活动产生的现金流量净额",
+              "page": 3,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 242.4199981689453,
+                "x1": 182.0,
+                "y1": 255.61000061035156
+              }
+            },
+            "column_region": {
+              "text": "项目 2025年度 2024年度",
+              "page": 3,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 206.04969787597656,
+                "x1": 502.47137451171875,
+                "y1": 219.70135498046875
+              }
+            },
+            "title_region": {
+              "text": "合并现金流量表",
+              "page": 3,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 131.64370727539062,
+                "x1": 173.45001220703125,
+                "y1": 154.52835083007812
+              }
+            },
+            "unit_region": {
+              "text": "单位：元 币种：人民币",
+              "page": 3,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 170.4199981689453,
+                "x1": 163.79998779296875,
+                "y1": 183.61000061035156
+              }
+            }
+          },
+          {
+            "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2025:current",
+            "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+            "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+            "pdf_page": 3,
+            "printed_page": null,
+            "table_title": "合并现金流量表",
+            "row_label": "经营活动产生的现金流量净额",
+            "column_label": "项目 2025年度 2024年度",
+            "value_raw": "-10,000,000.00",
+            "value_normalized": "-10000000.00",
+            "unit": "元",
+            "currency": "人民币",
+            "period_start": "2025-01-01",
+            "period_end": "2025-12-31",
+            "period_type": "duration",
+            "legacy_text_region": null,
+            "extraction_method": "independent_pymupdf_words",
+            "surrounding_text": null,
+            "limitations": [
+              "单位、币种和期间来自表头原文，不复制事实字段。"
+            ],
+            "coordinate_system": "pymupdf_page_top_left",
+            "value_region": {
+              "text": "-10,000,000.00",
+              "page": 3,
+              "bbox": {
+                "x0": 309.90478515625,
+                "y0": 242.4199981689453,
+                "x1": 380.0246276855469,
+                "y1": 255.61000061035156
+              }
+            },
+            "row_region": {
+              "text": "经营活动产生的现金流量净额",
+              "page": 3,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 242.4199981689453,
+                "x1": 182.0,
+                "y1": 255.61000061035156
+              }
+            },
+            "column_region": {
+              "text": "项目 2025年度 2024年度",
+              "page": 3,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 206.04969787597656,
+                "x1": 502.47137451171875,
+                "y1": 219.70135498046875
+              }
+            },
+            "title_region": {
+              "text": "合并现金流量表",
+              "page": 3,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 131.64370727539062,
+                "x1": 173.45001220703125,
+                "y1": 154.52835083007812
+              }
+            },
+            "unit_region": {
+              "text": "单位：元 币种：人民币",
+              "page": 3,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 170.4199981689453,
+                "x1": 163.79998779296875,
+                "y1": 183.61000061035156
+              }
+            }
+          }
+        ],
+        "independent_verification": {
+          "claim_id": "claim:calculation:calc:annual_yoy_rate:operating_cash_flow",
+          "status": "verified",
+          "reason": null,
+          "expected_text": "operating_cash_flow 2025 年本期相对 2024 年比较期的同比率（比值）为 -1.1111111111111111111111111111。"
+        }
+      },
+      {
+        "claim_id": "claim:calculation:calc:annual_yoy_rate:revenue",
+        "claim_type": "calculation",
+        "text": "revenue 2025 年本期相对 2024 年比较期的同比率（比值）为 0.25。",
+        "supporting_fact_ids": [
+          "upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2025:current",
+          "upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2024:comparative"
+        ],
+        "supporting_evidence_ids": [
+          "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2024:comparative",
+          "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2025:current"
+        ],
+        "calculation_ids": [
+          "calc:annual_yoy_rate:revenue"
+        ],
+        "verification_status": "verified",
+        "limitations": [],
+        "alternative_explanations": [],
+        "follow_up_items": [],
+        "placement": "verified_claims",
+        "placement_reasons": [],
+        "verifications": [
+          {
+            "verification_id": "verify:claim:calculation:calc:annual_yoy_rate:revenue",
+            "target_type": "claim",
+            "target_id": "claim:calculation:calc:annual_yoy_rate:revenue",
+            "status": "verified",
+            "checks": [
+              "按确定性 Claim 规则核对结构化对象、文案和来源引用。"
+            ],
+            "conflicts": [],
+            "evidence_ids": [
+              "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2024:comparative",
+              "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2025:current"
+            ],
+            "limitations": [],
+            "verified_at": "2026-10-03T07:03:15.256917+00:00"
+          }
+        ],
+        "evidences": [
+          {
+            "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2024:comparative",
+            "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+            "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+            "pdf_page": 2,
+            "printed_page": null,
+            "table_title": "合并利润表",
+            "row_label": "其中：营业收入",
+            "column_label": "项目 2025年度 2024年度",
+            "value_raw": "1,000,000,000.00",
+            "value_normalized": "1000000000.00",
+            "unit": "元",
+            "currency": "人民币",
+            "period_start": "2024-01-01",
+            "period_end": "2024-12-31",
+            "period_type": "duration",
+            "legacy_text_region": null,
+            "extraction_method": "independent_pymupdf_words",
+            "surrounding_text": null,
+            "limitations": [
+              "单位、币种和期间来自表头原文，不复制事实字段。"
+            ],
+            "coordinate_system": "pymupdf_page_top_left",
+            "value_region": {
+              "text": "1,000,000,000.00",
+              "page": 2,
+              "bbox": {
+                "x0": 440.0,
+                "y0": 273.4200134277344,
+                "x1": 519.9197998046875,
+                "y1": 286.6099853515625
+              }
+            },
+            "row_region": {
+              "text": "其中：营业收入",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 273.4200134277344,
+                "x1": 122.0,
+                "y1": 286.6099853515625
+              }
+            },
+            "column_region": {
+              "text": "项目 2025年度 2024年度",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 206.04969787597656,
+                "x1": 502.47137451171875,
+                "y1": 219.70135498046875
+              }
+            },
+            "title_region": {
+              "text": "合并利润表",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 131.64370727539062,
+                "x1": 138.75,
+                "y1": 154.52835083007812
+              }
+            },
+            "unit_region": {
+              "text": "单位：元 币种：人民币",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 170.4199981689453,
+                "x1": 163.79998779296875,
+                "y1": 183.61000061035156
+              }
+            }
+          },
+          {
+            "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2025:current",
+            "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+            "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+            "pdf_page": 2,
+            "printed_page": null,
+            "table_title": "合并利润表",
+            "row_label": "其中：营业收入",
+            "column_label": "项目 2025年度 2024年度",
+            "value_raw": "1,250,000,000.00",
+            "value_normalized": "1250000000.00",
+            "unit": "元",
+            "currency": "人民币",
+            "period_start": "2025-01-01",
+            "period_end": "2025-12-31",
+            "period_type": "duration",
+            "legacy_text_region": null,
+            "extraction_method": "independent_pymupdf_words",
+            "surrounding_text": null,
+            "limitations": [
+              "单位、币种和期间来自表头原文，不复制事实字段。"
+            ],
+            "coordinate_system": "pymupdf_page_top_left",
+            "value_region": {
+              "text": "1,250,000,000.00",
+              "page": 2,
+              "bbox": {
+                "x0": 305.0,
+                "y0": 273.4200134277344,
+                "x1": 384.9197998046875,
+                "y1": 286.6099853515625
+              }
+            },
+            "row_region": {
+              "text": "其中：营业收入",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 273.4200134277344,
+                "x1": 122.0,
+                "y1": 286.6099853515625
+              }
+            },
+            "column_region": {
+              "text": "项目 2025年度 2024年度",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 206.04969787597656,
+                "x1": 502.47137451171875,
+                "y1": 219.70135498046875
+              }
+            },
+            "title_region": {
+              "text": "合并利润表",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 131.64370727539062,
+                "x1": 138.75,
+                "y1": 154.52835083007812
+              }
+            },
+            "unit_region": {
+              "text": "单位：元 币种：人民币",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 170.4199981689453,
+                "x1": 163.79998779296875,
+                "y1": 183.61000061035156
+              }
+            }
+          }
+        ],
+        "independent_verification": {
+          "claim_id": "claim:calculation:calc:annual_yoy_rate:revenue",
+          "status": "verified",
+          "reason": null,
+          "expected_text": "revenue 2025 年本期相对 2024 年比较期的同比率（比值）为 0.25。"
+        }
+      },
+      {
+        "claim_id": "claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2024:comparative",
+        "claim_type": "fact",
+        "text": "归属于母公司股东的净利润（2024-12-31）规范值为 118000000.00；币种 人民币；单位 未记录；单位倍率 1。",
+        "supporting_fact_ids": [
+          "upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2024:comparative"
+        ],
+        "supporting_evidence_ids": [
+          "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2024:comparative"
+        ],
+        "calculation_ids": [],
+        "verification_status": "verified",
+        "limitations": [],
+        "alternative_explanations": [],
+        "follow_up_items": [],
+        "placement": "verified_claims",
+        "placement_reasons": [],
+        "verifications": [
+          {
+            "verification_id": "verify:claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2024:comparative",
+            "target_type": "claim",
+            "target_id": "claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2024:comparative",
+            "status": "verified",
+            "checks": [
+              "按确定性 Claim 规则核对结构化对象、文案和来源引用。"
+            ],
+            "conflicts": [],
+            "evidence_ids": [
+              "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2024:comparative"
+            ],
+            "limitations": [],
+            "verified_at": "2026-10-03T07:03:15.256449+00:00"
+          }
+        ],
+        "evidences": [
+          {
+            "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2024:comparative",
+            "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+            "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+            "pdf_page": 2,
+            "printed_page": null,
+            "table_title": "合并利润表",
+            "row_label": "归属于母公司股东的净利润",
+            "column_label": "项目 2025年度 2024年度",
+            "value_raw": "118,000,000.00",
+            "value_normalized": "118000000.00",
+            "unit": "元",
+            "currency": "人民币",
+            "period_start": "2024-01-01",
+            "period_end": "2024-12-31",
+            "period_type": "duration",
+            "legacy_text_region": null,
+            "extraction_method": "independent_pymupdf_words",
+            "surrounding_text": null,
+            "limitations": [
+              "单位、币种和期间来自表头原文，不复制事实字段。"
+            ],
+            "coordinate_system": "pymupdf_page_top_left",
+            "value_region": {
+              "text": "118,000,000.00",
+              "page": 2,
+              "bbox": {
+                "x0": 444.1357421875,
+                "y0": 344.4200134277344,
+                "x1": 515.7955932617188,
+                "y1": 357.6099853515625
+              }
+            },
+            "row_region": {
+              "text": "归属于母公司股东的净利润",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 344.4200134277344,
+                "x1": 172.0,
+                "y1": 357.6099853515625
+              }
+            },
+            "column_region": {
+              "text": "项目 2025年度 2024年度",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 206.04969787597656,
+                "x1": 502.47137451171875,
+                "y1": 219.70135498046875
+              }
+            },
+            "title_region": {
+              "text": "合并利润表",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 131.64370727539062,
+                "x1": 138.75,
+                "y1": 154.52835083007812
+              }
+            },
+            "unit_region": {
+              "text": "单位：元 币种：人民币",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 170.4199981689453,
+                "x1": 163.79998779296875,
+                "y1": 183.61000061035156
+              }
+            }
+          }
+        ],
+        "independent_verification": {
+          "claim_id": "claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2024:comparative",
+          "status": "verified",
+          "reason": null,
+          "expected_text": "归属于母公司股东的净利润（2024-12-31）规范值为 118000000.00；币种 人民币；单位 未记录；单位倍率 1。"
+        }
+      },
+      {
+        "claim_id": "claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2025:current",
+        "claim_type": "fact",
+        "text": "归属于母公司股东的净利润（2025-12-31）规范值为 145000000.00；币种 人民币；单位 未记录；单位倍率 1。",
+        "supporting_fact_ids": [
+          "upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2025:current"
+        ],
+        "supporting_evidence_ids": [
+          "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2025:current"
+        ],
+        "calculation_ids": [],
+        "verification_status": "verified",
+        "limitations": [],
+        "alternative_explanations": [],
+        "follow_up_items": [],
+        "placement": "verified_claims",
+        "placement_reasons": [],
+        "verifications": [
+          {
+            "verification_id": "verify:claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2025:current",
+            "target_type": "claim",
+            "target_id": "claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2025:current",
+            "status": "verified",
+            "checks": [
+              "按确定性 Claim 规则核对结构化对象、文案和来源引用。"
+            ],
+            "conflicts": [],
+            "evidence_ids": [
+              "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2025:current"
+            ],
+            "limitations": [],
+            "verified_at": "2026-10-03T07:03:15.256419+00:00"
+          }
+        ],
+        "evidences": [
+          {
+            "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2025:current",
+            "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+            "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+            "pdf_page": 2,
+            "printed_page": null,
+            "table_title": "合并利润表",
+            "row_label": "归属于母公司股东的净利润",
+            "column_label": "项目 2025年度 2024年度",
+            "value_raw": "145,000,000.00",
+            "value_normalized": "145000000.00",
+            "unit": "元",
+            "currency": "人民币",
+            "period_start": "2025-01-01",
+            "period_end": "2025-12-31",
+            "period_type": "duration",
+            "legacy_text_region": null,
+            "extraction_method": "independent_pymupdf_words",
+            "surrounding_text": null,
+            "limitations": [
+              "单位、币种和期间来自表头原文，不复制事实字段。"
+            ],
+            "coordinate_system": "pymupdf_page_top_left",
+            "value_region": {
+              "text": "145,000,000.00",
+              "page": 2,
+              "bbox": {
+                "x0": 309.1357421875,
+                "y0": 344.4200134277344,
+                "x1": 380.7955627441406,
+                "y1": 357.6099853515625
+              }
+            },
+            "row_region": {
+              "text": "归属于母公司股东的净利润",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 344.4200134277344,
+                "x1": 172.0,
+                "y1": 357.6099853515625
+              }
+            },
+            "column_region": {
+              "text": "项目 2025年度 2024年度",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 206.04969787597656,
+                "x1": 502.47137451171875,
+                "y1": 219.70135498046875
+              }
+            },
+            "title_region": {
+              "text": "合并利润表",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 131.64370727539062,
+                "x1": 138.75,
+                "y1": 154.52835083007812
+              }
+            },
+            "unit_region": {
+              "text": "单位：元 币种：人民币",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 170.4199981689453,
+                "x1": 163.79998779296875,
+                "y1": 183.61000061035156
+              }
+            }
+          }
+        ],
+        "independent_verification": {
+          "claim_id": "claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2025:current",
+          "status": "verified",
+          "reason": null,
+          "expected_text": "归属于母公司股东的净利润（2025-12-31）规范值为 145000000.00；币种 人民币；单位 未记录；单位倍率 1。"
+        }
+      },
+      {
+        "claim_id": "claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2024:comparative",
+        "claim_type": "fact",
+        "text": "披露的非经常性损益合计（2024-12-31）规范值为 4000000.00；币种 人民币；单位 未记录；单位倍率 1。",
+        "supporting_fact_ids": [
+          "upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2024:comparative"
+        ],
+        "supporting_evidence_ids": [
+          "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2024:comparative"
+        ],
+        "calculation_ids": [],
+        "verification_status": "verified",
+        "limitations": [],
+        "alternative_explanations": [],
+        "follow_up_items": [],
+        "placement": "verified_claims",
+        "placement_reasons": [],
+        "verifications": [
+          {
+            "verification_id": "verify:claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2024:comparative",
+            "target_type": "claim",
+            "target_id": "claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2024:comparative",
+            "status": "verified",
+            "checks": [
+              "按确定性 Claim 规则核对结构化对象、文案和来源引用。"
+            ],
+            "conflicts": [],
+            "evidence_ids": [
+              "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2024:comparative"
+            ],
+            "limitations": [],
+            "verified_at": "2026-10-03T07:03:15.256570+00:00"
+          }
+        ],
+        "evidences": [
+          {
+            "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2024:comparative",
+            "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+            "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+            "pdf_page": 5,
+            "printed_page": null,
+            "table_title": "非经常性损益项目和金额",
+            "row_label": "合计",
+            "column_label": "项目 2025年度金额 2024年度金额",
+            "value_raw": "4,000,000.00",
+            "value_normalized": "4000000.00",
+            "unit": "元",
+            "currency": "人民币",
+            "period_start": "2024-01-01",
+            "period_end": "2024-12-31",
+            "period_type": "duration",
+            "legacy_text_region": null,
+            "extraction_method": "independent_pymupdf_words",
+            "surrounding_text": null,
+            "limitations": [
+              "单位、币种和期间来自表头原文，不复制事实字段。"
+            ],
+            "coordinate_system": "pymupdf_page_top_left",
+            "value_region": {
+              "text": "4,000,000.00",
+              "page": 5,
+              "bbox": {
+                "x0": 450.0,
+                "y0": 242.4199981689453,
+                "x1": 509.9398498535156,
+                "y1": 255.61000061035156
+              }
+            },
+            "row_region": {
+              "text": "合计",
+              "page": 5,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 242.4199981689453,
+                "x1": 72.0,
+                "y1": 255.61000061035156
+              }
+            },
+            "column_region": {
+              "text": "项目 2025年度金额 2024年度金额",
+              "page": 5,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 206.04969787597656,
+                "x1": 512.8213500976562,
+                "y1": 219.70135498046875
+              }
+            },
+            "title_region": {
+              "text": "非经常性损益项目和金额",
+              "page": 5,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 131.64370727539062,
+                "x1": 242.85003662109375,
+                "y1": 154.52835083007812
+              }
+            },
+            "unit_region": {
+              "text": "单位：元 币种：人民币",
+              "page": 5,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 170.4199981689453,
+                "x1": 163.79998779296875,
+                "y1": 183.61000061035156
+              }
+            }
+          }
+        ],
+        "independent_verification": {
+          "claim_id": "claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2024:comparative",
+          "status": "verified",
+          "reason": null,
+          "expected_text": "披露的非经常性损益合计（2024-12-31）规范值为 4000000.00；币种 人民币；单位 未记录；单位倍率 1。"
+        }
+      },
+      {
+        "claim_id": "claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2025:current",
+        "claim_type": "fact",
+        "text": "披露的非经常性损益合计（2025-12-31）规范值为 6000000.00；币种 人民币；单位 未记录；单位倍率 1。",
+        "supporting_fact_ids": [
+          "upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2025:current"
+        ],
+        "supporting_evidence_ids": [
+          "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2025:current"
+        ],
+        "calculation_ids": [],
+        "verification_status": "verified",
+        "limitations": [],
+        "alternative_explanations": [],
+        "follow_up_items": [],
+        "placement": "verified_claims",
+        "placement_reasons": [],
+        "verifications": [
+          {
+            "verification_id": "verify:claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2025:current",
+            "target_type": "claim",
+            "target_id": "claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2025:current",
+            "status": "verified",
+            "checks": [
+              "按确定性 Claim 规则核对结构化对象、文案和来源引用。"
+            ],
+            "conflicts": [],
+            "evidence_ids": [
+              "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2025:current"
+            ],
+            "limitations": [],
+            "verified_at": "2026-10-03T07:03:15.256541+00:00"
+          }
+        ],
+        "evidences": [
+          {
+            "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2025:current",
+            "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+            "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+            "pdf_page": 5,
+            "printed_page": null,
+            "table_title": "非经常性损益项目和金额",
+            "row_label": "合计",
+            "column_label": "项目 2025年度金额 2024年度金额",
+            "value_raw": "6,000,000.00",
+            "value_normalized": "6000000.00",
+            "unit": "元",
+            "currency": "人民币",
+            "period_start": "2025-01-01",
+            "period_end": "2025-12-31",
+            "period_type": "duration",
+            "legacy_text_region": null,
+            "extraction_method": "independent_pymupdf_words",
+            "surrounding_text": null,
+            "limitations": [
+              "单位、币种和期间来自表头原文，不复制事实字段。"
+            ],
+            "coordinate_system": "pymupdf_page_top_left",
+            "value_region": {
+              "text": "6,000,000.00",
+              "page": 5,
+              "bbox": {
+                "x0": 315.0,
+                "y0": 242.4199981689453,
+                "x1": 374.9398498535156,
+                "y1": 255.61000061035156
+              }
+            },
+            "row_region": {
+              "text": "合计",
+              "page": 5,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 242.4199981689453,
+                "x1": 72.0,
+                "y1": 255.61000061035156
+              }
+            },
+            "column_region": {
+              "text": "项目 2025年度金额 2024年度金额",
+              "page": 5,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 206.04969787597656,
+                "x1": 512.8213500976562,
+                "y1": 219.70135498046875
+              }
+            },
+            "title_region": {
+              "text": "非经常性损益项目和金额",
+              "page": 5,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 131.64370727539062,
+                "x1": 242.85003662109375,
+                "y1": 154.52835083007812
+              }
+            },
+            "unit_region": {
+              "text": "单位：元 币种：人民币",
+              "page": 5,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 170.4199981689453,
+                "x1": 163.79998779296875,
+                "y1": 183.61000061035156
+              }
+            }
+          }
+        ],
+        "independent_verification": {
+          "claim_id": "claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2025:current",
+          "status": "verified",
+          "reason": null,
+          "expected_text": "披露的非经常性损益合计（2025-12-31）规范值为 6000000.00；币种 人民币；单位 未记录；单位倍率 1。"
+        }
+      },
+      {
+        "claim_id": "claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2024:comparative",
+        "claim_type": "fact",
+        "text": "经营活动产生的现金流量净额（2024-12-31）规范值为 90000000.00；币种 人民币；单位 未记录；单位倍率 1。",
+        "supporting_fact_ids": [
+          "upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2024:comparative"
+        ],
+        "supporting_evidence_ids": [
+          "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2024:comparative"
+        ],
+        "calculation_ids": [],
+        "verification_status": "verified",
+        "limitations": [],
+        "alternative_explanations": [],
+        "follow_up_items": [],
+        "placement": "verified_claims",
+        "placement_reasons": [],
+        "verifications": [
+          {
+            "verification_id": "verify:claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2024:comparative",
+            "target_type": "claim",
+            "target_id": "claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2024:comparative",
+            "status": "verified",
+            "checks": [
+              "按确定性 Claim 规则核对结构化对象、文案和来源引用。"
+            ],
+            "conflicts": [],
+            "evidence_ids": [
+              "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2024:comparative"
+            ],
+            "limitations": [],
+            "verified_at": "2026-10-03T07:03:15.256510+00:00"
+          }
+        ],
+        "evidences": [
+          {
+            "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2024:comparative",
+            "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+            "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+            "pdf_page": 3,
+            "printed_page": null,
+            "table_title": "合并现金流量表",
+            "row_label": "经营活动产生的现金流量净额",
+            "column_label": "项目 2025年度 2024年度",
+            "value_raw": "90,000,000.00",
+            "value_normalized": "90000000.00",
+            "unit": "元",
+            "currency": "人民币",
+            "period_start": "2024-01-01",
+            "period_end": "2024-12-31",
+            "period_type": "duration",
+            "legacy_text_region": null,
+            "extraction_method": "independent_pymupdf_words",
+            "surrounding_text": null,
+            "limitations": [
+              "单位、币种和期间来自表头原文，不复制事实字段。"
+            ],
+            "coordinate_system": "pymupdf_page_top_left",
+            "value_region": {
+              "text": "90,000,000.00",
+              "page": 3,
+              "bbox": {
+                "x0": 447.06787109375,
+                "y0": 242.4199981689453,
+                "x1": 512.8677368164062,
+                "y1": 255.61000061035156
+              }
+            },
+            "row_region": {
+              "text": "经营活动产生的现金流量净额",
+              "page": 3,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 242.4199981689453,
+                "x1": 182.0,
+                "y1": 255.61000061035156
+              }
+            },
+            "column_region": {
+              "text": "项目 2025年度 2024年度",
+              "page": 3,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 206.04969787597656,
+                "x1": 502.47137451171875,
+                "y1": 219.70135498046875
+              }
+            },
+            "title_region": {
+              "text": "合并现金流量表",
+              "page": 3,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 131.64370727539062,
+                "x1": 173.45001220703125,
+                "y1": 154.52835083007812
+              }
+            },
+            "unit_region": {
+              "text": "单位：元 币种：人民币",
+              "page": 3,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 170.4199981689453,
+                "x1": 163.79998779296875,
+                "y1": 183.61000061035156
+              }
+            }
+          }
+        ],
+        "independent_verification": {
+          "claim_id": "claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2024:comparative",
+          "status": "verified",
+          "reason": null,
+          "expected_text": "经营活动产生的现金流量净额（2024-12-31）规范值为 90000000.00；币种 人民币；单位 未记录；单位倍率 1。"
+        }
+      },
+      {
+        "claim_id": "claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2025:current",
+        "claim_type": "fact",
+        "text": "经营活动产生的现金流量净额（2025-12-31）规范值为 -10000000.00；币种 人民币；单位 未记录；单位倍率 1。",
+        "supporting_fact_ids": [
+          "upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2025:current"
+        ],
+        "supporting_evidence_ids": [
+          "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2025:current"
+        ],
+        "calculation_ids": [],
+        "verification_status": "verified",
+        "limitations": [],
+        "alternative_explanations": [],
+        "follow_up_items": [],
+        "placement": "verified_claims",
+        "placement_reasons": [],
+        "verifications": [
+          {
+            "verification_id": "verify:claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2025:current",
+            "target_type": "claim",
+            "target_id": "claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2025:current",
+            "status": "verified",
+            "checks": [
+              "按确定性 Claim 规则核对结构化对象、文案和来源引用。"
+            ],
+            "conflicts": [],
+            "evidence_ids": [
+              "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2025:current"
+            ],
+            "limitations": [],
+            "verified_at": "2026-10-03T07:03:15.256479+00:00"
+          }
+        ],
+        "evidences": [
+          {
+            "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2025:current",
+            "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+            "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+            "pdf_page": 3,
+            "printed_page": null,
+            "table_title": "合并现金流量表",
+            "row_label": "经营活动产生的现金流量净额",
+            "column_label": "项目 2025年度 2024年度",
+            "value_raw": "-10,000,000.00",
+            "value_normalized": "-10000000.00",
+            "unit": "元",
+            "currency": "人民币",
+            "period_start": "2025-01-01",
+            "period_end": "2025-12-31",
+            "period_type": "duration",
+            "legacy_text_region": null,
+            "extraction_method": "independent_pymupdf_words",
+            "surrounding_text": null,
+            "limitations": [
+              "单位、币种和期间来自表头原文，不复制事实字段。"
+            ],
+            "coordinate_system": "pymupdf_page_top_left",
+            "value_region": {
+              "text": "-10,000,000.00",
+              "page": 3,
+              "bbox": {
+                "x0": 309.90478515625,
+                "y0": 242.4199981689453,
+                "x1": 380.0246276855469,
+                "y1": 255.61000061035156
+              }
+            },
+            "row_region": {
+              "text": "经营活动产生的现金流量净额",
+              "page": 3,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 242.4199981689453,
+                "x1": 182.0,
+                "y1": 255.61000061035156
+              }
+            },
+            "column_region": {
+              "text": "项目 2025年度 2024年度",
+              "page": 3,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 206.04969787597656,
+                "x1": 502.47137451171875,
+                "y1": 219.70135498046875
+              }
+            },
+            "title_region": {
+              "text": "合并现金流量表",
+              "page": 3,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 131.64370727539062,
+                "x1": 173.45001220703125,
+                "y1": 154.52835083007812
+              }
+            },
+            "unit_region": {
+              "text": "单位：元 币种：人民币",
+              "page": 3,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 170.4199981689453,
+                "x1": 163.79998779296875,
+                "y1": 183.61000061035156
+              }
+            }
+          }
+        ],
+        "independent_verification": {
+          "claim_id": "claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2025:current",
+          "status": "verified",
+          "reason": null,
+          "expected_text": "经营活动产生的现金流量净额（2025-12-31）规范值为 -10000000.00；币种 人民币；单位 未记录；单位倍率 1。"
+        }
+      },
+      {
+        "claim_id": "claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2024:comparative",
+        "claim_type": "fact",
+        "text": "营业收入（2024-12-31）规范值为 1000000000.00；币种 人民币；单位 未记录；单位倍率 1。",
+        "supporting_fact_ids": [
+          "upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2024:comparative"
+        ],
+        "supporting_evidence_ids": [
+          "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2024:comparative"
+        ],
+        "calculation_ids": [],
+        "verification_status": "verified",
+        "limitations": [],
+        "alternative_explanations": [],
+        "follow_up_items": [],
+        "placement": "verified_claims",
+        "placement_reasons": [],
+        "verifications": [
+          {
+            "verification_id": "verify:claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2024:comparative",
+            "target_type": "claim",
+            "target_id": "claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2024:comparative",
+            "status": "verified",
+            "checks": [
+              "按确定性 Claim 规则核对结构化对象、文案和来源引用。"
+            ],
+            "conflicts": [],
+            "evidence_ids": [
+              "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2024:comparative"
+            ],
+            "limitations": [],
+            "verified_at": "2026-10-03T07:03:15.256387+00:00"
+          }
+        ],
+        "evidences": [
+          {
+            "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2024:comparative",
+            "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+            "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+            "pdf_page": 2,
+            "printed_page": null,
+            "table_title": "合并利润表",
+            "row_label": "其中：营业收入",
+            "column_label": "项目 2025年度 2024年度",
+            "value_raw": "1,000,000,000.00",
+            "value_normalized": "1000000000.00",
+            "unit": "元",
+            "currency": "人民币",
+            "period_start": "2024-01-01",
+            "period_end": "2024-12-31",
+            "period_type": "duration",
+            "legacy_text_region": null,
+            "extraction_method": "independent_pymupdf_words",
+            "surrounding_text": null,
+            "limitations": [
+              "单位、币种和期间来自表头原文，不复制事实字段。"
+            ],
+            "coordinate_system": "pymupdf_page_top_left",
+            "value_region": {
+              "text": "1,000,000,000.00",
+              "page": 2,
+              "bbox": {
+                "x0": 440.0,
+                "y0": 273.4200134277344,
+                "x1": 519.9197998046875,
+                "y1": 286.6099853515625
+              }
+            },
+            "row_region": {
+              "text": "其中：营业收入",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 273.4200134277344,
+                "x1": 122.0,
+                "y1": 286.6099853515625
+              }
+            },
+            "column_region": {
+              "text": "项目 2025年度 2024年度",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 206.04969787597656,
+                "x1": 502.47137451171875,
+                "y1": 219.70135498046875
+              }
+            },
+            "title_region": {
+              "text": "合并利润表",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 131.64370727539062,
+                "x1": 138.75,
+                "y1": 154.52835083007812
+              }
+            },
+            "unit_region": {
+              "text": "单位：元 币种：人民币",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 170.4199981689453,
+                "x1": 163.79998779296875,
+                "y1": 183.61000061035156
+              }
+            }
+          }
+        ],
+        "independent_verification": {
+          "claim_id": "claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2024:comparative",
+          "status": "verified",
+          "reason": null,
+          "expected_text": "营业收入（2024-12-31）规范值为 1000000000.00；币种 人民币；单位 未记录；单位倍率 1。"
+        }
+      },
+      {
+        "claim_id": "claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2025:current",
+        "claim_type": "fact",
+        "text": "营业收入（2025-12-31）规范值为 1250000000.00；币种 人民币；单位 未记录；单位倍率 1。",
+        "supporting_fact_ids": [
+          "upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2025:current"
+        ],
+        "supporting_evidence_ids": [
+          "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2025:current"
+        ],
+        "calculation_ids": [],
+        "verification_status": "verified",
+        "limitations": [],
+        "alternative_explanations": [],
+        "follow_up_items": [],
+        "placement": "verified_claims",
+        "placement_reasons": [],
+        "verifications": [
+          {
+            "verification_id": "verify:claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2025:current",
+            "target_type": "claim",
+            "target_id": "claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2025:current",
+            "status": "verified",
+            "checks": [
+              "按确定性 Claim 规则核对结构化对象、文案和来源引用。"
+            ],
+            "conflicts": [],
+            "evidence_ids": [
+              "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2025:current"
+            ],
+            "limitations": [],
+            "verified_at": "2026-10-03T07:03:15.256350+00:00"
+          }
+        ],
+        "evidences": [
+          {
+            "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2025:current",
+            "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+            "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+            "pdf_page": 2,
+            "printed_page": null,
+            "table_title": "合并利润表",
+            "row_label": "其中：营业收入",
+            "column_label": "项目 2025年度 2024年度",
+            "value_raw": "1,250,000,000.00",
+            "value_normalized": "1250000000.00",
+            "unit": "元",
+            "currency": "人民币",
+            "period_start": "2025-01-01",
+            "period_end": "2025-12-31",
+            "period_type": "duration",
+            "legacy_text_region": null,
+            "extraction_method": "independent_pymupdf_words",
+            "surrounding_text": null,
+            "limitations": [
+              "单位、币种和期间来自表头原文，不复制事实字段。"
+            ],
+            "coordinate_system": "pymupdf_page_top_left",
+            "value_region": {
+              "text": "1,250,000,000.00",
+              "page": 2,
+              "bbox": {
+                "x0": 305.0,
+                "y0": 273.4200134277344,
+                "x1": 384.9197998046875,
+                "y1": 286.6099853515625
+              }
+            },
+            "row_region": {
+              "text": "其中：营业收入",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 273.4200134277344,
+                "x1": 122.0,
+                "y1": 286.6099853515625
+              }
+            },
+            "column_region": {
+              "text": "项目 2025年度 2024年度",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 206.04969787597656,
+                "x1": 502.47137451171875,
+                "y1": 219.70135498046875
+              }
+            },
+            "title_region": {
+              "text": "合并利润表",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 131.64370727539062,
+                "x1": 138.75,
+                "y1": 154.52835083007812
+              }
+            },
+            "unit_region": {
+              "text": "单位：元 币种：人民币",
+              "page": 2,
+              "bbox": {
+                "x0": 52.0,
+                "y0": 170.4199981689453,
+                "x1": 163.79998779296875,
+                "y1": 183.61000061035156
+              }
+            }
+          }
+        ],
+        "independent_verification": {
+          "claim_id": "claim:fact:upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2025:current",
+          "status": "verified",
+          "reason": null,
+          "expected_text": "营业收入（2025-12-31）规范值为 1250000000.00；币种 人民币；单位 未记录；单位倍率 1。"
+        }
+      }
+    ],
+    "pending_review": {
+      "facts": [],
+      "calculations": [],
+      "claims": [],
+      "candidate_signals": [
+        {
+          "signal_id": "profit_up_cash_down",
+          "status": "candidate",
+          "reason": "",
+          "input_fact_ids": [
+            "upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2025:current",
+            "upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2024:comparative",
+            "upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2025:current",
+            "upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2024:comparative"
+          ],
+          "calculation_ids": [
+            "calc:annual_difference:net_profit_parent",
+            "calc:annual_difference:operating_cash_flow"
+          ],
+          "left_difference": "27000000.00",
+          "right_difference": "-100000000.00",
+          "fraud_conclusion": null,
+          "placement": "pending_review",
+          "placement_reasons": [
+            "候选或未验证线索只进入待核查，不确认舞弊。"
+          ]
+        },
+        {
+          "signal_id": "revenue_up_cash_down",
+          "status": "candidate",
+          "reason": "",
+          "input_fact_ids": [
+            "upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2025:current",
+            "upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2024:comparative",
+            "upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2025:current",
+            "upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2024:comparative"
+          ],
+          "calculation_ids": [
+            "calc:annual_difference:revenue",
+            "calc:annual_difference:operating_cash_flow"
+          ],
+          "left_difference": "250000000.00",
+          "right_difference": "-100000000.00",
+          "fraud_conclusion": null,
+          "placement": "pending_review",
+          "placement_reasons": [
+            "候选或未验证线索只进入待核查，不确认舞弊。"
+          ]
+        }
+      ],
+      "uncited_evidences": []
+    }
+  },
+  "manifest": {
+    "run_id": "annual-analysis-a96e4ee6-2341-46c6-ac18-7729849a16c0",
+    "status": "completed",
+    "mode": "deterministic",
+    "company_id": "SIM-ANNUAL-001",
+    "report_year": 2025,
+    "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+    "source_pdf_archive_path": "runs/annual-analysis-a96e4ee6-2341-46c6-ac18-7729849a16c0/source.pdf",
+    "report_json_path": "reports/annual-analysis-a96e4ee6-2341-46c6-ac18-7729849a16c0/report.json",
+    "source_pdf_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+    "report_sha256": "44c5719d3642ec4aa3ed7232714267ee73ade6e25b866c23ef0469d91197dd3a"
+  },
+  "source_provenance": {
+    "status": "registered_synthetic",
+    "data_nature": "original_synthetic",
+    "label": "原创模拟、非真实公司披露",
+    "sample_id": "sim-annual-001-2025",
+    "revision": "1.2.0-microsoft-yahei-6.31",
+    "registered_document_id": "sim-annual-001-2025",
+    "company_name": "澄湾云算股份有限公司（虚构）",
+    "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+    "use_conditions": "FINTRACE 团队原创构造的模拟材料，不对应真实公司、证券代码或真实披露。可随 FINTRACE 比赛提交件及团队演示包分发和演示；不得作为真实公司事实、投资依据、舞弊/违规标签、无舞弊标签或模型训练标签。",
+    "fraud_label": false,
+    "model_training": false
+  },
+  "evidence_index": {
+    "verification_evidences": [
+      {
+        "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2024:comparative",
+        "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+        "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+        "pdf_page": 2,
+        "printed_page": null,
+        "table_title": "合并利润表",
+        "row_label": "归属于母公司股东的净利润",
+        "column_label": "项目 2025年度 2024年度",
+        "value_raw": "118,000,000.00",
+        "value_normalized": "118000000.00",
+        "unit": "元",
+        "currency": "人民币",
+        "period_start": "2024-01-01",
+        "period_end": "2024-12-31",
+        "period_type": "duration",
+        "limitations": [
+          "单位、币种和期间来自表头原文，不复制事实字段。"
+        ]
+      },
+      {
+        "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:net_profit_parent:2025:current",
+        "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+        "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+        "pdf_page": 2,
+        "printed_page": null,
+        "table_title": "合并利润表",
+        "row_label": "归属于母公司股东的净利润",
+        "column_label": "项目 2025年度 2024年度",
+        "value_raw": "145,000,000.00",
+        "value_normalized": "145000000.00",
+        "unit": "元",
+        "currency": "人民币",
+        "period_start": "2025-01-01",
+        "period_end": "2025-12-31",
+        "period_type": "duration",
+        "limitations": [
+          "单位、币种和期间来自表头原文，不复制事实字段。"
+        ]
+      },
+      {
+        "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2024:comparative",
+        "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+        "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+        "pdf_page": 5,
+        "printed_page": null,
+        "table_title": "非经常性损益项目和金额",
+        "row_label": "合计",
+        "column_label": "项目 2025年度金额 2024年度金额",
+        "value_raw": "4,000,000.00",
+        "value_normalized": "4000000.00",
+        "unit": "元",
+        "currency": "人民币",
+        "period_start": "2024-01-01",
+        "period_end": "2024-12-31",
+        "period_type": "duration",
+        "limitations": [
+          "单位、币种和期间来自表头原文，不复制事实字段。"
+        ]
+      },
+      {
+        "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:non_recurring_total:2025:current",
+        "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+        "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+        "pdf_page": 5,
+        "printed_page": null,
+        "table_title": "非经常性损益项目和金额",
+        "row_label": "合计",
+        "column_label": "项目 2025年度金额 2024年度金额",
+        "value_raw": "6,000,000.00",
+        "value_normalized": "6000000.00",
+        "unit": "元",
+        "currency": "人民币",
+        "period_start": "2025-01-01",
+        "period_end": "2025-12-31",
+        "period_type": "duration",
+        "limitations": [
+          "单位、币种和期间来自表头原文，不复制事实字段。"
+        ]
+      },
+      {
+        "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2024:comparative",
+        "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+        "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+        "pdf_page": 3,
+        "printed_page": null,
+        "table_title": "合并现金流量表",
+        "row_label": "经营活动产生的现金流量净额",
+        "column_label": "项目 2025年度 2024年度",
+        "value_raw": "90,000,000.00",
+        "value_normalized": "90000000.00",
+        "unit": "元",
+        "currency": "人民币",
+        "period_start": "2024-01-01",
+        "period_end": "2024-12-31",
+        "period_type": "duration",
+        "limitations": [
+          "单位、币种和期间来自表头原文，不复制事实字段。"
+        ]
+      },
+      {
+        "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:operating_cash_flow:2025:current",
+        "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+        "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+        "pdf_page": 3,
+        "printed_page": null,
+        "table_title": "合并现金流量表",
+        "row_label": "经营活动产生的现金流量净额",
+        "column_label": "项目 2025年度 2024年度",
+        "value_raw": "-10,000,000.00",
+        "value_normalized": "-10000000.00",
+        "unit": "元",
+        "currency": "人民币",
+        "period_start": "2025-01-01",
+        "period_end": "2025-12-31",
+        "period_type": "duration",
+        "limitations": [
+          "单位、币种和期间来自表头原文，不复制事实字段。"
+        ]
+      },
+      {
+        "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2024:comparative",
+        "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+        "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+        "pdf_page": 2,
+        "printed_page": null,
+        "table_title": "合并利润表",
+        "row_label": "其中：营业收入",
+        "column_label": "项目 2025年度 2024年度",
+        "value_raw": "1,000,000,000.00",
+        "value_normalized": "1000000000.00",
+        "unit": "元",
+        "currency": "人民币",
+        "period_start": "2024-01-01",
+        "period_end": "2024-12-31",
+        "period_type": "duration",
+        "limitations": [
+          "单位、币种和期间来自表头原文，不复制事实字段。"
+        ]
+      },
+      {
+        "evidence_id": "ind-upload-c00acd385bd348fc8caf635deb4f2d6e:revenue:2025:current",
+        "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+        "source_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+        "pdf_page": 2,
+        "printed_page": null,
+        "table_title": "合并利润表",
+        "row_label": "其中：营业收入",
+        "column_label": "项目 2025年度 2024年度",
+        "value_raw": "1,250,000,000.00",
+        "value_normalized": "1250000000.00",
+        "unit": "元",
+        "currency": "人民币",
+        "period_start": "2025-01-01",
+        "period_end": "2025-12-31",
+        "period_type": "duration",
+        "limitations": [
+          "单位、币种和期间来自表头原文，不复制事实字段。"
+        ]
+      }
+    ],
+    "narrative_evidences": []
+  },
+  "export_limitations": [
+    "导出保留归档各层状态，不会提升事实、计算或因果核验等级。",
+    "M3 分数为未校准规则试行分数，不是概率。",
+    "AI 调查与最终评审属于模型观点，不是独立核验或因果结论。",
+    "候选线索不是舞弊结论。"
+  ]
+}

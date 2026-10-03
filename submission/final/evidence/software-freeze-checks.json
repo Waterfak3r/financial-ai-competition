@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "fintrace_frozen_software_checks",
+  "software_freeze_commit": "a0b5b3bc26b3004afcd359df48544adb9cba4a13",
+  "backend": {
+    "command": "python -m pytest -q (from backend/)",
+    "exit_code": 0,
+    "passed": 467,
+    "skipped": 3,
+    "duration_seconds": 149.57,
+    "skips": [
+      {
+        "test": "tests/unit/test_annual_analysis_history.py::test_reparse_point_run_is_ignored_and_invalid_root_link_is_rejected",
+        "reason": "当前 Windows 环境无法创建所需目录符号链接。"
+      },
+      {
+        "test": "tests/unit/test_model_settings_store.py::test_symlinked_settings_file_is_rejected",
+        "reason": "当前 Windows 环境无法创建所需文件符号链接。"
+      },
+      {
+        "test": "tests/integration/test_annual_analysis_jobs_api.py::test_source_file_symlink_is_rejected",
+        "reason": "当前 Windows 环境无法创建所需源文件符号链接。"
+      }
+    ]
+  },
+  "frontend": {
+    "node": "v24.14.1",
+    "npm": "11.11.0",
+    "typecheck": {
+      "command": "npm run typecheck",
+      "exit_code": 0
+    },
+    "build": {
+      "command": "npm run build",
+      "exit_code": 0,
+      "vite": "8.3.0"
+    },
+    "dedicated_frontend_automated_test_suite": false
+  },
+  "raw_logs": {
+    "directory": "artifacts/tmp/final-delivery-20261003/full-checks-a0b5b3b/",
+    "distribution_note": "详细日志留在开发机 tmp；此文件保存脱敏结果和跳过原因。"
+  },
+  "scope_note": "本检查在软件冻结提交上运行；三个跳过只影响平台符号链接专测，不代表整套后端测试失败。"
+}

@@ -1,0 +1,142 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "fintrace_final_annual_web_ui_smoke",
+  "software_freeze_commit": "a0b5b3bc26b3004afcd359df48544adb9cba4a13",
+  "software_source_fingerprint_ref": "annual-sample-ui-code-fingerprint.json",
+  "software_source_fingerprint_sha256": "1b4b39167944f853b27883e6bd902fcc548331fc89804b1ea2fea2f821644dd5",
+  "created_at": "2026-10-03T07:03:14+00:00",
+  "environment": {
+    "os": "Windows x64",
+    "python": "3.14.3",
+    "node": "v24.14.1",
+    "model_capability": "not_configured"
+  },
+  "runtime_copy": {
+    "package_id": "fintrace-source-candidate-20261003-7d91dad",
+    "candidate_source_commit": "7d91dada2c9d16b661b95cecc629d569a2447b66",
+    "candidate_source_tree": "1174531310ddb4da4caa09e3bee55cdcd578513e",
+    "construction": "accepted candidate source copy; annual_report_export.py synchronized to the exact a0b5b3b frozen blob",
+    "final_delivery_zip_verified": false
+  },
+  "sample": {
+    "sample_id": "SIM-ANNUAL-001",
+    "company_id": "SIM-ANNUAL-001",
+    "company_name": "澄湾云算股份有限公司（虚构）",
+    "report_year": 2025,
+    "nature": "原创模拟、非真实公司披露",
+    "source_pdf_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+    "use_conditions": "保留模拟标识；不得用作真实公司事实、投资依据、舞弊或无舞弊标签、模型训练标签。"
+  },
+  "ui_submission": {
+    "job_id": "annual-job-12b2970426b64de7a6b48d5caededfa3",
+    "run_id": "annual-analysis-a96e4ee6-2341-46c6-ac18-7729849a16c0",
+    "status": "completed",
+    "mode": "deterministic",
+    "model_called": false,
+    "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+    "upload_id": "upload-c00acd385bd348fc8caf635deb4f2d6e",
+    "manifest_source_pdf_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+    "manifest_report_sha256": "44c5719d3642ec4aa3ed7232714267ee73ade6e25b866c23ef0469d91197dd3a",
+    "created_at_utc": "2026-10-03T07:03:14+00:00"
+  },
+  "exported_report_counts": {
+    "confirmed_facts": 8,
+    "confirmed_calculations": 8,
+    "verified_claims": 16,
+    "pending_candidate_signals": 2
+  },
+  "downloads": [
+    {
+      "format": "json",
+      "file": "annual-sample-web-ui-run-a96e4ee6-2341-46c6-ac18-7729849a16c0.json",
+      "bytes": 175190,
+      "sha256": "a9e0fd8be501bf655f6d2ea579972faaed5c7ed480846f0199387e29afc2a971"
+    },
+    {
+      "format": "markdown",
+      "file": "annual-export-ui.md (local QA only)",
+      "bytes": 40955,
+      "sha256": "9a28f5a941d7348fc90f9926b5cccf7441ba2a7c3d3f9c3b43ef630cce8f4a25"
+    },
+    {
+      "format": "html",
+      "file": "annual-export-ui.html (local QA only)",
+      "bytes": 19611,
+      "sha256": "425f60cbd80e2515e9aa0a2e703bfa351ff8559b4da6d0f5529dbc99910f08d6"
+    }
+  ],
+  "readback_and_evidence_preview": {
+    "direct_run_url_readback": true,
+    "refresh_restored_same_run_id": true,
+    "verified_source_preview_http_status": 200,
+    "preview_kind": "independently verified financial-value evidence, focus crop of synthetic source PDF page 2",
+    "preview_details": {
+      "table": "合并利润表",
+      "row": "其中：营业收入",
+      "period": "2025-01-01 至 2025-12-31",
+      "unit": "元",
+      "currency": "人民币",
+      "scope": "合并口径",
+      "document_id": "upload-c00acd385bd348fc8caf635deb4f2d6e"
+    }
+  },
+  "responsive_widths": [
+    {
+      "viewport_px": 1366,
+      "document_width_px": 1366,
+      "body_width_px": 1366,
+      "horizontal_overflow": false
+    },
+    {
+      "viewport_px": 1440,
+      "document_width_px": 1440,
+      "body_width_px": 1440,
+      "horizontal_overflow": false
+    },
+    {
+      "viewport_px": 768,
+      "document_width_px": 768,
+      "body_width_px": 768,
+      "horizontal_overflow": false
+    },
+    {
+      "viewport_px": 390,
+      "document_width_px": 390,
+      "body_width_px": 390,
+      "horizontal_overflow": false
+    }
+  ],
+  "network_and_model_boundary": {
+    "non_local_requests_attempted": 0,
+    "non_local_requests_blocked": 0,
+    "model_calls": 0,
+    "only_local_web_api_used": true
+  },
+  "screenshots": [
+    {
+      "file": "annual-sample-web-ui-run-a96e4ee6-2341-46c6-ac18-7729849a16c0-desktop.png",
+      "viewport": "1366x900",
+      "sha256": "6dfe312cb4cb12a5c31d2ffaae39d036c48632f1bee5c9c01a1ff6f11af0136d"
+    },
+    {
+      "file": "annual-sample-web-ui-run-a96e4ee6-2341-46c6-ac18-7729849a16c0-mobile-390x844.png",
+      "viewport": "390x844",
+      "sha256": "4d2b88101a0d9f741d11e1ba7a90534c9dddedfe99d0f5519a7f0eb34c984e5a",
+      "capture_note": "人工将报告区标题 scrollIntoView({block: start}) 定位到视口顶部并等待稳定后截取；不声称自动定位检查。"
+    }
+  ],
+  "limitation": "本地单机原创样例演练；不等于另一台机器/干净安装/现场网络验收。候选源码副本加冻结导出模块同步，不称最终文档快照 ZIP 烟测。",
+  "mobile_capture": {
+    "viewport_px": {
+      "width": 390,
+      "height": 844
+    },
+    "report_heading_top_px": 16,
+    "document_horizontal_overflow": false,
+    "positioning": "manual_scroll_to_report_section_heading_block_start",
+    "positioning_check_automated": false,
+    "stabilization_wait_ms": 700,
+    "screenshot_sha256": "4d2b88101a0d9f741d11e1ba7a90534c9dddedfe99d0f5519a7f0eb34c984e5a",
+    "screenshot_file": "annual-sample-web-ui-run-a96e4ee6-2341-46c6-ac18-7729849a16c0-mobile-390x844.png"
+  }
+}

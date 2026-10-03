@@ -1,0 +1,4872 @@
+{
+  "schema_version": "quarterly-analysis-v1",
+  "run_id": "quarterly-analysis-6e7807fc-f25c-4dbc-bf80-5323fc902296",
+  "created_at": "2026-10-03T03:40:21.910304+00:00",
+  "status": "completed",
+  "company_id": "SIM-QUARTERLY-001",
+  "target_year": 2024,
+  "target_quarter": "Q2",
+  "requested_relations": [
+    "year_over_year",
+    "quarter_over_quarter"
+  ],
+  "dataset": {
+    "dataset_id": "fintrace-quarterly-synthetic-v1",
+    "nature": "原创人工构造模拟样例，明确不是任何真实公司的财报",
+    "use_conditions": "可随FINTRACE比赛提交件和团队演示包分发；不可作为真实财务或舞弊结论",
+    "manifest_path": "data/samples/quarterly/source_manifest.json"
+  },
+  "source_documents": [
+    {
+      "document_id": "sim-2023-q1",
+      "company_id": "SIM-QUARTERLY-001",
+      "source_pdf": "data/samples/quarterly/sim-2023-q1.pdf",
+      "source_sha256": "68cabea20f885a06c829b060914139fce6232451a2670fcefed9ae010c30f373",
+      "source_url": "original-synthetic://fintrace/sim-2023-q1",
+      "publication_date": "2023-04-28",
+      "report_year": 2023,
+      "report_period": "Q1",
+      "nature": "原创人工构造模拟报告；不对应真实公司或真实财务披露",
+      "use_conditions": "允许随FINTRACE比赛提交件和团队演示包分发；不得当作真实财务事实或舞弊标签"
+    },
+    {
+      "document_id": "sim-2023-h1",
+      "company_id": "SIM-QUARTERLY-001",
+      "source_pdf": "data/samples/quarterly/sim-2023-h1.pdf",
+      "source_sha256": "e792103379cca4a7e8714c8e86307b946ef12cd6c899f56f5a526ab5af0b9f0e",
+      "source_url": "original-synthetic://fintrace/sim-2023-h1",
+      "publication_date": "2023-08-28",
+      "report_year": 2023,
+      "report_period": "H1",
+      "nature": "原创人工构造模拟报告；不对应真实公司或真实财务披露",
+      "use_conditions": "允许随FINTRACE比赛提交件和团队演示包分发；不得当作真实财务事实或舞弊标签"
+    },
+    {
+      "document_id": "sim-2024-q1",
+      "company_id": "SIM-QUARTERLY-001",
+      "source_pdf": "data/samples/quarterly/sim-2024-q1.pdf",
+      "source_sha256": "06521c459463b2d153f3dc0e26e3eaa9c4ccf873e1dd6560d0adf0ffaf36bfb3",
+      "source_url": "original-synthetic://fintrace/sim-2024-q1",
+      "publication_date": "2024-04-28",
+      "report_year": 2024,
+      "report_period": "Q1",
+      "nature": "原创人工构造模拟报告；不对应真实公司或真实财务披露",
+      "use_conditions": "允许随FINTRACE比赛提交件和团队演示包分发；不得当作真实财务事实或舞弊标签"
+    },
+    {
+      "document_id": "sim-2024-h1",
+      "company_id": "SIM-QUARTERLY-001",
+      "source_pdf": "data/samples/quarterly/sim-2024-h1.pdf",
+      "source_sha256": "ee7a6a01c750a601b8829b1b710ee00d00f49dbdf4772d62198791b21abbfad2",
+      "source_url": "original-synthetic://fintrace/sim-2024-h1",
+      "publication_date": "2024-08-28",
+      "report_year": 2024,
+      "report_period": "H1",
+      "nature": "原创人工构造模拟报告；不对应真实公司或真实财务披露",
+      "use_conditions": "允许随FINTRACE比赛提交件和团队演示包分发；不得当作真实财务事实或舞弊标签"
+    }
+  ],
+  "source_observations": [
+    {
+      "observation_id": "qobs-sim-2023-q1-revenue-2023-current",
+      "metric_id": "revenue",
+      "company_id": "SIM-QUARTERLY-001",
+      "report_year": 2023,
+      "report_period": "Q1",
+      "observation_year": 2023,
+      "column_role": "current",
+      "basis": "year_to_date",
+      "statement_type": "income_statement",
+      "scope": "consolidated",
+      "unit_multiplier": "1",
+      "evidence": {
+        "evidence_id": "qev-sim-2023-q1-revenue-2023-current",
+        "document_id": "sim-2023-q1",
+        "source_sha256": "68cabea20f885a06c829b060914139fce6232451a2670fcefed9ae010c30f373",
+        "pdf_page": 2,
+        "printed_page": null,
+        "table_title": "合并利润表",
+        "row_label": "营业收入",
+        "column_label": "2023年第一季度",
+        "value_raw": "1000000",
+        "value_normalized": "1000000",
+        "unit": "元",
+        "currency": "CNY",
+        "period_start": "2023-01-01",
+        "period_end": "2023-03-31",
+        "period_type": "duration",
+        "value_region": {
+          "text": "1000000",
+          "page": 2,
+          "bbox": {
+            "x0": 330.0,
+            "y0": 210.0,
+            "x1": 400.0,
+            "y1": 222.0
+          }
+        },
+        "row_region": {
+          "text": "营业收入",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 210.0,
+            "x1": 94.0,
+            "y1": 222.0
+          }
+        },
+        "column_region": {
+          "text": "2023年第一季度",
+          "page": 2,
+          "bbox": {
+            "x0": 321.0,
+            "y0": 155.0,
+            "x1": 411.0,
+            "y1": 167.0
+          }
+        },
+        "title_region": {
+          "text": "合并利润表",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 68.0,
+            "x1": 124.0,
+            "y1": 84.8
+          }
+        },
+        "unit_region": {
+          "text": "元",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 120.0,
+            "x1": 94.0,
+            "y1": 132.0
+          }
+        },
+        "extraction_method": "pymupdf_text_search_and_row_column_geometry",
+        "surrounding_text": "营业收入",
+        "legacy_text_region": null,
+        "limitations": [],
+        "coordinate_system": "pymupdf_page_top_left"
+      },
+      "limitations": [],
+      "source_document_id": "sim-2023-q1",
+      "verification": {
+        "verification_id": "qverify-a1a606c2-0a26-4428-9058-9bfb9431863e",
+        "target_type": "source_observation",
+        "target_id": "qobs-sim-2023-q1-revenue-2023-current",
+        "status": "verified",
+        "checks": [
+          "重新打开源 PDF 并核对完整 SHA256。",
+          "从 PDF 首页重新定位公司标识。",
+          "从 PDF 首页确认报告年份和报告类型。",
+          "从 PDF 表题重新确认合并报表类型。",
+          "忽略提取器坐标，按原文指标行及期间列重新定位单元格。",
+          "按原文单位倍率将原始值重新标准化为 Decimal。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2023-q1-revenue-2023-current"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.160201+00:00",
+        "details": {
+          "source_document_id": "sim-2023-q1",
+          "relocated_cells": [
+            {
+              "pdf_page": 2,
+              "raw_value": "1000000",
+              "row_label": "营业收入",
+              "column_label": "2023年第一季度",
+              "unit": "元",
+              "currency": "CNY",
+              "value_bbox": [
+                330.0,
+                210.0,
+                400.0,
+                222.0
+              ],
+              "row_bbox": [
+                54.0,
+                210.0,
+                94.0,
+                222.0
+              ],
+              "table_title_bbox": [
+                54.0,
+                68.0,
+                124.0,
+                84.80000305175781
+              ],
+              "unit_bbox": [
+                54.0,
+                120.0,
+                94.0,
+                132.0
+              ]
+            }
+          ],
+          "recomputed_normalized_value": "1000000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-53d14277-f78b-4758-aa2b-50f9f56bbc76",
+        "proof_type": "cumulative_observation",
+        "target_id": "qobs-sim-2023-q1-revenue-2023-current",
+        "source_sha256s": [
+          "68cabea20f885a06c829b060914139fce6232451a2670fcefed9ae010c30f373"
+        ],
+        "evidence_ids": [
+          "qev-sim-2023-q1-revenue-2023-current"
+        ],
+        "binding_sha256": "15ea42c87e1ac175eb801d724478d8011adb6553a58025f4580fef1222fcf3d0",
+        "issued_at": "2026-10-03T03:40:21.160346+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "observation_id": "qobs-sim-2023-q1-revenue-2022-comparative",
+      "metric_id": "revenue",
+      "company_id": "SIM-QUARTERLY-001",
+      "report_year": 2023,
+      "report_period": "Q1",
+      "observation_year": 2022,
+      "column_role": "comparative",
+      "basis": "year_to_date",
+      "statement_type": "income_statement",
+      "scope": "consolidated",
+      "unit_multiplier": "1",
+      "evidence": {
+        "evidence_id": "qev-sim-2023-q1-revenue-2022-comparative",
+        "document_id": "sim-2023-q1",
+        "source_sha256": "68cabea20f885a06c829b060914139fce6232451a2670fcefed9ae010c30f373",
+        "pdf_page": 2,
+        "printed_page": null,
+        "table_title": "合并利润表",
+        "row_label": "营业收入",
+        "column_label": "2022年第一季度",
+        "value_raw": "900000",
+        "value_normalized": "900000",
+        "unit": "元",
+        "currency": "CNY",
+        "period_start": "2022-01-01",
+        "period_end": "2022-03-31",
+        "period_type": "duration",
+        "value_region": {
+          "text": "900000",
+          "page": 2,
+          "bbox": {
+            "x0": 445.0,
+            "y0": 210.0,
+            "x1": 505.0,
+            "y1": 222.0
+          }
+        },
+        "row_region": {
+          "text": "营业收入",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 210.0,
+            "x1": 94.0,
+            "y1": 222.0
+          }
+        },
+        "column_region": {
+          "text": "2022年第一季度",
+          "page": 2,
+          "bbox": {
+            "x0": 438.0,
+            "y0": 155.0,
+            "x1": 528.0,
+            "y1": 167.0
+          }
+        },
+        "title_region": {
+          "text": "合并利润表",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 68.0,
+            "x1": 124.0,
+            "y1": 84.8
+          }
+        },
+        "unit_region": {
+          "text": "元",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 120.0,
+            "x1": 94.0,
+            "y1": 132.0
+          }
+        },
+        "extraction_method": "pymupdf_text_search_and_row_column_geometry",
+        "surrounding_text": "营业收入",
+        "legacy_text_region": null,
+        "limitations": [],
+        "coordinate_system": "pymupdf_page_top_left"
+      },
+      "limitations": [],
+      "source_document_id": "sim-2023-q1",
+      "verification": {
+        "verification_id": "qverify-285d43a6-501f-404b-9254-caaa03a8244d",
+        "target_type": "source_observation",
+        "target_id": "qobs-sim-2023-q1-revenue-2022-comparative",
+        "status": "verified",
+        "checks": [
+          "重新打开源 PDF 并核对完整 SHA256。",
+          "从 PDF 首页重新定位公司标识。",
+          "从 PDF 首页确认报告年份和报告类型。",
+          "从 PDF 表题重新确认合并报表类型。",
+          "忽略提取器坐标，按原文指标行及期间列重新定位单元格。",
+          "按原文单位倍率将原始值重新标准化为 Decimal。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2023-q1-revenue-2022-comparative"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.171615+00:00",
+        "details": {
+          "source_document_id": "sim-2023-q1",
+          "relocated_cells": [
+            {
+              "pdf_page": 2,
+              "raw_value": "900000",
+              "row_label": "营业收入",
+              "column_label": "2022年第一季度",
+              "unit": "元",
+              "currency": "CNY",
+              "value_bbox": [
+                445.0,
+                210.0,
+                505.0,
+                222.0
+              ],
+              "row_bbox": [
+                54.0,
+                210.0,
+                94.0,
+                222.0
+              ],
+              "table_title_bbox": [
+                54.0,
+                68.0,
+                124.0,
+                84.80000305175781
+              ],
+              "unit_bbox": [
+                54.0,
+                120.0,
+                94.0,
+                132.0
+              ]
+            }
+          ],
+          "recomputed_normalized_value": "900000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-e7926fb2-683e-4b15-880a-f73a911d95ed",
+        "proof_type": "cumulative_observation",
+        "target_id": "qobs-sim-2023-q1-revenue-2022-comparative",
+        "source_sha256s": [
+          "68cabea20f885a06c829b060914139fce6232451a2670fcefed9ae010c30f373"
+        ],
+        "evidence_ids": [
+          "qev-sim-2023-q1-revenue-2022-comparative"
+        ],
+        "binding_sha256": "c9cc631840cafbfa7d0859a0c54f6e4c30650ac5f3426a683314e3c29644846d",
+        "issued_at": "2026-10-03T03:40:21.171742+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "observation_id": "qobs-sim-2023-q1-net_profit_parent-2023-current",
+      "metric_id": "net_profit_parent",
+      "company_id": "SIM-QUARTERLY-001",
+      "report_year": 2023,
+      "report_period": "Q1",
+      "observation_year": 2023,
+      "column_role": "current",
+      "basis": "year_to_date",
+      "statement_type": "income_statement",
+      "scope": "consolidated",
+      "unit_multiplier": "1",
+      "evidence": {
+        "evidence_id": "qev-sim-2023-q1-net_profit_parent-2023-current",
+        "document_id": "sim-2023-q1",
+        "source_sha256": "68cabea20f885a06c829b060914139fce6232451a2670fcefed9ae010c30f373",
+        "pdf_page": 2,
+        "printed_page": null,
+        "table_title": "合并利润表",
+        "row_label": "归属于母公司股东的净利润",
+        "column_label": "2023年第一季度",
+        "value_raw": "100000",
+        "value_normalized": "100000",
+        "unit": "元",
+        "currency": "CNY",
+        "period_start": "2023-01-01",
+        "period_end": "2023-03-31",
+        "period_type": "duration",
+        "value_region": {
+          "text": "100000",
+          "page": 2,
+          "bbox": {
+            "x0": 330.0,
+            "y0": 265.0,
+            "x1": 390.0,
+            "y1": 277.0
+          }
+        },
+        "row_region": {
+          "text": "归属于母公司股东的净利润",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 265.0,
+            "x1": 174.0,
+            "y1": 277.0
+          }
+        },
+        "column_region": {
+          "text": "2023年第一季度",
+          "page": 2,
+          "bbox": {
+            "x0": 321.0,
+            "y0": 155.0,
+            "x1": 411.0,
+            "y1": 167.0
+          }
+        },
+        "title_region": {
+          "text": "合并利润表",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 68.0,
+            "x1": 124.0,
+            "y1": 84.8
+          }
+        },
+        "unit_region": {
+          "text": "元",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 120.0,
+            "x1": 94.0,
+            "y1": 132.0
+          }
+        },
+        "extraction_method": "pymupdf_text_search_and_row_column_geometry",
+        "surrounding_text": "归属于母公司股东的净利润",
+        "legacy_text_region": null,
+        "limitations": [],
+        "coordinate_system": "pymupdf_page_top_left"
+      },
+      "limitations": [],
+      "source_document_id": "sim-2023-q1",
+      "verification": {
+        "verification_id": "qverify-6cb8cc4d-c8f5-4d78-865e-61f5a1a44cf1",
+        "target_type": "source_observation",
+        "target_id": "qobs-sim-2023-q1-net_profit_parent-2023-current",
+        "status": "verified",
+        "checks": [
+          "重新打开源 PDF 并核对完整 SHA256。",
+          "从 PDF 首页重新定位公司标识。",
+          "从 PDF 首页确认报告年份和报告类型。",
+          "从 PDF 表题重新确认合并报表类型。",
+          "忽略提取器坐标，按原文指标行及期间列重新定位单元格。",
+          "按原文单位倍率将原始值重新标准化为 Decimal。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2023-q1-net_profit_parent-2023-current"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.182883+00:00",
+        "details": {
+          "source_document_id": "sim-2023-q1",
+          "relocated_cells": [
+            {
+              "pdf_page": 2,
+              "raw_value": "100000",
+              "row_label": "归属于母公司股东的净利润",
+              "column_label": "2023年第一季度",
+              "unit": "元",
+              "currency": "CNY",
+              "value_bbox": [
+                330.0,
+                265.0,
+                390.0,
+                277.0
+              ],
+              "row_bbox": [
+                54.0,
+                265.0,
+                174.0,
+                277.0
+              ],
+              "table_title_bbox": [
+                54.0,
+                68.0,
+                124.0,
+                84.80000305175781
+              ],
+              "unit_bbox": [
+                54.0,
+                120.0,
+                94.0,
+                132.0
+              ]
+            }
+          ],
+          "recomputed_normalized_value": "100000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-c195783b-89d8-4c6e-93f1-80a0aa7adb4e",
+        "proof_type": "cumulative_observation",
+        "target_id": "qobs-sim-2023-q1-net_profit_parent-2023-current",
+        "source_sha256s": [
+          "68cabea20f885a06c829b060914139fce6232451a2670fcefed9ae010c30f373"
+        ],
+        "evidence_ids": [
+          "qev-sim-2023-q1-net_profit_parent-2023-current"
+        ],
+        "binding_sha256": "e1dcde01f490ec1293f3197ddc34cffa710c10b3884e1f1b667769fc9a19a89f",
+        "issued_at": "2026-10-03T03:40:21.183020+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "observation_id": "qobs-sim-2023-q1-net_profit_parent-2022-comparative",
+      "metric_id": "net_profit_parent",
+      "company_id": "SIM-QUARTERLY-001",
+      "report_year": 2023,
+      "report_period": "Q1",
+      "observation_year": 2022,
+      "column_role": "comparative",
+      "basis": "year_to_date",
+      "statement_type": "income_statement",
+      "scope": "consolidated",
+      "unit_multiplier": "1",
+      "evidence": {
+        "evidence_id": "qev-sim-2023-q1-net_profit_parent-2022-comparative",
+        "document_id": "sim-2023-q1",
+        "source_sha256": "68cabea20f885a06c829b060914139fce6232451a2670fcefed9ae010c30f373",
+        "pdf_page": 2,
+        "printed_page": null,
+        "table_title": "合并利润表",
+        "row_label": "归属于母公司股东的净利润",
+        "column_label": "2022年第一季度",
+        "value_raw": "90000",
+        "value_normalized": "90000",
+        "unit": "元",
+        "currency": "CNY",
+        "period_start": "2022-01-01",
+        "period_end": "2022-03-31",
+        "period_type": "duration",
+        "value_region": {
+          "text": "90000",
+          "page": 2,
+          "bbox": {
+            "x0": 445.0,
+            "y0": 265.0,
+            "x1": 495.0,
+            "y1": 277.0
+          }
+        },
+        "row_region": {
+          "text": "归属于母公司股东的净利润",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 265.0,
+            "x1": 174.0,
+            "y1": 277.0
+          }
+        },
+        "column_region": {
+          "text": "2022年第一季度",
+          "page": 2,
+          "bbox": {
+            "x0": 438.0,
+            "y0": 155.0,
+            "x1": 528.0,
+            "y1": 167.0
+          }
+        },
+        "title_region": {
+          "text": "合并利润表",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 68.0,
+            "x1": 124.0,
+            "y1": 84.8
+          }
+        },
+        "unit_region": {
+          "text": "元",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 120.0,
+            "x1": 94.0,
+            "y1": 132.0
+          }
+        },
+        "extraction_method": "pymupdf_text_search_and_row_column_geometry",
+        "surrounding_text": "归属于母公司股东的净利润",
+        "legacy_text_region": null,
+        "limitations": [],
+        "coordinate_system": "pymupdf_page_top_left"
+      },
+      "limitations": [],
+      "source_document_id": "sim-2023-q1",
+      "verification": {
+        "verification_id": "qverify-305544c7-1320-4867-8f82-99ed7fb6103d",
+        "target_type": "source_observation",
+        "target_id": "qobs-sim-2023-q1-net_profit_parent-2022-comparative",
+        "status": "verified",
+        "checks": [
+          "重新打开源 PDF 并核对完整 SHA256。",
+          "从 PDF 首页重新定位公司标识。",
+          "从 PDF 首页确认报告年份和报告类型。",
+          "从 PDF 表题重新确认合并报表类型。",
+          "忽略提取器坐标，按原文指标行及期间列重新定位单元格。",
+          "按原文单位倍率将原始值重新标准化为 Decimal。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2023-q1-net_profit_parent-2022-comparative"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.194360+00:00",
+        "details": {
+          "source_document_id": "sim-2023-q1",
+          "relocated_cells": [
+            {
+              "pdf_page": 2,
+              "raw_value": "90000",
+              "row_label": "归属于母公司股东的净利润",
+              "column_label": "2022年第一季度",
+              "unit": "元",
+              "currency": "CNY",
+              "value_bbox": [
+                445.0,
+                265.0,
+                495.0,
+                277.0
+              ],
+              "row_bbox": [
+                54.0,
+                265.0,
+                174.0,
+                277.0
+              ],
+              "table_title_bbox": [
+                54.0,
+                68.0,
+                124.0,
+                84.80000305175781
+              ],
+              "unit_bbox": [
+                54.0,
+                120.0,
+                94.0,
+                132.0
+              ]
+            }
+          ],
+          "recomputed_normalized_value": "90000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-c1c52678-5b4d-4251-8d72-7527872795ce",
+        "proof_type": "cumulative_observation",
+        "target_id": "qobs-sim-2023-q1-net_profit_parent-2022-comparative",
+        "source_sha256s": [
+          "68cabea20f885a06c829b060914139fce6232451a2670fcefed9ae010c30f373"
+        ],
+        "evidence_ids": [
+          "qev-sim-2023-q1-net_profit_parent-2022-comparative"
+        ],
+        "binding_sha256": "e8c65947564ab6d092479d837c8ee6bcc10321760d1d84a42e024e3cd3f7e965",
+        "issued_at": "2026-10-03T03:40:21.194492+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "observation_id": "qobs-sim-2023-q1-operating_cash_flow-2023-current",
+      "metric_id": "operating_cash_flow",
+      "company_id": "SIM-QUARTERLY-001",
+      "report_year": 2023,
+      "report_period": "Q1",
+      "observation_year": 2023,
+      "column_role": "current",
+      "basis": "year_to_date",
+      "statement_type": "cash_flow_statement",
+      "scope": "consolidated",
+      "unit_multiplier": "1",
+      "evidence": {
+        "evidence_id": "qev-sim-2023-q1-operating_cash_flow-2023-current",
+        "document_id": "sim-2023-q1",
+        "source_sha256": "68cabea20f885a06c829b060914139fce6232451a2670fcefed9ae010c30f373",
+        "pdf_page": 3,
+        "printed_page": null,
+        "table_title": "合并现金流量表",
+        "row_label": "经营活动产生的现金流量净额",
+        "column_label": "2023年第一季度",
+        "value_raw": "-20000",
+        "value_normalized": "-20000",
+        "unit": "元",
+        "currency": "CNY",
+        "period_start": "2023-01-01",
+        "period_end": "2023-03-31",
+        "period_type": "duration",
+        "value_region": {
+          "text": "-20000",
+          "page": 3,
+          "bbox": {
+            "x0": 330.0,
+            "y0": 210.0,
+            "x1": 390.0,
+            "y1": 222.0
+          }
+        },
+        "row_region": {
+          "text": "经营活动产生的现金流量净额",
+          "page": 3,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 210.0,
+            "x1": 184.0,
+            "y1": 222.0
+          }
+        },
+        "column_region": {
+          "text": "2023年第一季度",
+          "page": 3,
+          "bbox": {
+            "x0": 321.0,
+            "y0": 155.0,
+            "x1": 411.0,
+            "y1": 167.0
+          }
+        },
+        "title_region": {
+          "text": "合并现金流量表",
+          "page": 3,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 68.0,
+            "x1": 152.0,
+            "y1": 84.8
+          }
+        },
+        "unit_region": {
+          "text": "元",
+          "page": 3,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 120.0,
+            "x1": 94.0,
+            "y1": 132.0
+          }
+        },
+        "extraction_method": "pymupdf_text_search_and_row_column_geometry",
+        "surrounding_text": "经营活动产生的现金流量净额",
+        "legacy_text_region": null,
+        "limitations": [],
+        "coordinate_system": "pymupdf_page_top_left"
+      },
+      "limitations": [],
+      "source_document_id": "sim-2023-q1",
+      "verification": {
+        "verification_id": "qverify-466ed16b-6585-463b-8991-95dcb0c9d087",
+        "target_type": "source_observation",
+        "target_id": "qobs-sim-2023-q1-operating_cash_flow-2023-current",
+        "status": "verified",
+        "checks": [
+          "重新打开源 PDF 并核对完整 SHA256。",
+          "从 PDF 首页重新定位公司标识。",
+          "从 PDF 首页确认报告年份和报告类型。",
+          "从 PDF 表题重新确认合并报表类型。",
+          "忽略提取器坐标，按原文指标行及期间列重新定位单元格。",
+          "按原文单位倍率将原始值重新标准化为 Decimal。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2023-q1-operating_cash_flow-2023-current"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.205202+00:00",
+        "details": {
+          "source_document_id": "sim-2023-q1",
+          "relocated_cells": [
+            {
+              "pdf_page": 3,
+              "raw_value": "-20000",
+              "row_label": "经营活动产生的现金流量净额",
+              "column_label": "2023年第一季度",
+              "unit": "元",
+              "currency": "CNY",
+              "value_bbox": [
+                330.0,
+                210.0,
+                390.0,
+                222.0
+              ],
+              "row_bbox": [
+                54.0,
+                210.0,
+                184.0,
+                222.0
+              ],
+              "table_title_bbox": [
+                54.0,
+                68.0,
+                152.0,
+                84.80000305175781
+              ],
+              "unit_bbox": [
+                54.0,
+                120.0,
+                94.0,
+                132.0
+              ]
+            }
+          ],
+          "recomputed_normalized_value": "-20000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-9a783331-4a50-4da4-b39a-9d85c9f17852",
+        "proof_type": "cumulative_observation",
+        "target_id": "qobs-sim-2023-q1-operating_cash_flow-2023-current",
+        "source_sha256s": [
+          "68cabea20f885a06c829b060914139fce6232451a2670fcefed9ae010c30f373"
+        ],
+        "evidence_ids": [
+          "qev-sim-2023-q1-operating_cash_flow-2023-current"
+        ],
+        "binding_sha256": "7d0bd6440162616ed3e1d5b2eeb587d9122640ba414781e1cd532c2d2c7cb422",
+        "issued_at": "2026-10-03T03:40:21.205343+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "observation_id": "qobs-sim-2023-q1-operating_cash_flow-2022-comparative",
+      "metric_id": "operating_cash_flow",
+      "company_id": "SIM-QUARTERLY-001",
+      "report_year": 2023,
+      "report_period": "Q1",
+      "observation_year": 2022,
+      "column_role": "comparative",
+      "basis": "year_to_date",
+      "statement_type": "cash_flow_statement",
+      "scope": "consolidated",
+      "unit_multiplier": "1",
+      "evidence": {
+        "evidence_id": "qev-sim-2023-q1-operating_cash_flow-2022-comparative",
+        "document_id": "sim-2023-q1",
+        "source_sha256": "68cabea20f885a06c829b060914139fce6232451a2670fcefed9ae010c30f373",
+        "pdf_page": 3,
+        "printed_page": null,
+        "table_title": "合并现金流量表",
+        "row_label": "经营活动产生的现金流量净额",
+        "column_label": "2022年第一季度",
+        "value_raw": "-15000",
+        "value_normalized": "-15000",
+        "unit": "元",
+        "currency": "CNY",
+        "period_start": "2022-01-01",
+        "period_end": "2022-03-31",
+        "period_type": "duration",
+        "value_region": {
+          "text": "-15000",
+          "page": 3,
+          "bbox": {
+            "x0": 445.0,
+            "y0": 210.0,
+            "x1": 505.0,
+            "y1": 222.0
+          }
+        },
+        "row_region": {
+          "text": "经营活动产生的现金流量净额",
+          "page": 3,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 210.0,
+            "x1": 184.0,
+            "y1": 222.0
+          }
+        },
+        "column_region": {
+          "text": "2022年第一季度",
+          "page": 3,
+          "bbox": {
+            "x0": 438.0,
+            "y0": 155.0,
+            "x1": 528.0,
+            "y1": 167.0
+          }
+        },
+        "title_region": {
+          "text": "合并现金流量表",
+          "page": 3,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 68.0,
+            "x1": 152.0,
+            "y1": 84.8
+          }
+        },
+        "unit_region": {
+          "text": "元",
+          "page": 3,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 120.0,
+            "x1": 94.0,
+            "y1": 132.0
+          }
+        },
+        "extraction_method": "pymupdf_text_search_and_row_column_geometry",
+        "surrounding_text": "经营活动产生的现金流量净额",
+        "legacy_text_region": null,
+        "limitations": [],
+        "coordinate_system": "pymupdf_page_top_left"
+      },
+      "limitations": [],
+      "source_document_id": "sim-2023-q1",
+      "verification": {
+        "verification_id": "qverify-19848c4d-3b25-4f85-8184-da01d15b5169",
+        "target_type": "source_observation",
+        "target_id": "qobs-sim-2023-q1-operating_cash_flow-2022-comparative",
+        "status": "verified",
+        "checks": [
+          "重新打开源 PDF 并核对完整 SHA256。",
+          "从 PDF 首页重新定位公司标识。",
+          "从 PDF 首页确认报告年份和报告类型。",
+          "从 PDF 表题重新确认合并报表类型。",
+          "忽略提取器坐标，按原文指标行及期间列重新定位单元格。",
+          "按原文单位倍率将原始值重新标准化为 Decimal。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2023-q1-operating_cash_flow-2022-comparative"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.215990+00:00",
+        "details": {
+          "source_document_id": "sim-2023-q1",
+          "relocated_cells": [
+            {
+              "pdf_page": 3,
+              "raw_value": "-15000",
+              "row_label": "经营活动产生的现金流量净额",
+              "column_label": "2022年第一季度",
+              "unit": "元",
+              "currency": "CNY",
+              "value_bbox": [
+                445.0,
+                210.0,
+                505.0,
+                222.0
+              ],
+              "row_bbox": [
+                54.0,
+                210.0,
+                184.0,
+                222.0
+              ],
+              "table_title_bbox": [
+                54.0,
+                68.0,
+                152.0,
+                84.80000305175781
+              ],
+              "unit_bbox": [
+                54.0,
+                120.0,
+                94.0,
+                132.0
+              ]
+            }
+          ],
+          "recomputed_normalized_value": "-15000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-60459b86-2aa7-4b93-8510-6af52882a62c",
+        "proof_type": "cumulative_observation",
+        "target_id": "qobs-sim-2023-q1-operating_cash_flow-2022-comparative",
+        "source_sha256s": [
+          "68cabea20f885a06c829b060914139fce6232451a2670fcefed9ae010c30f373"
+        ],
+        "evidence_ids": [
+          "qev-sim-2023-q1-operating_cash_flow-2022-comparative"
+        ],
+        "binding_sha256": "13b3abce6bb0f6254f6bf7ddc2124c8ad230ed7ec5657d8d43735623ca380df7",
+        "issued_at": "2026-10-03T03:40:21.216130+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "observation_id": "qobs-sim-2023-h1-revenue-2023-current",
+      "metric_id": "revenue",
+      "company_id": "SIM-QUARTERLY-001",
+      "report_year": 2023,
+      "report_period": "H1",
+      "observation_year": 2023,
+      "column_role": "current",
+      "basis": "year_to_date",
+      "statement_type": "income_statement",
+      "scope": "consolidated",
+      "unit_multiplier": "1",
+      "evidence": {
+        "evidence_id": "qev-sim-2023-h1-revenue-2023-current",
+        "document_id": "sim-2023-h1",
+        "source_sha256": "e792103379cca4a7e8714c8e86307b946ef12cd6c899f56f5a526ab5af0b9f0e",
+        "pdf_page": 2,
+        "printed_page": null,
+        "table_title": "合并利润表",
+        "row_label": "营业收入",
+        "column_label": "2023年半年度",
+        "value_raw": "2400000",
+        "value_normalized": "2400000",
+        "unit": "元",
+        "currency": "CNY",
+        "period_start": "2023-01-01",
+        "period_end": "2023-06-30",
+        "period_type": "duration",
+        "value_region": {
+          "text": "2400000",
+          "page": 2,
+          "bbox": {
+            "x0": 330.0,
+            "y0": 210.0,
+            "x1": 400.0,
+            "y1": 222.0
+          }
+        },
+        "row_region": {
+          "text": "营业收入",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 210.0,
+            "x1": 94.0,
+            "y1": 222.0
+          }
+        },
+        "column_region": {
+          "text": "2023年半年度",
+          "page": 2,
+          "bbox": {
+            "x0": 321.0,
+            "y0": 155.0,
+            "x1": 401.0,
+            "y1": 167.0
+          }
+        },
+        "title_region": {
+          "text": "合并利润表",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 68.0,
+            "x1": 124.0,
+            "y1": 84.8
+          }
+        },
+        "unit_region": {
+          "text": "元",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 120.0,
+            "x1": 94.0,
+            "y1": 132.0
+          }
+        },
+        "extraction_method": "pymupdf_text_search_and_row_column_geometry",
+        "surrounding_text": "营业收入",
+        "legacy_text_region": null,
+        "limitations": [],
+        "coordinate_system": "pymupdf_page_top_left"
+      },
+      "limitations": [],
+      "source_document_id": "sim-2023-h1",
+      "verification": {
+        "verification_id": "qverify-c57a5494-17f5-4807-91e8-61f910e3cac5",
+        "target_type": "source_observation",
+        "target_id": "qobs-sim-2023-h1-revenue-2023-current",
+        "status": "verified",
+        "checks": [
+          "重新打开源 PDF 并核对完整 SHA256。",
+          "从 PDF 首页重新定位公司标识。",
+          "从 PDF 首页确认报告年份和报告类型。",
+          "从 PDF 表题重新确认合并报表类型。",
+          "忽略提取器坐标，按原文指标行及期间列重新定位单元格。",
+          "按原文单位倍率将原始值重新标准化为 Decimal。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2023-h1-revenue-2023-current"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.227775+00:00",
+        "details": {
+          "source_document_id": "sim-2023-h1",
+          "relocated_cells": [
+            {
+              "pdf_page": 2,
+              "raw_value": "2400000",
+              "row_label": "营业收入",
+              "column_label": "2023年半年度",
+              "unit": "元",
+              "currency": "CNY",
+              "value_bbox": [
+                330.0,
+                210.0,
+                400.0,
+                222.0
+              ],
+              "row_bbox": [
+                54.0,
+                210.0,
+                94.0,
+                222.0
+              ],
+              "table_title_bbox": [
+                54.0,
+                68.0,
+                124.0,
+                84.80000305175781
+              ],
+              "unit_bbox": [
+                54.0,
+                120.0,
+                94.0,
+                132.0
+              ]
+            }
+          ],
+          "recomputed_normalized_value": "2400000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-1c9e0772-5026-46bd-97ac-1d463fa4c8f0",
+        "proof_type": "cumulative_observation",
+        "target_id": "qobs-sim-2023-h1-revenue-2023-current",
+        "source_sha256s": [
+          "e792103379cca4a7e8714c8e86307b946ef12cd6c899f56f5a526ab5af0b9f0e"
+        ],
+        "evidence_ids": [
+          "qev-sim-2023-h1-revenue-2023-current"
+        ],
+        "binding_sha256": "aea18ae5d0db63790588866cdfbd11d3c268f962f7ca78d5ae06ba3b332cf884",
+        "issued_at": "2026-10-03T03:40:21.227902+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "observation_id": "qobs-sim-2023-h1-revenue-2022-comparative",
+      "metric_id": "revenue",
+      "company_id": "SIM-QUARTERLY-001",
+      "report_year": 2023,
+      "report_period": "H1",
+      "observation_year": 2022,
+      "column_role": "comparative",
+      "basis": "year_to_date",
+      "statement_type": "income_statement",
+      "scope": "consolidated",
+      "unit_multiplier": "1",
+      "evidence": {
+        "evidence_id": "qev-sim-2023-h1-revenue-2022-comparative",
+        "document_id": "sim-2023-h1",
+        "source_sha256": "e792103379cca4a7e8714c8e86307b946ef12cd6c899f56f5a526ab5af0b9f0e",
+        "pdf_page": 2,
+        "printed_page": null,
+        "table_title": "合并利润表",
+        "row_label": "营业收入",
+        "column_label": "2022年半年度",
+        "value_raw": "2100000",
+        "value_normalized": "2100000",
+        "unit": "元",
+        "currency": "CNY",
+        "period_start": "2022-01-01",
+        "period_end": "2022-06-30",
+        "period_type": "duration",
+        "value_region": {
+          "text": "2100000",
+          "page": 2,
+          "bbox": {
+            "x0": 445.0,
+            "y0": 210.0,
+            "x1": 515.0,
+            "y1": 222.0
+          }
+        },
+        "row_region": {
+          "text": "营业收入",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 210.0,
+            "x1": 94.0,
+            "y1": 222.0
+          }
+        },
+        "column_region": {
+          "text": "2022年半年度",
+          "page": 2,
+          "bbox": {
+            "x0": 438.0,
+            "y0": 155.0,
+            "x1": 518.0,
+            "y1": 167.0
+          }
+        },
+        "title_region": {
+          "text": "合并利润表",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 68.0,
+            "x1": 124.0,
+            "y1": 84.8
+          }
+        },
+        "unit_region": {
+          "text": "元",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 120.0,
+            "x1": 94.0,
+            "y1": 132.0
+          }
+        },
+        "extraction_method": "pymupdf_text_search_and_row_column_geometry",
+        "surrounding_text": "营业收入",
+        "legacy_text_region": null,
+        "limitations": [],
+        "coordinate_system": "pymupdf_page_top_left"
+      },
+      "limitations": [],
+      "source_document_id": "sim-2023-h1",
+      "verification": {
+        "verification_id": "qverify-e81e0e01-631f-47cb-bbe1-b2a7024e0064",
+        "target_type": "source_observation",
+        "target_id": "qobs-sim-2023-h1-revenue-2022-comparative",
+        "status": "verified",
+        "checks": [
+          "重新打开源 PDF 并核对完整 SHA256。",
+          "从 PDF 首页重新定位公司标识。",
+          "从 PDF 首页确认报告年份和报告类型。",
+          "从 PDF 表题重新确认合并报表类型。",
+          "忽略提取器坐标，按原文指标行及期间列重新定位单元格。",
+          "按原文单位倍率将原始值重新标准化为 Decimal。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2023-h1-revenue-2022-comparative"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.239469+00:00",
+        "details": {
+          "source_document_id": "sim-2023-h1",
+          "relocated_cells": [
+            {
+              "pdf_page": 2,
+              "raw_value": "2100000",
+              "row_label": "营业收入",
+              "column_label": "2022年半年度",
+              "unit": "元",
+              "currency": "CNY",
+              "value_bbox": [
+                445.0,
+                210.0,
+                515.0,
+                222.0
+              ],
+              "row_bbox": [
+                54.0,
+                210.0,
+                94.0,
+                222.0
+              ],
+              "table_title_bbox": [
+                54.0,
+                68.0,
+                124.0,
+                84.80000305175781
+              ],
+              "unit_bbox": [
+                54.0,
+                120.0,
+                94.0,
+                132.0
+              ]
+            }
+          ],
+          "recomputed_normalized_value": "2100000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-220553f8-809d-4f72-a0c3-88227f8deb03",
+        "proof_type": "cumulative_observation",
+        "target_id": "qobs-sim-2023-h1-revenue-2022-comparative",
+        "source_sha256s": [
+          "e792103379cca4a7e8714c8e86307b946ef12cd6c899f56f5a526ab5af0b9f0e"
+        ],
+        "evidence_ids": [
+          "qev-sim-2023-h1-revenue-2022-comparative"
+        ],
+        "binding_sha256": "51c92de2bb7a86be497de242c2f428f11833deb51fc518b0e44c2e5acc1cebc1",
+        "issued_at": "2026-10-03T03:40:21.239595+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "observation_id": "qobs-sim-2023-h1-net_profit_parent-2023-current",
+      "metric_id": "net_profit_parent",
+      "company_id": "SIM-QUARTERLY-001",
+      "report_year": 2023,
+      "report_period": "H1",
+      "observation_year": 2023,
+      "column_role": "current",
+      "basis": "year_to_date",
+      "statement_type": "income_statement",
+      "scope": "consolidated",
+      "unit_multiplier": "1",
+      "evidence": {
+        "evidence_id": "qev-sim-2023-h1-net_profit_parent-2023-current",
+        "document_id": "sim-2023-h1",
+        "source_sha256": "e792103379cca4a7e8714c8e86307b946ef12cd6c899f56f5a526ab5af0b9f0e",
+        "pdf_page": 2,
+        "printed_page": null,
+        "table_title": "合并利润表",
+        "row_label": "归属于母公司股东的净利润",
+        "column_label": "2023年半年度",
+        "value_raw": "260000",
+        "value_normalized": "260000",
+        "unit": "元",
+        "currency": "CNY",
+        "period_start": "2023-01-01",
+        "period_end": "2023-06-30",
+        "period_type": "duration",
+        "value_region": {
+          "text": "260000",
+          "page": 2,
+          "bbox": {
+            "x0": 330.0,
+            "y0": 265.0,
+            "x1": 390.0,
+            "y1": 277.0
+          }
+        },
+        "row_region": {
+          "text": "归属于母公司股东的净利润",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 265.0,
+            "x1": 174.0,
+            "y1": 277.0
+          }
+        },
+        "column_region": {
+          "text": "2023年半年度",
+          "page": 2,
+          "bbox": {
+            "x0": 321.0,
+            "y0": 155.0,
+            "x1": 401.0,
+            "y1": 167.0
+          }
+        },
+        "title_region": {
+          "text": "合并利润表",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 68.0,
+            "x1": 124.0,
+            "y1": 84.8
+          }
+        },
+        "unit_region": {
+          "text": "元",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 120.0,
+            "x1": 94.0,
+            "y1": 132.0
+          }
+        },
+        "extraction_method": "pymupdf_text_search_and_row_column_geometry",
+        "surrounding_text": "归属于母公司股东的净利润",
+        "legacy_text_region": null,
+        "limitations": [],
+        "coordinate_system": "pymupdf_page_top_left"
+      },
+      "limitations": [],
+      "source_document_id": "sim-2023-h1",
+      "verification": {
+        "verification_id": "qverify-0a512011-1296-40af-9445-ef912d320fb0",
+        "target_type": "source_observation",
+        "target_id": "qobs-sim-2023-h1-net_profit_parent-2023-current",
+        "status": "verified",
+        "checks": [
+          "重新打开源 PDF 并核对完整 SHA256。",
+          "从 PDF 首页重新定位公司标识。",
+          "从 PDF 首页确认报告年份和报告类型。",
+          "从 PDF 表题重新确认合并报表类型。",
+          "忽略提取器坐标，按原文指标行及期间列重新定位单元格。",
+          "按原文单位倍率将原始值重新标准化为 Decimal。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2023-h1-net_profit_parent-2023-current"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.250942+00:00",
+        "details": {
+          "source_document_id": "sim-2023-h1",
+          "relocated_cells": [
+            {
+              "pdf_page": 2,
+              "raw_value": "260000",
+              "row_label": "归属于母公司股东的净利润",
+              "column_label": "2023年半年度",
+              "unit": "元",
+              "currency": "CNY",
+              "value_bbox": [
+                330.0,
+                265.0,
+                390.0,
+                277.0
+              ],
+              "row_bbox": [
+                54.0,
+                265.0,
+                174.0,
+                277.0
+              ],
+              "table_title_bbox": [
+                54.0,
+                68.0,
+                124.0,
+                84.80000305175781
+              ],
+              "unit_bbox": [
+                54.0,
+                120.0,
+                94.0,
+                132.0
+              ]
+            }
+          ],
+          "recomputed_normalized_value": "260000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-bb81bf44-2ae0-4db6-a8dd-23825fba6636",
+        "proof_type": "cumulative_observation",
+        "target_id": "qobs-sim-2023-h1-net_profit_parent-2023-current",
+        "source_sha256s": [
+          "e792103379cca4a7e8714c8e86307b946ef12cd6c899f56f5a526ab5af0b9f0e"
+        ],
+        "evidence_ids": [
+          "qev-sim-2023-h1-net_profit_parent-2023-current"
+        ],
+        "binding_sha256": "e10e9af2ebd55a85f20c3e1611d235fbe02e58edb179c67971b89c861c976b50",
+        "issued_at": "2026-10-03T03:40:21.251085+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "observation_id": "qobs-sim-2023-h1-net_profit_parent-2022-comparative",
+      "metric_id": "net_profit_parent",
+      "company_id": "SIM-QUARTERLY-001",
+      "report_year": 2023,
+      "report_period": "H1",
+      "observation_year": 2022,
+      "column_role": "comparative",
+      "basis": "year_to_date",
+      "statement_type": "income_statement",
+      "scope": "consolidated",
+      "unit_multiplier": "1",
+      "evidence": {
+        "evidence_id": "qev-sim-2023-h1-net_profit_parent-2022-comparative",
+        "document_id": "sim-2023-h1",
+        "source_sha256": "e792103379cca4a7e8714c8e86307b946ef12cd6c899f56f5a526ab5af0b9f0e",
+        "pdf_page": 2,
+        "printed_page": null,
+        "table_title": "合并利润表",
+        "row_label": "归属于母公司股东的净利润",
+        "column_label": "2022年半年度",
+        "value_raw": "230000",
+        "value_normalized": "230000",
+        "unit": "元",
+        "currency": "CNY",
+        "period_start": "2022-01-01",
+        "period_end": "2022-06-30",
+        "period_type": "duration",
+        "value_region": {
+          "text": "230000",
+          "page": 2,
+          "bbox": {
+            "x0": 445.0,
+            "y0": 265.0,
+            "x1": 505.0,
+            "y1": 277.0
+          }
+        },
+        "row_region": {
+          "text": "归属于母公司股东的净利润",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 265.0,
+            "x1": 174.0,
+            "y1": 277.0
+          }
+        },
+        "column_region": {
+          "text": "2022年半年度",
+          "page": 2,
+          "bbox": {
+            "x0": 438.0,
+            "y0": 155.0,
+            "x1": 518.0,
+            "y1": 167.0
+          }
+        },
+        "title_region": {
+          "text": "合并利润表",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 68.0,
+            "x1": 124.0,
+            "y1": 84.8
+          }
+        },
+        "unit_region": {
+          "text": "元",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 120.0,
+            "x1": 94.0,
+            "y1": 132.0
+          }
+        },
+        "extraction_method": "pymupdf_text_search_and_row_column_geometry",
+        "surrounding_text": "归属于母公司股东的净利润",
+        "legacy_text_region": null,
+        "limitations": [],
+        "coordinate_system": "pymupdf_page_top_left"
+      },
+      "limitations": [],
+      "source_document_id": "sim-2023-h1",
+      "verification": {
+        "verification_id": "qverify-600ba0ae-4417-47ad-9da0-a82491891163",
+        "target_type": "source_observation",
+        "target_id": "qobs-sim-2023-h1-net_profit_parent-2022-comparative",
+        "status": "verified",
+        "checks": [
+          "重新打开源 PDF 并核对完整 SHA256。",
+          "从 PDF 首页重新定位公司标识。",
+          "从 PDF 首页确认报告年份和报告类型。",
+          "从 PDF 表题重新确认合并报表类型。",
+          "忽略提取器坐标，按原文指标行及期间列重新定位单元格。",
+          "按原文单位倍率将原始值重新标准化为 Decimal。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2023-h1-net_profit_parent-2022-comparative"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.262472+00:00",
+        "details": {
+          "source_document_id": "sim-2023-h1",
+          "relocated_cells": [
+            {
+              "pdf_page": 2,
+              "raw_value": "230000",
+              "row_label": "归属于母公司股东的净利润",
+              "column_label": "2022年半年度",
+              "unit": "元",
+              "currency": "CNY",
+              "value_bbox": [
+                445.0,
+                265.0,
+                505.0,
+                277.0
+              ],
+              "row_bbox": [
+                54.0,
+                265.0,
+                174.0,
+                277.0
+              ],
+              "table_title_bbox": [
+                54.0,
+                68.0,
+                124.0,
+                84.80000305175781
+              ],
+              "unit_bbox": [
+                54.0,
+                120.0,
+                94.0,
+                132.0
+              ]
+            }
+          ],
+          "recomputed_normalized_value": "230000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-9dae93d6-4767-48ca-be94-27e96969385c",
+        "proof_type": "cumulative_observation",
+        "target_id": "qobs-sim-2023-h1-net_profit_parent-2022-comparative",
+        "source_sha256s": [
+          "e792103379cca4a7e8714c8e86307b946ef12cd6c899f56f5a526ab5af0b9f0e"
+        ],
+        "evidence_ids": [
+          "qev-sim-2023-h1-net_profit_parent-2022-comparative"
+        ],
+        "binding_sha256": "c117bab399b353f66ea930ce501fc71d0cfceba5b291bba4a55f2db0f7818c00",
+        "issued_at": "2026-10-03T03:40:21.262606+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "observation_id": "qobs-sim-2023-h1-operating_cash_flow-2023-current",
+      "metric_id": "operating_cash_flow",
+      "company_id": "SIM-QUARTERLY-001",
+      "report_year": 2023,
+      "report_period": "H1",
+      "observation_year": 2023,
+      "column_role": "current",
+      "basis": "year_to_date",
+      "statement_type": "cash_flow_statement",
+      "scope": "consolidated",
+      "unit_multiplier": "1",
+      "evidence": {
+        "evidence_id": "qev-sim-2023-h1-operating_cash_flow-2023-current",
+        "document_id": "sim-2023-h1",
+        "source_sha256": "e792103379cca4a7e8714c8e86307b946ef12cd6c899f56f5a526ab5af0b9f0e",
+        "pdf_page": 3,
+        "printed_page": null,
+        "table_title": "合并现金流量表",
+        "row_label": "经营活动产生的现金流量净额",
+        "column_label": "2023年半年度",
+        "value_raw": "80000",
+        "value_normalized": "80000",
+        "unit": "元",
+        "currency": "CNY",
+        "period_start": "2023-01-01",
+        "period_end": "2023-06-30",
+        "period_type": "duration",
+        "value_region": {
+          "text": "80000",
+          "page": 3,
+          "bbox": {
+            "x0": 330.0,
+            "y0": 210.0,
+            "x1": 380.0,
+            "y1": 222.0
+          }
+        },
+        "row_region": {
+          "text": "经营活动产生的现金流量净额",
+          "page": 3,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 210.0,
+            "x1": 184.0,
+            "y1": 222.0
+          }
+        },
+        "column_region": {
+          "text": "2023年半年度",
+          "page": 3,
+          "bbox": {
+            "x0": 321.0,
+            "y0": 155.0,
+            "x1": 401.0,
+            "y1": 167.0
+          }
+        },
+        "title_region": {
+          "text": "合并现金流量表",
+          "page": 3,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 68.0,
+            "x1": 152.0,
+            "y1": 84.8
+          }
+        },
+        "unit_region": {
+          "text": "元",
+          "page": 3,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 120.0,
+            "x1": 94.0,
+            "y1": 132.0
+          }
+        },
+        "extraction_method": "pymupdf_text_search_and_row_column_geometry",
+        "surrounding_text": "经营活动产生的现金流量净额",
+        "legacy_text_region": null,
+        "limitations": [],
+        "coordinate_system": "pymupdf_page_top_left"
+      },
+      "limitations": [],
+      "source_document_id": "sim-2023-h1",
+      "verification": {
+        "verification_id": "qverify-77b37431-55ae-44cf-84fb-d3d0e3ceba9a",
+        "target_type": "source_observation",
+        "target_id": "qobs-sim-2023-h1-operating_cash_flow-2023-current",
+        "status": "verified",
+        "checks": [
+          "重新打开源 PDF 并核对完整 SHA256。",
+          "从 PDF 首页重新定位公司标识。",
+          "从 PDF 首页确认报告年份和报告类型。",
+          "从 PDF 表题重新确认合并报表类型。",
+          "忽略提取器坐标，按原文指标行及期间列重新定位单元格。",
+          "按原文单位倍率将原始值重新标准化为 Decimal。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2023-h1-operating_cash_flow-2023-current"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.273567+00:00",
+        "details": {
+          "source_document_id": "sim-2023-h1",
+          "relocated_cells": [
+            {
+              "pdf_page": 3,
+              "raw_value": "80000",
+              "row_label": "经营活动产生的现金流量净额",
+              "column_label": "2023年半年度",
+              "unit": "元",
+              "currency": "CNY",
+              "value_bbox": [
+                330.0,
+                210.0,
+                380.0,
+                222.0
+              ],
+              "row_bbox": [
+                54.0,
+                210.0,
+                184.0,
+                222.0
+              ],
+              "table_title_bbox": [
+                54.0,
+                68.0,
+                152.0,
+                84.80000305175781
+              ],
+              "unit_bbox": [
+                54.0,
+                120.0,
+                94.0,
+                132.0
+              ]
+            }
+          ],
+          "recomputed_normalized_value": "80000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-67e557be-cdd8-4f30-abc7-9a44409c50e1",
+        "proof_type": "cumulative_observation",
+        "target_id": "qobs-sim-2023-h1-operating_cash_flow-2023-current",
+        "source_sha256s": [
+          "e792103379cca4a7e8714c8e86307b946ef12cd6c899f56f5a526ab5af0b9f0e"
+        ],
+        "evidence_ids": [
+          "qev-sim-2023-h1-operating_cash_flow-2023-current"
+        ],
+        "binding_sha256": "7bda0f2a21f875a88858d730277fd36a9a87026d3e5f82169ec0fa72d9b7e6ca",
+        "issued_at": "2026-10-03T03:40:21.273735+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "observation_id": "qobs-sim-2023-h1-operating_cash_flow-2022-comparative",
+      "metric_id": "operating_cash_flow",
+      "company_id": "SIM-QUARTERLY-001",
+      "report_year": 2023,
+      "report_period": "H1",
+      "observation_year": 2022,
+      "column_role": "comparative",
+      "basis": "year_to_date",
+      "statement_type": "cash_flow_statement",
+      "scope": "consolidated",
+      "unit_multiplier": "1",
+      "evidence": {
+        "evidence_id": "qev-sim-2023-h1-operating_cash_flow-2022-comparative",
+        "document_id": "sim-2023-h1",
+        "source_sha256": "e792103379cca4a7e8714c8e86307b946ef12cd6c899f56f5a526ab5af0b9f0e",
+        "pdf_page": 3,
+        "printed_page": null,
+        "table_title": "合并现金流量表",
+        "row_label": "经营活动产生的现金流量净额",
+        "column_label": "2022年半年度",
+        "value_raw": "50000",
+        "value_normalized": "50000",
+        "unit": "元",
+        "currency": "CNY",
+        "period_start": "2022-01-01",
+        "period_end": "2022-06-30",
+        "period_type": "duration",
+        "value_region": {
+          "text": "50000",
+          "page": 3,
+          "bbox": {
+            "x0": 445.0,
+            "y0": 210.0,
+            "x1": 495.0,
+            "y1": 222.0
+          }
+        },
+        "row_region": {
+          "text": "经营活动产生的现金流量净额",
+          "page": 3,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 210.0,
+            "x1": 184.0,
+            "y1": 222.0
+          }
+        },
+        "column_region": {
+          "text": "2022年半年度",
+          "page": 3,
+          "bbox": {
+            "x0": 438.0,
+            "y0": 155.0,
+            "x1": 518.0,
+            "y1": 167.0
+          }
+        },
+        "title_region": {
+          "text": "合并现金流量表",
+          "page": 3,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 68.0,
+            "x1": 152.0,
+            "y1": 84.8
+          }
+        },
+        "unit_region": {
+          "text": "元",
+          "page": 3,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 120.0,
+            "x1": 94.0,
+            "y1": 132.0
+          }
+        },
+        "extraction_method": "pymupdf_text_search_and_row_column_geometry",
+        "surrounding_text": "经营活动产生的现金流量净额",
+        "legacy_text_region": null,
+        "limitations": [],
+        "coordinate_system": "pymupdf_page_top_left"
+      },
+      "limitations": [],
+      "source_document_id": "sim-2023-h1",
+      "verification": {
+        "verification_id": "qverify-3289ce42-416f-4506-ab39-8299e645a242",
+        "target_type": "source_observation",
+        "target_id": "qobs-sim-2023-h1-operating_cash_flow-2022-comparative",
+        "status": "verified",
+        "checks": [
+          "重新打开源 PDF 并核对完整 SHA256。",
+          "从 PDF 首页重新定位公司标识。",
+          "从 PDF 首页确认报告年份和报告类型。",
+          "从 PDF 表题重新确认合并报表类型。",
+          "忽略提取器坐标，按原文指标行及期间列重新定位单元格。",
+          "按原文单位倍率将原始值重新标准化为 Decimal。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2023-h1-operating_cash_flow-2022-comparative"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.284559+00:00",
+        "details": {
+          "source_document_id": "sim-2023-h1",
+          "relocated_cells": [
+            {
+              "pdf_page": 3,
+              "raw_value": "50000",
+              "row_label": "经营活动产生的现金流量净额",
+              "column_label": "2022年半年度",
+              "unit": "元",
+              "currency": "CNY",
+              "value_bbox": [
+                445.0,
+                210.0,
+                495.0,
+                222.0
+              ],
+              "row_bbox": [
+                54.0,
+                210.0,
+                184.0,
+                222.0
+              ],
+              "table_title_bbox": [
+                54.0,
+                68.0,
+                152.0,
+                84.80000305175781
+              ],
+              "unit_bbox": [
+                54.0,
+                120.0,
+                94.0,
+                132.0
+              ]
+            }
+          ],
+          "recomputed_normalized_value": "50000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-fda8bada-9ad2-4b25-8bd1-39701b14eaa7",
+        "proof_type": "cumulative_observation",
+        "target_id": "qobs-sim-2023-h1-operating_cash_flow-2022-comparative",
+        "source_sha256s": [
+          "e792103379cca4a7e8714c8e86307b946ef12cd6c899f56f5a526ab5af0b9f0e"
+        ],
+        "evidence_ids": [
+          "qev-sim-2023-h1-operating_cash_flow-2022-comparative"
+        ],
+        "binding_sha256": "96770d611f8578d1bc1bb50bf11be3c261980010719468ee3ec3cc90a9cfdb13",
+        "issued_at": "2026-10-03T03:40:21.284714+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "observation_id": "qobs-sim-2024-q1-revenue-2024-current",
+      "metric_id": "revenue",
+      "company_id": "SIM-QUARTERLY-001",
+      "report_year": 2024,
+      "report_period": "Q1",
+      "observation_year": 2024,
+      "column_role": "current",
+      "basis": "year_to_date",
+      "statement_type": "income_statement",
+      "scope": "consolidated",
+      "unit_multiplier": "1",
+      "evidence": {
+        "evidence_id": "qev-sim-2024-q1-revenue-2024-current",
+        "document_id": "sim-2024-q1",
+        "source_sha256": "06521c459463b2d153f3dc0e26e3eaa9c4ccf873e1dd6560d0adf0ffaf36bfb3",
+        "pdf_page": 2,
+        "printed_page": null,
+        "table_title": "合并利润表",
+        "row_label": "营业收入",
+        "column_label": "2024年第一季度",
+        "value_raw": "1200000",
+        "value_normalized": "1200000",
+        "unit": "元",
+        "currency": "CNY",
+        "period_start": "2024-01-01",
+        "period_end": "2024-03-31",
+        "period_type": "duration",
+        "value_region": {
+          "text": "1200000",
+          "page": 2,
+          "bbox": {
+            "x0": 330.0,
+            "y0": 210.0,
+            "x1": 400.0,
+            "y1": 222.0
+          }
+        },
+        "row_region": {
+          "text": "营业收入",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 210.0,
+            "x1": 94.0,
+            "y1": 222.0
+          }
+        },
+        "column_region": {
+          "text": "2024年第一季度",
+          "page": 2,
+          "bbox": {
+            "x0": 321.0,
+            "y0": 155.0,
+            "x1": 411.0,
+            "y1": 167.0
+          }
+        },
+        "title_region": {
+          "text": "合并利润表",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 68.0,
+            "x1": 124.0,
+            "y1": 84.8
+          }
+        },
+        "unit_region": {
+          "text": "元",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 120.0,
+            "x1": 94.0,
+            "y1": 132.0
+          }
+        },
+        "extraction_method": "pymupdf_text_search_and_row_column_geometry",
+        "surrounding_text": "营业收入",
+        "legacy_text_region": null,
+        "limitations": [],
+        "coordinate_system": "pymupdf_page_top_left"
+      },
+      "limitations": [],
+      "source_document_id": "sim-2024-q1",
+      "verification": {
+        "verification_id": "qverify-ecd0d49c-405d-4921-a61e-fb0702649572",
+        "target_type": "source_observation",
+        "target_id": "qobs-sim-2024-q1-revenue-2024-current",
+        "status": "verified",
+        "checks": [
+          "重新打开源 PDF 并核对完整 SHA256。",
+          "从 PDF 首页重新定位公司标识。",
+          "从 PDF 首页确认报告年份和报告类型。",
+          "从 PDF 表题重新确认合并报表类型。",
+          "忽略提取器坐标，按原文指标行及期间列重新定位单元格。",
+          "按原文单位倍率将原始值重新标准化为 Decimal。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2024-q1-revenue-2024-current"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.296602+00:00",
+        "details": {
+          "source_document_id": "sim-2024-q1",
+          "relocated_cells": [
+            {
+              "pdf_page": 2,
+              "raw_value": "1200000",
+              "row_label": "营业收入",
+              "column_label": "2024年第一季度",
+              "unit": "元",
+              "currency": "CNY",
+              "value_bbox": [
+                330.0,
+                210.0,
+                400.0,
+                222.0
+              ],
+              "row_bbox": [
+                54.0,
+                210.0,
+                94.0,
+                222.0
+              ],
+              "table_title_bbox": [
+                54.0,
+                68.0,
+                124.0,
+                84.80000305175781
+              ],
+              "unit_bbox": [
+                54.0,
+                120.0,
+                94.0,
+                132.0
+              ]
+            }
+          ],
+          "recomputed_normalized_value": "1200000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-9ef211cc-15b5-4d2a-8e3e-0c0df8e174c8",
+        "proof_type": "cumulative_observation",
+        "target_id": "qobs-sim-2024-q1-revenue-2024-current",
+        "source_sha256s": [
+          "06521c459463b2d153f3dc0e26e3eaa9c4ccf873e1dd6560d0adf0ffaf36bfb3"
+        ],
+        "evidence_ids": [
+          "qev-sim-2024-q1-revenue-2024-current"
+        ],
+        "binding_sha256": "f91834510f940dc36bbe8e743b5701f3a66882fb1db5cdbbe6143d34e52be985",
+        "issued_at": "2026-10-03T03:40:21.296767+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "observation_id": "qobs-sim-2024-q1-revenue-2023-comparative",
+      "metric_id": "revenue",
+      "company_id": "SIM-QUARTERLY-001",
+      "report_year": 2024,
+      "report_period": "Q1",
+      "observation_year": 2023,
+      "column_role": "comparative",
+      "basis": "year_to_date",
+      "statement_type": "income_statement",
+      "scope": "consolidated",
+      "unit_multiplier": "1",
+      "evidence": {
+        "evidence_id": "qev-sim-2024-q1-revenue-2023-comparative",
+        "document_id": "sim-2024-q1",
+        "source_sha256": "06521c459463b2d153f3dc0e26e3eaa9c4ccf873e1dd6560d0adf0ffaf36bfb3",
+        "pdf_page": 2,
+        "printed_page": null,
+        "table_title": "合并利润表",
+        "row_label": "营业收入",
+        "column_label": "2023年第一季度",
+        "value_raw": "1000000",
+        "value_normalized": "1000000",
+        "unit": "元",
+        "currency": "CNY",
+        "period_start": "2023-01-01",
+        "period_end": "2023-03-31",
+        "period_type": "duration",
+        "value_region": {
+          "text": "1000000",
+          "page": 2,
+          "bbox": {
+            "x0": 445.0,
+            "y0": 210.0,
+            "x1": 515.0,
+            "y1": 222.0
+          }
+        },
+        "row_region": {
+          "text": "营业收入",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 210.0,
+            "x1": 94.0,
+            "y1": 222.0
+          }
+        },
+        "column_region": {
+          "text": "2023年第一季度",
+          "page": 2,
+          "bbox": {
+            "x0": 438.0,
+            "y0": 155.0,
+            "x1": 528.0,
+            "y1": 167.0
+          }
+        },
+        "title_region": {
+          "text": "合并利润表",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 68.0,
+            "x1": 124.0,
+            "y1": 84.8
+          }
+        },
+        "unit_region": {
+          "text": "元",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 120.0,
+            "x1": 94.0,
+            "y1": 132.0
+          }
+        },
+        "extraction_method": "pymupdf_text_search_and_row_column_geometry",
+        "surrounding_text": "营业收入",
+        "legacy_text_region": null,
+        "limitations": [],
+        "coordinate_system": "pymupdf_page_top_left"
+      },
+      "limitations": [],
+      "source_document_id": "sim-2024-q1",
+      "verification": {
+        "verification_id": "qverify-106d55ba-966a-43e7-851e-a2ee630731a2",
+        "target_type": "source_observation",
+        "target_id": "qobs-sim-2024-q1-revenue-2023-comparative",
+        "status": "verified",
+        "checks": [
+          "重新打开源 PDF 并核对完整 SHA256。",
+          "从 PDF 首页重新定位公司标识。",
+          "从 PDF 首页确认报告年份和报告类型。",
+          "从 PDF 表题重新确认合并报表类型。",
+          "忽略提取器坐标，按原文指标行及期间列重新定位单元格。",
+          "按原文单位倍率将原始值重新标准化为 Decimal。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2024-q1-revenue-2023-comparative"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.308165+00:00",
+        "details": {
+          "source_document_id": "sim-2024-q1",
+          "relocated_cells": [
+            {
+              "pdf_page": 2,
+              "raw_value": "1000000",
+              "row_label": "营业收入",
+              "column_label": "2023年第一季度",
+              "unit": "元",
+              "currency": "CNY",
+              "value_bbox": [
+                445.0,
+                210.0,
+                515.0,
+                222.0
+              ],
+              "row_bbox": [
+                54.0,
+                210.0,
+                94.0,
+                222.0
+              ],
+              "table_title_bbox": [
+                54.0,
+                68.0,
+                124.0,
+                84.80000305175781
+              ],
+              "unit_bbox": [
+                54.0,
+                120.0,
+                94.0,
+                132.0
+              ]
+            }
+          ],
+          "recomputed_normalized_value": "1000000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-1191e94f-c0c9-4519-a759-16bc336eab17",
+        "proof_type": "cumulative_observation",
+        "target_id": "qobs-sim-2024-q1-revenue-2023-comparative",
+        "source_sha256s": [
+          "06521c459463b2d153f3dc0e26e3eaa9c4ccf873e1dd6560d0adf0ffaf36bfb3"
+        ],
+        "evidence_ids": [
+          "qev-sim-2024-q1-revenue-2023-comparative"
+        ],
+        "binding_sha256": "45b5103f7cb8d514ca7977161a1ef5d8fc6c568d8c3efba7620df141fd87787c",
+        "issued_at": "2026-10-03T03:40:21.308276+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "observation_id": "qobs-sim-2024-q1-net_profit_parent-2024-current",
+      "metric_id": "net_profit_parent",
+      "company_id": "SIM-QUARTERLY-001",
+      "report_year": 2024,
+      "report_period": "Q1",
+      "observation_year": 2024,
+      "column_role": "current",
+      "basis": "year_to_date",
+      "statement_type": "income_statement",
+      "scope": "consolidated",
+      "unit_multiplier": "1",
+      "evidence": {
+        "evidence_id": "qev-sim-2024-q1-net_profit_parent-2024-current",
+        "document_id": "sim-2024-q1",
+        "source_sha256": "06521c459463b2d153f3dc0e26e3eaa9c4ccf873e1dd6560d0adf0ffaf36bfb3",
+        "pdf_page": 2,
+        "printed_page": null,
+        "table_title": "合并利润表",
+        "row_label": "归属于母公司股东的净利润",
+        "column_label": "2024年第一季度",
+        "value_raw": "120000",
+        "value_normalized": "120000",
+        "unit": "元",
+        "currency": "CNY",
+        "period_start": "2024-01-01",
+        "period_end": "2024-03-31",
+        "period_type": "duration",
+        "value_region": {
+          "text": "120000",
+          "page": 2,
+          "bbox": {
+            "x0": 330.0,
+            "y0": 265.0,
+            "x1": 390.0,
+            "y1": 277.0
+          }
+        },
+        "row_region": {
+          "text": "归属于母公司股东的净利润",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 265.0,
+            "x1": 174.0,
+            "y1": 277.0
+          }
+        },
+        "column_region": {
+          "text": "2024年第一季度",
+          "page": 2,
+          "bbox": {
+            "x0": 321.0,
+            "y0": 155.0,
+            "x1": 411.0,
+            "y1": 167.0
+          }
+        },
+        "title_region": {
+          "text": "合并利润表",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 68.0,
+            "x1": 124.0,
+            "y1": 84.8
+          }
+        },
+        "unit_region": {
+          "text": "元",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 120.0,
+            "x1": 94.0,
+            "y1": 132.0
+          }
+        },
+        "extraction_method": "pymupdf_text_search_and_row_column_geometry",
+        "surrounding_text": "归属于母公司股东的净利润",
+        "legacy_text_region": null,
+        "limitations": [],
+        "coordinate_system": "pymupdf_page_top_left"
+      },
+      "limitations": [],
+      "source_document_id": "sim-2024-q1",
+      "verification": {
+        "verification_id": "qverify-387b551f-dc0d-4c5f-8ae9-a98a2cc55b19",
+        "target_type": "source_observation",
+        "target_id": "qobs-sim-2024-q1-net_profit_parent-2024-current",
+        "status": "verified",
+        "checks": [
+          "重新打开源 PDF 并核对完整 SHA256。",
+          "从 PDF 首页重新定位公司标识。",
+          "从 PDF 首页确认报告年份和报告类型。",
+          "从 PDF 表题重新确认合并报表类型。",
+          "忽略提取器坐标，按原文指标行及期间列重新定位单元格。",
+          "按原文单位倍率将原始值重新标准化为 Decimal。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2024-q1-net_profit_parent-2024-current"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.319757+00:00",
+        "details": {
+          "source_document_id": "sim-2024-q1",
+          "relocated_cells": [
+            {
+              "pdf_page": 2,
+              "raw_value": "120000",
+              "row_label": "归属于母公司股东的净利润",
+              "column_label": "2024年第一季度",
+              "unit": "元",
+              "currency": "CNY",
+              "value_bbox": [
+                330.0,
+                265.0,
+                390.0,
+                277.0
+              ],
+              "row_bbox": [
+                54.0,
+                265.0,
+                174.0,
+                277.0
+              ],
+              "table_title_bbox": [
+                54.0,
+                68.0,
+                124.0,
+                84.80000305175781
+              ],
+              "unit_bbox": [
+                54.0,
+                120.0,
+                94.0,
+                132.0
+              ]
+            }
+          ],
+          "recomputed_normalized_value": "120000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-c8c80b4a-23cb-4f41-8ee3-8b3871ce4ade",
+        "proof_type": "cumulative_observation",
+        "target_id": "qobs-sim-2024-q1-net_profit_parent-2024-current",
+        "source_sha256s": [
+          "06521c459463b2d153f3dc0e26e3eaa9c4ccf873e1dd6560d0adf0ffaf36bfb3"
+        ],
+        "evidence_ids": [
+          "qev-sim-2024-q1-net_profit_parent-2024-current"
+        ],
+        "binding_sha256": "e9c3451161dc83600f036bb137dc23d2af92ebf510ea905001fc8c393b6c3623",
+        "issued_at": "2026-10-03T03:40:21.319905+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "observation_id": "qobs-sim-2024-q1-net_profit_parent-2023-comparative",
+      "metric_id": "net_profit_parent",
+      "company_id": "SIM-QUARTERLY-001",
+      "report_year": 2024,
+      "report_period": "Q1",
+      "observation_year": 2023,
+      "column_role": "comparative",
+      "basis": "year_to_date",
+      "statement_type": "income_statement",
+      "scope": "consolidated",
+      "unit_multiplier": "1",
+      "evidence": {
+        "evidence_id": "qev-sim-2024-q1-net_profit_parent-2023-comparative",
+        "document_id": "sim-2024-q1",
+        "source_sha256": "06521c459463b2d153f3dc0e26e3eaa9c4ccf873e1dd6560d0adf0ffaf36bfb3",
+        "pdf_page": 2,
+        "printed_page": null,
+        "table_title": "合并利润表",
+        "row_label": "归属于母公司股东的净利润",
+        "column_label": "2023年第一季度",
+        "value_raw": "100000",
+        "value_normalized": "100000",
+        "unit": "元",
+        "currency": "CNY",
+        "period_start": "2023-01-01",
+        "period_end": "2023-03-31",
+        "period_type": "duration",
+        "value_region": {
+          "text": "100000",
+          "page": 2,
+          "bbox": {
+            "x0": 445.0,
+            "y0": 265.0,
+            "x1": 505.0,
+            "y1": 277.0
+          }
+        },
+        "row_region": {
+          "text": "归属于母公司股东的净利润",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 265.0,
+            "x1": 174.0,
+            "y1": 277.0
+          }
+        },
+        "column_region": {
+          "text": "2023年第一季度",
+          "page": 2,
+          "bbox": {
+            "x0": 438.0,
+            "y0": 155.0,
+            "x1": 528.0,
+            "y1": 167.0
+          }
+        },
+        "title_region": {
+          "text": "合并利润表",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 68.0,
+            "x1": 124.0,
+            "y1": 84.8
+          }
+        },
+        "unit_region": {
+          "text": "元",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 120.0,
+            "x1": 94.0,
+            "y1": 132.0
+          }
+        },
+        "extraction_method": "pymupdf_text_search_and_row_column_geometry",
+        "surrounding_text": "归属于母公司股东的净利润",
+        "legacy_text_region": null,
+        "limitations": [],
+        "coordinate_system": "pymupdf_page_top_left"
+      },
+      "limitations": [],
+      "source_document_id": "sim-2024-q1",
+      "verification": {
+        "verification_id": "qverify-e3ef191a-2ad6-4242-af2c-72ed7b5e6497",
+        "target_type": "source_observation",
+        "target_id": "qobs-sim-2024-q1-net_profit_parent-2023-comparative",
+        "status": "verified",
+        "checks": [
+          "重新打开源 PDF 并核对完整 SHA256。",
+          "从 PDF 首页重新定位公司标识。",
+          "从 PDF 首页确认报告年份和报告类型。",
+          "从 PDF 表题重新确认合并报表类型。",
+          "忽略提取器坐标，按原文指标行及期间列重新定位单元格。",
+          "按原文单位倍率将原始值重新标准化为 Decimal。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2024-q1-net_profit_parent-2023-comparative"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.331556+00:00",
+        "details": {
+          "source_document_id": "sim-2024-q1",
+          "relocated_cells": [
+            {
+              "pdf_page": 2,
+              "raw_value": "100000",
+              "row_label": "归属于母公司股东的净利润",
+              "column_label": "2023年第一季度",
+              "unit": "元",
+              "currency": "CNY",
+              "value_bbox": [
+                445.0,
+                265.0,
+                505.0,
+                277.0
+              ],
+              "row_bbox": [
+                54.0,
+                265.0,
+                174.0,
+                277.0
+              ],
+              "table_title_bbox": [
+                54.0,
+                68.0,
+                124.0,
+                84.80000305175781
+              ],
+              "unit_bbox": [
+                54.0,
+                120.0,
+                94.0,
+                132.0
+              ]
+            }
+          ],
+          "recomputed_normalized_value": "100000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-4dd0de28-b8d6-4ce9-8d42-9e60acfb04f3",
+        "proof_type": "cumulative_observation",
+        "target_id": "qobs-sim-2024-q1-net_profit_parent-2023-comparative",
+        "source_sha256s": [
+          "06521c459463b2d153f3dc0e26e3eaa9c4ccf873e1dd6560d0adf0ffaf36bfb3"
+        ],
+        "evidence_ids": [
+          "qev-sim-2024-q1-net_profit_parent-2023-comparative"
+        ],
+        "binding_sha256": "f4933de00226effe0b56d8869fc93222700d8f1fc6be45be0184ede9d913bbe1",
+        "issued_at": "2026-10-03T03:40:21.331689+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "observation_id": "qobs-sim-2024-q1-operating_cash_flow-2024-current",
+      "metric_id": "operating_cash_flow",
+      "company_id": "SIM-QUARTERLY-001",
+      "report_year": 2024,
+      "report_period": "Q1",
+      "observation_year": 2024,
+      "column_role": "current",
+      "basis": "year_to_date",
+      "statement_type": "cash_flow_statement",
+      "scope": "consolidated",
+      "unit_multiplier": "1",
+      "evidence": {
+        "evidence_id": "qev-sim-2024-q1-operating_cash_flow-2024-current",
+        "document_id": "sim-2024-q1",
+        "source_sha256": "06521c459463b2d153f3dc0e26e3eaa9c4ccf873e1dd6560d0adf0ffaf36bfb3",
+        "pdf_page": 3,
+        "printed_page": null,
+        "table_title": "合并现金流量表",
+        "row_label": "经营活动产生的现金流量净额",
+        "column_label": "2024年第一季度",
+        "value_raw": "-20000",
+        "value_normalized": "-20000",
+        "unit": "元",
+        "currency": "CNY",
+        "period_start": "2024-01-01",
+        "period_end": "2024-03-31",
+        "period_type": "duration",
+        "value_region": {
+          "text": "-20000",
+          "page": 3,
+          "bbox": {
+            "x0": 330.0,
+            "y0": 210.0,
+            "x1": 390.0,
+            "y1": 222.0
+          }
+        },
+        "row_region": {
+          "text": "经营活动产生的现金流量净额",
+          "page": 3,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 210.0,
+            "x1": 184.0,
+            "y1": 222.0
+          }
+        },
+        "column_region": {
+          "text": "2024年第一季度",
+          "page": 3,
+          "bbox": {
+            "x0": 321.0,
+            "y0": 155.0,
+            "x1": 411.0,
+            "y1": 167.0
+          }
+        },
+        "title_region": {
+          "text": "合并现金流量表",
+          "page": 3,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 68.0,
+            "x1": 152.0,
+            "y1": 84.8
+          }
+        },
+        "unit_region": {
+          "text": "元",
+          "page": 3,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 120.0,
+            "x1": 94.0,
+            "y1": 132.0
+          }
+        },
+        "extraction_method": "pymupdf_text_search_and_row_column_geometry",
+        "surrounding_text": "经营活动产生的现金流量净额",
+        "legacy_text_region": null,
+        "limitations": [],
+        "coordinate_system": "pymupdf_page_top_left"
+      },
+      "limitations": [],
+      "source_document_id": "sim-2024-q1",
+      "verification": {
+        "verification_id": "qverify-7bdd1a02-b05a-4b5e-b756-2cc0aaa7f04d",
+        "target_type": "source_observation",
+        "target_id": "qobs-sim-2024-q1-operating_cash_flow-2024-current",
+        "status": "verified",
+        "checks": [
+          "重新打开源 PDF 并核对完整 SHA256。",
+          "从 PDF 首页重新定位公司标识。",
+          "从 PDF 首页确认报告年份和报告类型。",
+          "从 PDF 表题重新确认合并报表类型。",
+          "忽略提取器坐标，按原文指标行及期间列重新定位单元格。",
+          "按原文单位倍率将原始值重新标准化为 Decimal。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2024-q1-operating_cash_flow-2024-current"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.342600+00:00",
+        "details": {
+          "source_document_id": "sim-2024-q1",
+          "relocated_cells": [
+            {
+              "pdf_page": 3,
+              "raw_value": "-20000",
+              "row_label": "经营活动产生的现金流量净额",
+              "column_label": "2024年第一季度",
+              "unit": "元",
+              "currency": "CNY",
+              "value_bbox": [
+                330.0,
+                210.0,
+                390.0,
+                222.0
+              ],
+              "row_bbox": [
+                54.0,
+                210.0,
+                184.0,
+                222.0
+              ],
+              "table_title_bbox": [
+                54.0,
+                68.0,
+                152.0,
+                84.80000305175781
+              ],
+              "unit_bbox": [
+                54.0,
+                120.0,
+                94.0,
+                132.0
+              ]
+            }
+          ],
+          "recomputed_normalized_value": "-20000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-ec044c30-1b0f-4722-b981-19a8f1f9849c",
+        "proof_type": "cumulative_observation",
+        "target_id": "qobs-sim-2024-q1-operating_cash_flow-2024-current",
+        "source_sha256s": [
+          "06521c459463b2d153f3dc0e26e3eaa9c4ccf873e1dd6560d0adf0ffaf36bfb3"
+        ],
+        "evidence_ids": [
+          "qev-sim-2024-q1-operating_cash_flow-2024-current"
+        ],
+        "binding_sha256": "63f8e5cf7adb251ed1b06a4bd7df729b83975d8228e036a6bac43a89f051a0c1",
+        "issued_at": "2026-10-03T03:40:21.342770+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "observation_id": "qobs-sim-2024-q1-operating_cash_flow-2023-comparative",
+      "metric_id": "operating_cash_flow",
+      "company_id": "SIM-QUARTERLY-001",
+      "report_year": 2024,
+      "report_period": "Q1",
+      "observation_year": 2023,
+      "column_role": "comparative",
+      "basis": "year_to_date",
+      "statement_type": "cash_flow_statement",
+      "scope": "consolidated",
+      "unit_multiplier": "1",
+      "evidence": {
+        "evidence_id": "qev-sim-2024-q1-operating_cash_flow-2023-comparative",
+        "document_id": "sim-2024-q1",
+        "source_sha256": "06521c459463b2d153f3dc0e26e3eaa9c4ccf873e1dd6560d0adf0ffaf36bfb3",
+        "pdf_page": 3,
+        "printed_page": null,
+        "table_title": "合并现金流量表",
+        "row_label": "经营活动产生的现金流量净额",
+        "column_label": "2023年第一季度",
+        "value_raw": "-20000",
+        "value_normalized": "-20000",
+        "unit": "元",
+        "currency": "CNY",
+        "period_start": "2023-01-01",
+        "period_end": "2023-03-31",
+        "period_type": "duration",
+        "value_region": {
+          "text": "-20000",
+          "page": 3,
+          "bbox": {
+            "x0": 445.0,
+            "y0": 210.0,
+            "x1": 505.0,
+            "y1": 222.0
+          }
+        },
+        "row_region": {
+          "text": "经营活动产生的现金流量净额",
+          "page": 3,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 210.0,
+            "x1": 184.0,
+            "y1": 222.0
+          }
+        },
+        "column_region": {
+          "text": "2023年第一季度",
+          "page": 3,
+          "bbox": {
+            "x0": 438.0,
+            "y0": 155.0,
+            "x1": 528.0,
+            "y1": 167.0
+          }
+        },
+        "title_region": {
+          "text": "合并现金流量表",
+          "page": 3,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 68.0,
+            "x1": 152.0,
+            "y1": 84.8
+          }
+        },
+        "unit_region": {
+          "text": "元",
+          "page": 3,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 120.0,
+            "x1": 94.0,
+            "y1": 132.0
+          }
+        },
+        "extraction_method": "pymupdf_text_search_and_row_column_geometry",
+        "surrounding_text": "经营活动产生的现金流量净额",
+        "legacy_text_region": null,
+        "limitations": [],
+        "coordinate_system": "pymupdf_page_top_left"
+      },
+      "limitations": [],
+      "source_document_id": "sim-2024-q1",
+      "verification": {
+        "verification_id": "qverify-a3e64524-3a13-439d-8164-d019aa15adc3",
+        "target_type": "source_observation",
+        "target_id": "qobs-sim-2024-q1-operating_cash_flow-2023-comparative",
+        "status": "verified",
+        "checks": [
+          "重新打开源 PDF 并核对完整 SHA256。",
+          "从 PDF 首页重新定位公司标识。",
+          "从 PDF 首页确认报告年份和报告类型。",
+          "从 PDF 表题重新确认合并报表类型。",
+          "忽略提取器坐标，按原文指标行及期间列重新定位单元格。",
+          "按原文单位倍率将原始值重新标准化为 Decimal。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2024-q1-operating_cash_flow-2023-comparative"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.354016+00:00",
+        "details": {
+          "source_document_id": "sim-2024-q1",
+          "relocated_cells": [
+            {
+              "pdf_page": 3,
+              "raw_value": "-20000",
+              "row_label": "经营活动产生的现金流量净额",
+              "column_label": "2023年第一季度",
+              "unit": "元",
+              "currency": "CNY",
+              "value_bbox": [
+                445.0,
+                210.0,
+                505.0,
+                222.0
+              ],
+              "row_bbox": [
+                54.0,
+                210.0,
+                184.0,
+                222.0
+              ],
+              "table_title_bbox": [
+                54.0,
+                68.0,
+                152.0,
+                84.80000305175781
+              ],
+              "unit_bbox": [
+                54.0,
+                120.0,
+                94.0,
+                132.0
+              ]
+            }
+          ],
+          "recomputed_normalized_value": "-20000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-d048b87e-ab2b-4304-8b7d-808e126ef580",
+        "proof_type": "cumulative_observation",
+        "target_id": "qobs-sim-2024-q1-operating_cash_flow-2023-comparative",
+        "source_sha256s": [
+          "06521c459463b2d153f3dc0e26e3eaa9c4ccf873e1dd6560d0adf0ffaf36bfb3"
+        ],
+        "evidence_ids": [
+          "qev-sim-2024-q1-operating_cash_flow-2023-comparative"
+        ],
+        "binding_sha256": "aed792cbe8573381415745be1f70052ba03de4f8761534bb5a2c45a2137bea4f",
+        "issued_at": "2026-10-03T03:40:21.354156+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "observation_id": "qobs-sim-2024-h1-revenue-2024-current",
+      "metric_id": "revenue",
+      "company_id": "SIM-QUARTERLY-001",
+      "report_year": 2024,
+      "report_period": "H1",
+      "observation_year": 2024,
+      "column_role": "current",
+      "basis": "year_to_date",
+      "statement_type": "income_statement",
+      "scope": "consolidated",
+      "unit_multiplier": "1",
+      "evidence": {
+        "evidence_id": "qev-sim-2024-h1-revenue-2024-current",
+        "document_id": "sim-2024-h1",
+        "source_sha256": "ee7a6a01c750a601b8829b1b710ee00d00f49dbdf4772d62198791b21abbfad2",
+        "pdf_page": 2,
+        "printed_page": null,
+        "table_title": "合并利润表",
+        "row_label": "营业收入",
+        "column_label": "2024年半年度",
+        "value_raw": "2700000",
+        "value_normalized": "2700000",
+        "unit": "元",
+        "currency": "CNY",
+        "period_start": "2024-01-01",
+        "period_end": "2024-06-30",
+        "period_type": "duration",
+        "value_region": {
+          "text": "2700000",
+          "page": 2,
+          "bbox": {
+            "x0": 330.0,
+            "y0": 210.0,
+            "x1": 400.0,
+            "y1": 222.0
+          }
+        },
+        "row_region": {
+          "text": "营业收入",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 210.0,
+            "x1": 94.0,
+            "y1": 222.0
+          }
+        },
+        "column_region": {
+          "text": "2024年半年度",
+          "page": 2,
+          "bbox": {
+            "x0": 321.0,
+            "y0": 155.0,
+            "x1": 401.0,
+            "y1": 167.0
+          }
+        },
+        "title_region": {
+          "text": "合并利润表",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 68.0,
+            "x1": 124.0,
+            "y1": 84.8
+          }
+        },
+        "unit_region": {
+          "text": "元",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 120.0,
+            "x1": 94.0,
+            "y1": 132.0
+          }
+        },
+        "extraction_method": "pymupdf_text_search_and_row_column_geometry",
+        "surrounding_text": "营业收入",
+        "legacy_text_region": null,
+        "limitations": [],
+        "coordinate_system": "pymupdf_page_top_left"
+      },
+      "limitations": [],
+      "source_document_id": "sim-2024-h1",
+      "verification": {
+        "verification_id": "qverify-bac4d6e5-14d4-4ef3-8aaa-4ae8af7d297e",
+        "target_type": "source_observation",
+        "target_id": "qobs-sim-2024-h1-revenue-2024-current",
+        "status": "verified",
+        "checks": [
+          "重新打开源 PDF 并核对完整 SHA256。",
+          "从 PDF 首页重新定位公司标识。",
+          "从 PDF 首页确认报告年份和报告类型。",
+          "从 PDF 表题重新确认合并报表类型。",
+          "忽略提取器坐标，按原文指标行及期间列重新定位单元格。",
+          "按原文单位倍率将原始值重新标准化为 Decimal。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2024-h1-revenue-2024-current"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.365618+00:00",
+        "details": {
+          "source_document_id": "sim-2024-h1",
+          "relocated_cells": [
+            {
+              "pdf_page": 2,
+              "raw_value": "2700000",
+              "row_label": "营业收入",
+              "column_label": "2024年半年度",
+              "unit": "元",
+              "currency": "CNY",
+              "value_bbox": [
+                330.0,
+                210.0,
+                400.0,
+                222.0
+              ],
+              "row_bbox": [
+                54.0,
+                210.0,
+                94.0,
+                222.0
+              ],
+              "table_title_bbox": [
+                54.0,
+                68.0,
+                124.0,
+                84.80000305175781
+              ],
+              "unit_bbox": [
+                54.0,
+                120.0,
+                94.0,
+                132.0
+              ]
+            }
+          ],
+          "recomputed_normalized_value": "2700000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-875af8bc-918d-4d04-856c-066dc0cb1a1b",
+        "proof_type": "cumulative_observation",
+        "target_id": "qobs-sim-2024-h1-revenue-2024-current",
+        "source_sha256s": [
+          "ee7a6a01c750a601b8829b1b710ee00d00f49dbdf4772d62198791b21abbfad2"
+        ],
+        "evidence_ids": [
+          "qev-sim-2024-h1-revenue-2024-current"
+        ],
+        "binding_sha256": "eb511a57228f8446d8c2cd2a047ba07fe5232f48ab3e1c9377fee52c4b76a754",
+        "issued_at": "2026-10-03T03:40:21.365739+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "observation_id": "qobs-sim-2024-h1-revenue-2023-comparative",
+      "metric_id": "revenue",
+      "company_id": "SIM-QUARTERLY-001",
+      "report_year": 2024,
+      "report_period": "H1",
+      "observation_year": 2023,
+      "column_role": "comparative",
+      "basis": "year_to_date",
+      "statement_type": "income_statement",
+      "scope": "consolidated",
+      "unit_multiplier": "1",
+      "evidence": {
+        "evidence_id": "qev-sim-2024-h1-revenue-2023-comparative",
+        "document_id": "sim-2024-h1",
+        "source_sha256": "ee7a6a01c750a601b8829b1b710ee00d00f49dbdf4772d62198791b21abbfad2",
+        "pdf_page": 2,
+        "printed_page": null,
+        "table_title": "合并利润表",
+        "row_label": "营业收入",
+        "column_label": "2023年半年度",
+        "value_raw": "2400000",
+        "value_normalized": "2400000",
+        "unit": "元",
+        "currency": "CNY",
+        "period_start": "2023-01-01",
+        "period_end": "2023-06-30",
+        "period_type": "duration",
+        "value_region": {
+          "text": "2400000",
+          "page": 2,
+          "bbox": {
+            "x0": 445.0,
+            "y0": 210.0,
+            "x1": 515.0,
+            "y1": 222.0
+          }
+        },
+        "row_region": {
+          "text": "营业收入",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 210.0,
+            "x1": 94.0,
+            "y1": 222.0
+          }
+        },
+        "column_region": {
+          "text": "2023年半年度",
+          "page": 2,
+          "bbox": {
+            "x0": 438.0,
+            "y0": 155.0,
+            "x1": 518.0,
+            "y1": 167.0
+          }
+        },
+        "title_region": {
+          "text": "合并利润表",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 68.0,
+            "x1": 124.0,
+            "y1": 84.8
+          }
+        },
+        "unit_region": {
+          "text": "元",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 120.0,
+            "x1": 94.0,
+            "y1": 132.0
+          }
+        },
+        "extraction_method": "pymupdf_text_search_and_row_column_geometry",
+        "surrounding_text": "营业收入",
+        "legacy_text_region": null,
+        "limitations": [],
+        "coordinate_system": "pymupdf_page_top_left"
+      },
+      "limitations": [],
+      "source_document_id": "sim-2024-h1",
+      "verification": {
+        "verification_id": "qverify-6ba7bff2-2b36-4d3a-841b-ab26ea826527",
+        "target_type": "source_observation",
+        "target_id": "qobs-sim-2024-h1-revenue-2023-comparative",
+        "status": "verified",
+        "checks": [
+          "重新打开源 PDF 并核对完整 SHA256。",
+          "从 PDF 首页重新定位公司标识。",
+          "从 PDF 首页确认报告年份和报告类型。",
+          "从 PDF 表题重新确认合并报表类型。",
+          "忽略提取器坐标，按原文指标行及期间列重新定位单元格。",
+          "按原文单位倍率将原始值重新标准化为 Decimal。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2024-h1-revenue-2023-comparative"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.377304+00:00",
+        "details": {
+          "source_document_id": "sim-2024-h1",
+          "relocated_cells": [
+            {
+              "pdf_page": 2,
+              "raw_value": "2400000",
+              "row_label": "营业收入",
+              "column_label": "2023年半年度",
+              "unit": "元",
+              "currency": "CNY",
+              "value_bbox": [
+                445.0,
+                210.0,
+                515.0,
+                222.0
+              ],
+              "row_bbox": [
+                54.0,
+                210.0,
+                94.0,
+                222.0
+              ],
+              "table_title_bbox": [
+                54.0,
+                68.0,
+                124.0,
+                84.80000305175781
+              ],
+              "unit_bbox": [
+                54.0,
+                120.0,
+                94.0,
+                132.0
+              ]
+            }
+          ],
+          "recomputed_normalized_value": "2400000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-ed1cf3a2-3cb5-4d5f-930e-80a1cf690b19",
+        "proof_type": "cumulative_observation",
+        "target_id": "qobs-sim-2024-h1-revenue-2023-comparative",
+        "source_sha256s": [
+          "ee7a6a01c750a601b8829b1b710ee00d00f49dbdf4772d62198791b21abbfad2"
+        ],
+        "evidence_ids": [
+          "qev-sim-2024-h1-revenue-2023-comparative"
+        ],
+        "binding_sha256": "d5b0e1575b624dc2ef3bd575508801f0d662cef7e737ffaab6b8ec1c676aae0a",
+        "issued_at": "2026-10-03T03:40:21.377436+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "observation_id": "qobs-sim-2024-h1-net_profit_parent-2024-current",
+      "metric_id": "net_profit_parent",
+      "company_id": "SIM-QUARTERLY-001",
+      "report_year": 2024,
+      "report_period": "H1",
+      "observation_year": 2024,
+      "column_role": "current",
+      "basis": "year_to_date",
+      "statement_type": "income_statement",
+      "scope": "consolidated",
+      "unit_multiplier": "1",
+      "evidence": {
+        "evidence_id": "qev-sim-2024-h1-net_profit_parent-2024-current",
+        "document_id": "sim-2024-h1",
+        "source_sha256": "ee7a6a01c750a601b8829b1b710ee00d00f49dbdf4772d62198791b21abbfad2",
+        "pdf_page": 2,
+        "printed_page": null,
+        "table_title": "合并利润表",
+        "row_label": "归属于母公司股东的净利润",
+        "column_label": "2024年半年度",
+        "value_raw": "300000",
+        "value_normalized": "300000",
+        "unit": "元",
+        "currency": "CNY",
+        "period_start": "2024-01-01",
+        "period_end": "2024-06-30",
+        "period_type": "duration",
+        "value_region": {
+          "text": "300000",
+          "page": 2,
+          "bbox": {
+            "x0": 330.0,
+            "y0": 265.0,
+            "x1": 390.0,
+            "y1": 277.0
+          }
+        },
+        "row_region": {
+          "text": "归属于母公司股东的净利润",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 265.0,
+            "x1": 174.0,
+            "y1": 277.0
+          }
+        },
+        "column_region": {
+          "text": "2024年半年度",
+          "page": 2,
+          "bbox": {
+            "x0": 321.0,
+            "y0": 155.0,
+            "x1": 401.0,
+            "y1": 167.0
+          }
+        },
+        "title_region": {
+          "text": "合并利润表",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 68.0,
+            "x1": 124.0,
+            "y1": 84.8
+          }
+        },
+        "unit_region": {
+          "text": "元",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 120.0,
+            "x1": 94.0,
+            "y1": 132.0
+          }
+        },
+        "extraction_method": "pymupdf_text_search_and_row_column_geometry",
+        "surrounding_text": "归属于母公司股东的净利润",
+        "legacy_text_region": null,
+        "limitations": [],
+        "coordinate_system": "pymupdf_page_top_left"
+      },
+      "limitations": [],
+      "source_document_id": "sim-2024-h1",
+      "verification": {
+        "verification_id": "qverify-c7a8b261-d3c7-4b46-876a-67981500fc6f",
+        "target_type": "source_observation",
+        "target_id": "qobs-sim-2024-h1-net_profit_parent-2024-current",
+        "status": "verified",
+        "checks": [
+          "重新打开源 PDF 并核对完整 SHA256。",
+          "从 PDF 首页重新定位公司标识。",
+          "从 PDF 首页确认报告年份和报告类型。",
+          "从 PDF 表题重新确认合并报表类型。",
+          "忽略提取器坐标，按原文指标行及期间列重新定位单元格。",
+          "按原文单位倍率将原始值重新标准化为 Decimal。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2024-h1-net_profit_parent-2024-current"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.388908+00:00",
+        "details": {
+          "source_document_id": "sim-2024-h1",
+          "relocated_cells": [
+            {
+              "pdf_page": 2,
+              "raw_value": "300000",
+              "row_label": "归属于母公司股东的净利润",
+              "column_label": "2024年半年度",
+              "unit": "元",
+              "currency": "CNY",
+              "value_bbox": [
+                330.0,
+                265.0,
+                390.0,
+                277.0
+              ],
+              "row_bbox": [
+                54.0,
+                265.0,
+                174.0,
+                277.0
+              ],
+              "table_title_bbox": [
+                54.0,
+                68.0,
+                124.0,
+                84.80000305175781
+              ],
+              "unit_bbox": [
+                54.0,
+                120.0,
+                94.0,
+                132.0
+              ]
+            }
+          ],
+          "recomputed_normalized_value": "300000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-459cb0f1-2dcc-4ba7-b18d-194cca799197",
+        "proof_type": "cumulative_observation",
+        "target_id": "qobs-sim-2024-h1-net_profit_parent-2024-current",
+        "source_sha256s": [
+          "ee7a6a01c750a601b8829b1b710ee00d00f49dbdf4772d62198791b21abbfad2"
+        ],
+        "evidence_ids": [
+          "qev-sim-2024-h1-net_profit_parent-2024-current"
+        ],
+        "binding_sha256": "c588e413bbf1226c26b0d430364b21d3c81a8e2f3991985690fead507dc63a2e",
+        "issued_at": "2026-10-03T03:40:21.389050+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "observation_id": "qobs-sim-2024-h1-net_profit_parent-2023-comparative",
+      "metric_id": "net_profit_parent",
+      "company_id": "SIM-QUARTERLY-001",
+      "report_year": 2024,
+      "report_period": "H1",
+      "observation_year": 2023,
+      "column_role": "comparative",
+      "basis": "year_to_date",
+      "statement_type": "income_statement",
+      "scope": "consolidated",
+      "unit_multiplier": "1",
+      "evidence": {
+        "evidence_id": "qev-sim-2024-h1-net_profit_parent-2023-comparative",
+        "document_id": "sim-2024-h1",
+        "source_sha256": "ee7a6a01c750a601b8829b1b710ee00d00f49dbdf4772d62198791b21abbfad2",
+        "pdf_page": 2,
+        "printed_page": null,
+        "table_title": "合并利润表",
+        "row_label": "归属于母公司股东的净利润",
+        "column_label": "2023年半年度",
+        "value_raw": "260000",
+        "value_normalized": "260000",
+        "unit": "元",
+        "currency": "CNY",
+        "period_start": "2023-01-01",
+        "period_end": "2023-06-30",
+        "period_type": "duration",
+        "value_region": {
+          "text": "260000",
+          "page": 2,
+          "bbox": {
+            "x0": 445.0,
+            "y0": 265.0,
+            "x1": 505.0,
+            "y1": 277.0
+          }
+        },
+        "row_region": {
+          "text": "归属于母公司股东的净利润",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 265.0,
+            "x1": 174.0,
+            "y1": 277.0
+          }
+        },
+        "column_region": {
+          "text": "2023年半年度",
+          "page": 2,
+          "bbox": {
+            "x0": 438.0,
+            "y0": 155.0,
+            "x1": 518.0,
+            "y1": 167.0
+          }
+        },
+        "title_region": {
+          "text": "合并利润表",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 68.0,
+            "x1": 124.0,
+            "y1": 84.8
+          }
+        },
+        "unit_region": {
+          "text": "元",
+          "page": 2,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 120.0,
+            "x1": 94.0,
+            "y1": 132.0
+          }
+        },
+        "extraction_method": "pymupdf_text_search_and_row_column_geometry",
+        "surrounding_text": "归属于母公司股东的净利润",
+        "legacy_text_region": null,
+        "limitations": [],
+        "coordinate_system": "pymupdf_page_top_left"
+      },
+      "limitations": [],
+      "source_document_id": "sim-2024-h1",
+      "verification": {
+        "verification_id": "qverify-3d0704b7-575c-47fc-8b7f-1a8c917c901c",
+        "target_type": "source_observation",
+        "target_id": "qobs-sim-2024-h1-net_profit_parent-2023-comparative",
+        "status": "verified",
+        "checks": [
+          "重新打开源 PDF 并核对完整 SHA256。",
+          "从 PDF 首页重新定位公司标识。",
+          "从 PDF 首页确认报告年份和报告类型。",
+          "从 PDF 表题重新确认合并报表类型。",
+          "忽略提取器坐标，按原文指标行及期间列重新定位单元格。",
+          "按原文单位倍率将原始值重新标准化为 Decimal。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2024-h1-net_profit_parent-2023-comparative"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.400805+00:00",
+        "details": {
+          "source_document_id": "sim-2024-h1",
+          "relocated_cells": [
+            {
+              "pdf_page": 2,
+              "raw_value": "260000",
+              "row_label": "归属于母公司股东的净利润",
+              "column_label": "2023年半年度",
+              "unit": "元",
+              "currency": "CNY",
+              "value_bbox": [
+                445.0,
+                265.0,
+                505.0,
+                277.0
+              ],
+              "row_bbox": [
+                54.0,
+                265.0,
+                174.0,
+                277.0
+              ],
+              "table_title_bbox": [
+                54.0,
+                68.0,
+                124.0,
+                84.80000305175781
+              ],
+              "unit_bbox": [
+                54.0,
+                120.0,
+                94.0,
+                132.0
+              ]
+            }
+          ],
+          "recomputed_normalized_value": "260000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-961a00a9-87d9-4266-9db6-0d2d3f175c6b",
+        "proof_type": "cumulative_observation",
+        "target_id": "qobs-sim-2024-h1-net_profit_parent-2023-comparative",
+        "source_sha256s": [
+          "ee7a6a01c750a601b8829b1b710ee00d00f49dbdf4772d62198791b21abbfad2"
+        ],
+        "evidence_ids": [
+          "qev-sim-2024-h1-net_profit_parent-2023-comparative"
+        ],
+        "binding_sha256": "590734c213df461f5c85dc2fdd4c0ce948185e1e1c9caefe4df4859fcdbfda6c",
+        "issued_at": "2026-10-03T03:40:21.400946+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "observation_id": "qobs-sim-2024-h1-operating_cash_flow-2024-current",
+      "metric_id": "operating_cash_flow",
+      "company_id": "SIM-QUARTERLY-001",
+      "report_year": 2024,
+      "report_period": "H1",
+      "observation_year": 2024,
+      "column_role": "current",
+      "basis": "year_to_date",
+      "statement_type": "cash_flow_statement",
+      "scope": "consolidated",
+      "unit_multiplier": "1",
+      "evidence": {
+        "evidence_id": "qev-sim-2024-h1-operating_cash_flow-2024-current",
+        "document_id": "sim-2024-h1",
+        "source_sha256": "ee7a6a01c750a601b8829b1b710ee00d00f49dbdf4772d62198791b21abbfad2",
+        "pdf_page": 3,
+        "printed_page": null,
+        "table_title": "合并现金流量表",
+        "row_label": "经营活动产生的现金流量净额",
+        "column_label": "2024年半年度",
+        "value_raw": "120000",
+        "value_normalized": "120000",
+        "unit": "元",
+        "currency": "CNY",
+        "period_start": "2024-01-01",
+        "period_end": "2024-06-30",
+        "period_type": "duration",
+        "value_region": {
+          "text": "120000",
+          "page": 3,
+          "bbox": {
+            "x0": 330.0,
+            "y0": 210.0,
+            "x1": 390.0,
+            "y1": 222.0
+          }
+        },
+        "row_region": {
+          "text": "经营活动产生的现金流量净额",
+          "page": 3,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 210.0,
+            "x1": 184.0,
+            "y1": 222.0
+          }
+        },
+        "column_region": {
+          "text": "2024年半年度",
+          "page": 3,
+          "bbox": {
+            "x0": 321.0,
+            "y0": 155.0,
+            "x1": 401.0,
+            "y1": 167.0
+          }
+        },
+        "title_region": {
+          "text": "合并现金流量表",
+          "page": 3,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 68.0,
+            "x1": 152.0,
+            "y1": 84.8
+          }
+        },
+        "unit_region": {
+          "text": "元",
+          "page": 3,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 120.0,
+            "x1": 94.0,
+            "y1": 132.0
+          }
+        },
+        "extraction_method": "pymupdf_text_search_and_row_column_geometry",
+        "surrounding_text": "经营活动产生的现金流量净额",
+        "legacy_text_region": null,
+        "limitations": [],
+        "coordinate_system": "pymupdf_page_top_left"
+      },
+      "limitations": [],
+      "source_document_id": "sim-2024-h1",
+      "verification": {
+        "verification_id": "qverify-cbfb758a-bb90-4d40-8cb5-07a7411408a3",
+        "target_type": "source_observation",
+        "target_id": "qobs-sim-2024-h1-operating_cash_flow-2024-current",
+        "status": "verified",
+        "checks": [
+          "重新打开源 PDF 并核对完整 SHA256。",
+          "从 PDF 首页重新定位公司标识。",
+          "从 PDF 首页确认报告年份和报告类型。",
+          "从 PDF 表题重新确认合并报表类型。",
+          "忽略提取器坐标，按原文指标行及期间列重新定位单元格。",
+          "按原文单位倍率将原始值重新标准化为 Decimal。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2024-h1-operating_cash_flow-2024-current"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.411866+00:00",
+        "details": {
+          "source_document_id": "sim-2024-h1",
+          "relocated_cells": [
+            {
+              "pdf_page": 3,
+              "raw_value": "120000",
+              "row_label": "经营活动产生的现金流量净额",
+              "column_label": "2024年半年度",
+              "unit": "元",
+              "currency": "CNY",
+              "value_bbox": [
+                330.0,
+                210.0,
+                390.0,
+                222.0
+              ],
+              "row_bbox": [
+                54.0,
+                210.0,
+                184.0,
+                222.0
+              ],
+              "table_title_bbox": [
+                54.0,
+                68.0,
+                152.0,
+                84.80000305175781
+              ],
+              "unit_bbox": [
+                54.0,
+                120.0,
+                94.0,
+                132.0
+              ]
+            }
+          ],
+          "recomputed_normalized_value": "120000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-0dca9169-1987-4c55-8c11-948ab1f3e7c4",
+        "proof_type": "cumulative_observation",
+        "target_id": "qobs-sim-2024-h1-operating_cash_flow-2024-current",
+        "source_sha256s": [
+          "ee7a6a01c750a601b8829b1b710ee00d00f49dbdf4772d62198791b21abbfad2"
+        ],
+        "evidence_ids": [
+          "qev-sim-2024-h1-operating_cash_flow-2024-current"
+        ],
+        "binding_sha256": "69a878034631b91ca6ffd488838fd91b014126406420b3d4f23fa8be4c7a098a",
+        "issued_at": "2026-10-03T03:40:21.411998+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "observation_id": "qobs-sim-2024-h1-operating_cash_flow-2023-comparative",
+      "metric_id": "operating_cash_flow",
+      "company_id": "SIM-QUARTERLY-001",
+      "report_year": 2024,
+      "report_period": "H1",
+      "observation_year": 2023,
+      "column_role": "comparative",
+      "basis": "year_to_date",
+      "statement_type": "cash_flow_statement",
+      "scope": "consolidated",
+      "unit_multiplier": "1",
+      "evidence": {
+        "evidence_id": "qev-sim-2024-h1-operating_cash_flow-2023-comparative",
+        "document_id": "sim-2024-h1",
+        "source_sha256": "ee7a6a01c750a601b8829b1b710ee00d00f49dbdf4772d62198791b21abbfad2",
+        "pdf_page": 3,
+        "printed_page": null,
+        "table_title": "合并现金流量表",
+        "row_label": "经营活动产生的现金流量净额",
+        "column_label": "2023年半年度",
+        "value_raw": "80000",
+        "value_normalized": "80000",
+        "unit": "元",
+        "currency": "CNY",
+        "period_start": "2023-01-01",
+        "period_end": "2023-06-30",
+        "period_type": "duration",
+        "value_region": {
+          "text": "80000",
+          "page": 3,
+          "bbox": {
+            "x0": 445.0,
+            "y0": 210.0,
+            "x1": 495.0,
+            "y1": 222.0
+          }
+        },
+        "row_region": {
+          "text": "经营活动产生的现金流量净额",
+          "page": 3,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 210.0,
+            "x1": 184.0,
+            "y1": 222.0
+          }
+        },
+        "column_region": {
+          "text": "2023年半年度",
+          "page": 3,
+          "bbox": {
+            "x0": 438.0,
+            "y0": 155.0,
+            "x1": 518.0,
+            "y1": 167.0
+          }
+        },
+        "title_region": {
+          "text": "合并现金流量表",
+          "page": 3,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 68.0,
+            "x1": 152.0,
+            "y1": 84.8
+          }
+        },
+        "unit_region": {
+          "text": "元",
+          "page": 3,
+          "bbox": {
+            "x0": 54.0,
+            "y0": 120.0,
+            "x1": 94.0,
+            "y1": 132.0
+          }
+        },
+        "extraction_method": "pymupdf_text_search_and_row_column_geometry",
+        "surrounding_text": "经营活动产生的现金流量净额",
+        "legacy_text_region": null,
+        "limitations": [],
+        "coordinate_system": "pymupdf_page_top_left"
+      },
+      "limitations": [],
+      "source_document_id": "sim-2024-h1",
+      "verification": {
+        "verification_id": "qverify-eb01c1ce-90e6-4e5c-b7f7-975687d7acde",
+        "target_type": "source_observation",
+        "target_id": "qobs-sim-2024-h1-operating_cash_flow-2023-comparative",
+        "status": "verified",
+        "checks": [
+          "重新打开源 PDF 并核对完整 SHA256。",
+          "从 PDF 首页重新定位公司标识。",
+          "从 PDF 首页确认报告年份和报告类型。",
+          "从 PDF 表题重新确认合并报表类型。",
+          "忽略提取器坐标，按原文指标行及期间列重新定位单元格。",
+          "按原文单位倍率将原始值重新标准化为 Decimal。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2024-h1-operating_cash_flow-2023-comparative"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.423179+00:00",
+        "details": {
+          "source_document_id": "sim-2024-h1",
+          "relocated_cells": [
+            {
+              "pdf_page": 3,
+              "raw_value": "80000",
+              "row_label": "经营活动产生的现金流量净额",
+              "column_label": "2023年半年度",
+              "unit": "元",
+              "currency": "CNY",
+              "value_bbox": [
+                445.0,
+                210.0,
+                495.0,
+                222.0
+              ],
+              "row_bbox": [
+                54.0,
+                210.0,
+                184.0,
+                222.0
+              ],
+              "table_title_bbox": [
+                54.0,
+                68.0,
+                152.0,
+                84.80000305175781
+              ],
+              "unit_bbox": [
+                54.0,
+                120.0,
+                94.0,
+                132.0
+              ]
+            }
+          ],
+          "recomputed_normalized_value": "80000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-fb3dba06-5a81-49bf-9350-c6a0688ef136",
+        "proof_type": "cumulative_observation",
+        "target_id": "qobs-sim-2024-h1-operating_cash_flow-2023-comparative",
+        "source_sha256s": [
+          "ee7a6a01c750a601b8829b1b710ee00d00f49dbdf4772d62198791b21abbfad2"
+        ],
+        "evidence_ids": [
+          "qev-sim-2024-h1-operating_cash_flow-2023-comparative"
+        ],
+        "binding_sha256": "cd093a2ffa6a68685cf33173914a104edfb62f8c33386a8b3eb9335cfcde487d",
+        "issued_at": "2026-10-03T03:40:21.423326+00:00",
+        "status": "verified"
+      }
+    }
+  ],
+  "source_issues": [],
+  "derived_quarters": [
+    {
+      "derived_id": "qderived-SIM-QUARTERLY-001-revenue-2023-Q2-3f191bf6-cd37-44ae-8c2d-882e38e4d48c",
+      "metric_id": "revenue",
+      "company_id": "SIM-QUARTERLY-001",
+      "year": 2023,
+      "quarter": "Q2",
+      "normalized_value": "1400000",
+      "currency": "CNY",
+      "unit": "元",
+      "unit_multiplier": "1",
+      "statement_type": "income_statement",
+      "scope": "consolidated",
+      "formula_id": "derive_q2_from_ytd",
+      "formula_expression": "Q2 = H1_ytd - Q1_ytd",
+      "input_observation_ids": [
+        "qobs-sim-2023-h1-revenue-2023-current",
+        "qobs-sim-2023-q1-revenue-2023-current"
+      ],
+      "input_source_document_ids": [
+        "sim-2023-h1",
+        "sim-2023-q1"
+      ],
+      "limitations": [],
+      "period_start": "2023-04-01",
+      "period_end": "2023-06-30",
+      "verification": {
+        "verification_id": "qverify-d961df02-e74f-4482-97ec-583bbd851ca4",
+        "target_type": "derived_quarter",
+        "target_id": "qderived-SIM-QUARTERLY-001-revenue-2023-Q2-3f191bf6-cd37-44ae-8c2d-882e38e4d48c",
+        "status": "verified",
+        "checks": [
+          "独立重新打开每份源 PDF，重定位累计值并重新计算单季差额。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2023-h1-revenue-2023-current",
+          "qev-sim-2023-q1-revenue-2023-current"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.449587+00:00",
+        "details": {
+          "recomputed_value": "1400000",
+          "source_observation_ids": [
+            "qobs-sim-2023-h1-revenue-2023-current",
+            "qobs-sim-2023-q1-revenue-2023-current"
+          ]
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-53e75158-c637-4493-adfa-8b23fcd37b99",
+        "proof_type": "derived_quarter",
+        "target_id": "qderived-SIM-QUARTERLY-001-revenue-2023-Q2-3f191bf6-cd37-44ae-8c2d-882e38e4d48c",
+        "source_sha256s": [
+          "68cabea20f885a06c829b060914139fce6232451a2670fcefed9ae010c30f373",
+          "e792103379cca4a7e8714c8e86307b946ef12cd6c899f56f5a526ab5af0b9f0e"
+        ],
+        "evidence_ids": [
+          "qev-sim-2023-h1-revenue-2023-current",
+          "qev-sim-2023-q1-revenue-2023-current"
+        ],
+        "binding_sha256": "0acb3a886bafa0cfbd21d6077b0c585a952644a25ebcd3cd966ac10436e5657d",
+        "issued_at": "2026-10-03T03:40:21.449636+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "derived_id": "qderived-SIM-QUARTERLY-001-net_profit_parent-2023-Q2-6d3c4aef-d24d-44fa-80e2-68d7082c831d",
+      "metric_id": "net_profit_parent",
+      "company_id": "SIM-QUARTERLY-001",
+      "year": 2023,
+      "quarter": "Q2",
+      "normalized_value": "160000",
+      "currency": "CNY",
+      "unit": "元",
+      "unit_multiplier": "1",
+      "statement_type": "income_statement",
+      "scope": "consolidated",
+      "formula_id": "derive_q2_from_ytd",
+      "formula_expression": "Q2 = H1_ytd - Q1_ytd",
+      "input_observation_ids": [
+        "qobs-sim-2023-h1-net_profit_parent-2023-current",
+        "qobs-sim-2023-q1-net_profit_parent-2023-current"
+      ],
+      "input_source_document_ids": [
+        "sim-2023-h1",
+        "sim-2023-q1"
+      ],
+      "limitations": [],
+      "period_start": "2023-04-01",
+      "period_end": "2023-06-30",
+      "verification": {
+        "verification_id": "qverify-9cd11d15-6181-4631-8c53-d9c4e3f160e2",
+        "target_type": "derived_quarter",
+        "target_id": "qderived-SIM-QUARTERLY-001-net_profit_parent-2023-Q2-6d3c4aef-d24d-44fa-80e2-68d7082c831d",
+        "status": "verified",
+        "checks": [
+          "独立重新打开每份源 PDF，重定位累计值并重新计算单季差额。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2023-h1-net_profit_parent-2023-current",
+          "qev-sim-2023-q1-net_profit_parent-2023-current"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.476328+00:00",
+        "details": {
+          "recomputed_value": "160000",
+          "source_observation_ids": [
+            "qobs-sim-2023-h1-net_profit_parent-2023-current",
+            "qobs-sim-2023-q1-net_profit_parent-2023-current"
+          ]
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-059368c0-8728-41e2-a04b-693ad44810d4",
+        "proof_type": "derived_quarter",
+        "target_id": "qderived-SIM-QUARTERLY-001-net_profit_parent-2023-Q2-6d3c4aef-d24d-44fa-80e2-68d7082c831d",
+        "source_sha256s": [
+          "68cabea20f885a06c829b060914139fce6232451a2670fcefed9ae010c30f373",
+          "e792103379cca4a7e8714c8e86307b946ef12cd6c899f56f5a526ab5af0b9f0e"
+        ],
+        "evidence_ids": [
+          "qev-sim-2023-h1-net_profit_parent-2023-current",
+          "qev-sim-2023-q1-net_profit_parent-2023-current"
+        ],
+        "binding_sha256": "af5d8e47e9262d91095bd3bec026822f936208660b68d7218267b5ddf55b7d8c",
+        "issued_at": "2026-10-03T03:40:21.476371+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "derived_id": "qderived-SIM-QUARTERLY-001-operating_cash_flow-2023-Q2-d9b84a97-fc49-4d13-b9c4-6318a12d2fb7",
+      "metric_id": "operating_cash_flow",
+      "company_id": "SIM-QUARTERLY-001",
+      "year": 2023,
+      "quarter": "Q2",
+      "normalized_value": "100000",
+      "currency": "CNY",
+      "unit": "元",
+      "unit_multiplier": "1",
+      "statement_type": "cash_flow_statement",
+      "scope": "consolidated",
+      "formula_id": "derive_q2_from_ytd",
+      "formula_expression": "Q2 = H1_ytd - Q1_ytd",
+      "input_observation_ids": [
+        "qobs-sim-2023-h1-operating_cash_flow-2023-current",
+        "qobs-sim-2023-q1-operating_cash_flow-2023-current"
+      ],
+      "input_source_document_ids": [
+        "sim-2023-h1",
+        "sim-2023-q1"
+      ],
+      "limitations": [],
+      "period_start": "2023-04-01",
+      "period_end": "2023-06-30",
+      "verification": {
+        "verification_id": "qverify-acee0676-f279-4fe0-903e-eb4ee8a039b4",
+        "target_type": "derived_quarter",
+        "target_id": "qderived-SIM-QUARTERLY-001-operating_cash_flow-2023-Q2-d9b84a97-fc49-4d13-b9c4-6318a12d2fb7",
+        "status": "verified",
+        "checks": [
+          "独立重新打开每份源 PDF，重定位累计值并重新计算单季差额。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2023-h1-operating_cash_flow-2023-current",
+          "qev-sim-2023-q1-operating_cash_flow-2023-current"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.501304+00:00",
+        "details": {
+          "recomputed_value": "100000",
+          "source_observation_ids": [
+            "qobs-sim-2023-h1-operating_cash_flow-2023-current",
+            "qobs-sim-2023-q1-operating_cash_flow-2023-current"
+          ]
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-8b4d1ea2-8176-47db-b476-80584b1429ed",
+        "proof_type": "derived_quarter",
+        "target_id": "qderived-SIM-QUARTERLY-001-operating_cash_flow-2023-Q2-d9b84a97-fc49-4d13-b9c4-6318a12d2fb7",
+        "source_sha256s": [
+          "68cabea20f885a06c829b060914139fce6232451a2670fcefed9ae010c30f373",
+          "e792103379cca4a7e8714c8e86307b946ef12cd6c899f56f5a526ab5af0b9f0e"
+        ],
+        "evidence_ids": [
+          "qev-sim-2023-h1-operating_cash_flow-2023-current",
+          "qev-sim-2023-q1-operating_cash_flow-2023-current"
+        ],
+        "binding_sha256": "dfef8eaf7a2290d24033fa37c574f4416f5418d92981f5cecf24abf7ee5c656d",
+        "issued_at": "2026-10-03T03:40:21.501346+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "derived_id": "qderived-SIM-QUARTERLY-001-revenue-2024-Q1-37cf12c9-d3e8-4793-8f16-b8e00f8c7d78",
+      "metric_id": "revenue",
+      "company_id": "SIM-QUARTERLY-001",
+      "year": 2024,
+      "quarter": "Q1",
+      "normalized_value": "1200000",
+      "currency": "CNY",
+      "unit": "元",
+      "unit_multiplier": "1",
+      "statement_type": "income_statement",
+      "scope": "consolidated",
+      "formula_id": "derive_q1_from_ytd",
+      "formula_expression": "Q1 = Q1_ytd",
+      "input_observation_ids": [
+        "qobs-sim-2024-q1-revenue-2024-current"
+      ],
+      "input_source_document_ids": [
+        "sim-2024-q1"
+      ],
+      "limitations": [],
+      "period_start": "2024-01-01",
+      "period_end": "2024-03-31",
+      "verification": {
+        "verification_id": "qverify-67e9e7d8-9b87-40cc-8f8f-74ec4051ba89",
+        "target_type": "derived_quarter",
+        "target_id": "qderived-SIM-QUARTERLY-001-revenue-2024-Q1-37cf12c9-d3e8-4793-8f16-b8e00f8c7d78",
+        "status": "verified",
+        "checks": [
+          "独立重新打开每份源 PDF，重定位累计值并重新计算单季差额。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2024-q1-revenue-2024-current"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.514368+00:00",
+        "details": {
+          "recomputed_value": "1200000",
+          "source_observation_ids": [
+            "qobs-sim-2024-q1-revenue-2024-current"
+          ]
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-710352b4-2bc9-4555-84d7-364c0d68fa17",
+        "proof_type": "derived_quarter",
+        "target_id": "qderived-SIM-QUARTERLY-001-revenue-2024-Q1-37cf12c9-d3e8-4793-8f16-b8e00f8c7d78",
+        "source_sha256s": [
+          "06521c459463b2d153f3dc0e26e3eaa9c4ccf873e1dd6560d0adf0ffaf36bfb3"
+        ],
+        "evidence_ids": [
+          "qev-sim-2024-q1-revenue-2024-current"
+        ],
+        "binding_sha256": "f20e1303f5d087669805a61adb0087e9244a024dfd2bf8334ee4f0a9e9a93446",
+        "issued_at": "2026-10-03T03:40:21.514412+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "derived_id": "qderived-SIM-QUARTERLY-001-net_profit_parent-2024-Q1-b914e2c1-fabe-4492-8e91-398b818eec54",
+      "metric_id": "net_profit_parent",
+      "company_id": "SIM-QUARTERLY-001",
+      "year": 2024,
+      "quarter": "Q1",
+      "normalized_value": "120000",
+      "currency": "CNY",
+      "unit": "元",
+      "unit_multiplier": "1",
+      "statement_type": "income_statement",
+      "scope": "consolidated",
+      "formula_id": "derive_q1_from_ytd",
+      "formula_expression": "Q1 = Q1_ytd",
+      "input_observation_ids": [
+        "qobs-sim-2024-q1-net_profit_parent-2024-current"
+      ],
+      "input_source_document_ids": [
+        "sim-2024-q1"
+      ],
+      "limitations": [],
+      "period_start": "2024-01-01",
+      "period_end": "2024-03-31",
+      "verification": {
+        "verification_id": "qverify-f65ed5f4-8a47-4185-ba9d-8afeb67627b3",
+        "target_type": "derived_quarter",
+        "target_id": "qderived-SIM-QUARTERLY-001-net_profit_parent-2024-Q1-b914e2c1-fabe-4492-8e91-398b818eec54",
+        "status": "verified",
+        "checks": [
+          "独立重新打开每份源 PDF，重定位累计值并重新计算单季差额。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2024-q1-net_profit_parent-2024-current"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.527500+00:00",
+        "details": {
+          "recomputed_value": "120000",
+          "source_observation_ids": [
+            "qobs-sim-2024-q1-net_profit_parent-2024-current"
+          ]
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-6001a5e9-13d6-4bc1-a1fa-73979efedc68",
+        "proof_type": "derived_quarter",
+        "target_id": "qderived-SIM-QUARTERLY-001-net_profit_parent-2024-Q1-b914e2c1-fabe-4492-8e91-398b818eec54",
+        "source_sha256s": [
+          "06521c459463b2d153f3dc0e26e3eaa9c4ccf873e1dd6560d0adf0ffaf36bfb3"
+        ],
+        "evidence_ids": [
+          "qev-sim-2024-q1-net_profit_parent-2024-current"
+        ],
+        "binding_sha256": "26973368039d1af8601b244de0952c726c41c9ccf2f23825a6da7afdce885e21",
+        "issued_at": "2026-10-03T03:40:21.527541+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "derived_id": "qderived-SIM-QUARTERLY-001-operating_cash_flow-2024-Q1-44b22c69-06b2-48ac-af50-a82e62814f4b",
+      "metric_id": "operating_cash_flow",
+      "company_id": "SIM-QUARTERLY-001",
+      "year": 2024,
+      "quarter": "Q1",
+      "normalized_value": "-20000",
+      "currency": "CNY",
+      "unit": "元",
+      "unit_multiplier": "1",
+      "statement_type": "cash_flow_statement",
+      "scope": "consolidated",
+      "formula_id": "derive_q1_from_ytd",
+      "formula_expression": "Q1 = Q1_ytd",
+      "input_observation_ids": [
+        "qobs-sim-2024-q1-operating_cash_flow-2024-current"
+      ],
+      "input_source_document_ids": [
+        "sim-2024-q1"
+      ],
+      "limitations": [],
+      "period_start": "2024-01-01",
+      "period_end": "2024-03-31",
+      "verification": {
+        "verification_id": "qverify-3d855562-bc3d-492a-910b-ba19d52c1df0",
+        "target_type": "derived_quarter",
+        "target_id": "qderived-SIM-QUARTERLY-001-operating_cash_flow-2024-Q1-44b22c69-06b2-48ac-af50-a82e62814f4b",
+        "status": "verified",
+        "checks": [
+          "独立重新打开每份源 PDF，重定位累计值并重新计算单季差额。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2024-q1-operating_cash_flow-2024-current"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.540109+00:00",
+        "details": {
+          "recomputed_value": "-20000",
+          "source_observation_ids": [
+            "qobs-sim-2024-q1-operating_cash_flow-2024-current"
+          ]
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-c6572440-c1cb-4667-a0de-44d5bd6b9722",
+        "proof_type": "derived_quarter",
+        "target_id": "qderived-SIM-QUARTERLY-001-operating_cash_flow-2024-Q1-44b22c69-06b2-48ac-af50-a82e62814f4b",
+        "source_sha256s": [
+          "06521c459463b2d153f3dc0e26e3eaa9c4ccf873e1dd6560d0adf0ffaf36bfb3"
+        ],
+        "evidence_ids": [
+          "qev-sim-2024-q1-operating_cash_flow-2024-current"
+        ],
+        "binding_sha256": "8864900bef79510eb2b2bdfbbb2c0741c3df551603e21906462945d14d968f86",
+        "issued_at": "2026-10-03T03:40:21.540150+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "derived_id": "qderived-SIM-QUARTERLY-001-revenue-2024-Q2-91f78eaa-b35d-4ec6-9705-8a6635a49d3c",
+      "metric_id": "revenue",
+      "company_id": "SIM-QUARTERLY-001",
+      "year": 2024,
+      "quarter": "Q2",
+      "normalized_value": "1500000",
+      "currency": "CNY",
+      "unit": "元",
+      "unit_multiplier": "1",
+      "statement_type": "income_statement",
+      "scope": "consolidated",
+      "formula_id": "derive_q2_from_ytd",
+      "formula_expression": "Q2 = H1_ytd - Q1_ytd",
+      "input_observation_ids": [
+        "qobs-sim-2024-h1-revenue-2024-current",
+        "qobs-sim-2024-q1-revenue-2024-current"
+      ],
+      "input_source_document_ids": [
+        "sim-2024-h1",
+        "sim-2024-q1"
+      ],
+      "limitations": [],
+      "period_start": "2024-04-01",
+      "period_end": "2024-06-30",
+      "verification": {
+        "verification_id": "qverify-11f2bc61-361d-4dd6-bc99-d3f35c38eafb",
+        "target_type": "derived_quarter",
+        "target_id": "qderived-SIM-QUARTERLY-001-revenue-2024-Q2-91f78eaa-b35d-4ec6-9705-8a6635a49d3c",
+        "status": "verified",
+        "checks": [
+          "独立重新打开每份源 PDF，重定位累计值并重新计算单季差额。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2024-h1-revenue-2024-current",
+          "qev-sim-2024-q1-revenue-2024-current"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.566095+00:00",
+        "details": {
+          "recomputed_value": "1500000",
+          "source_observation_ids": [
+            "qobs-sim-2024-h1-revenue-2024-current",
+            "qobs-sim-2024-q1-revenue-2024-current"
+          ]
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-f0129786-51ef-4001-ad5f-31a30aa8ed89",
+        "proof_type": "derived_quarter",
+        "target_id": "qderived-SIM-QUARTERLY-001-revenue-2024-Q2-91f78eaa-b35d-4ec6-9705-8a6635a49d3c",
+        "source_sha256s": [
+          "06521c459463b2d153f3dc0e26e3eaa9c4ccf873e1dd6560d0adf0ffaf36bfb3",
+          "ee7a6a01c750a601b8829b1b710ee00d00f49dbdf4772d62198791b21abbfad2"
+        ],
+        "evidence_ids": [
+          "qev-sim-2024-h1-revenue-2024-current",
+          "qev-sim-2024-q1-revenue-2024-current"
+        ],
+        "binding_sha256": "cdb94c91362b439d94ffe2fa33bdad141c3373ea3c5f6b3281e8cfd35837318b",
+        "issued_at": "2026-10-03T03:40:21.566139+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "derived_id": "qderived-SIM-QUARTERLY-001-net_profit_parent-2024-Q2-9b0d96b0-02d5-4497-a92a-7bb305dc250a",
+      "metric_id": "net_profit_parent",
+      "company_id": "SIM-QUARTERLY-001",
+      "year": 2024,
+      "quarter": "Q2",
+      "normalized_value": "180000",
+      "currency": "CNY",
+      "unit": "元",
+      "unit_multiplier": "1",
+      "statement_type": "income_statement",
+      "scope": "consolidated",
+      "formula_id": "derive_q2_from_ytd",
+      "formula_expression": "Q2 = H1_ytd - Q1_ytd",
+      "input_observation_ids": [
+        "qobs-sim-2024-h1-net_profit_parent-2024-current",
+        "qobs-sim-2024-q1-net_profit_parent-2024-current"
+      ],
+      "input_source_document_ids": [
+        "sim-2024-h1",
+        "sim-2024-q1"
+      ],
+      "limitations": [],
+      "period_start": "2024-04-01",
+      "period_end": "2024-06-30",
+      "verification": {
+        "verification_id": "qverify-10b01d3f-2722-441b-b266-8e6eefb72f36",
+        "target_type": "derived_quarter",
+        "target_id": "qderived-SIM-QUARTERLY-001-net_profit_parent-2024-Q2-9b0d96b0-02d5-4497-a92a-7bb305dc250a",
+        "status": "verified",
+        "checks": [
+          "独立重新打开每份源 PDF，重定位累计值并重新计算单季差额。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2024-h1-net_profit_parent-2024-current",
+          "qev-sim-2024-q1-net_profit_parent-2024-current"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.591968+00:00",
+        "details": {
+          "recomputed_value": "180000",
+          "source_observation_ids": [
+            "qobs-sim-2024-h1-net_profit_parent-2024-current",
+            "qobs-sim-2024-q1-net_profit_parent-2024-current"
+          ]
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-3384d859-bd57-4619-acf0-c885fcef231a",
+        "proof_type": "derived_quarter",
+        "target_id": "qderived-SIM-QUARTERLY-001-net_profit_parent-2024-Q2-9b0d96b0-02d5-4497-a92a-7bb305dc250a",
+        "source_sha256s": [
+          "06521c459463b2d153f3dc0e26e3eaa9c4ccf873e1dd6560d0adf0ffaf36bfb3",
+          "ee7a6a01c750a601b8829b1b710ee00d00f49dbdf4772d62198791b21abbfad2"
+        ],
+        "evidence_ids": [
+          "qev-sim-2024-h1-net_profit_parent-2024-current",
+          "qev-sim-2024-q1-net_profit_parent-2024-current"
+        ],
+        "binding_sha256": "a69493587aa8bf3387c27a2d690a0cee2160e3b62ef3b9a6272566791c5288d4",
+        "issued_at": "2026-10-03T03:40:21.592010+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "derived_id": "qderived-SIM-QUARTERLY-001-operating_cash_flow-2024-Q2-3d23887d-abe4-4f2d-a698-5b0dcc8c9ebf",
+      "metric_id": "operating_cash_flow",
+      "company_id": "SIM-QUARTERLY-001",
+      "year": 2024,
+      "quarter": "Q2",
+      "normalized_value": "140000",
+      "currency": "CNY",
+      "unit": "元",
+      "unit_multiplier": "1",
+      "statement_type": "cash_flow_statement",
+      "scope": "consolidated",
+      "formula_id": "derive_q2_from_ytd",
+      "formula_expression": "Q2 = H1_ytd - Q1_ytd",
+      "input_observation_ids": [
+        "qobs-sim-2024-h1-operating_cash_flow-2024-current",
+        "qobs-sim-2024-q1-operating_cash_flow-2024-current"
+      ],
+      "input_source_document_ids": [
+        "sim-2024-h1",
+        "sim-2024-q1"
+      ],
+      "limitations": [],
+      "period_start": "2024-04-01",
+      "period_end": "2024-06-30",
+      "verification": {
+        "verification_id": "qverify-8743a13d-473b-415b-8375-96550cd1d359",
+        "target_type": "derived_quarter",
+        "target_id": "qderived-SIM-QUARTERLY-001-operating_cash_flow-2024-Q2-3d23887d-abe4-4f2d-a698-5b0dcc8c9ebf",
+        "status": "verified",
+        "checks": [
+          "独立重新打开每份源 PDF，重定位累计值并重新计算单季差额。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [
+          "qev-sim-2024-h1-operating_cash_flow-2024-current",
+          "qev-sim-2024-q1-operating_cash_flow-2024-current"
+        ],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.616668+00:00",
+        "details": {
+          "recomputed_value": "140000",
+          "source_observation_ids": [
+            "qobs-sim-2024-h1-operating_cash_flow-2024-current",
+            "qobs-sim-2024-q1-operating_cash_flow-2024-current"
+          ]
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-d9f30e9c-ed3a-45a3-8f1b-58120d87fd8f",
+        "proof_type": "derived_quarter",
+        "target_id": "qderived-SIM-QUARTERLY-001-operating_cash_flow-2024-Q2-3d23887d-abe4-4f2d-a698-5b0dcc8c9ebf",
+        "source_sha256s": [
+          "06521c459463b2d153f3dc0e26e3eaa9c4ccf873e1dd6560d0adf0ffaf36bfb3",
+          "ee7a6a01c750a601b8829b1b710ee00d00f49dbdf4772d62198791b21abbfad2"
+        ],
+        "evidence_ids": [
+          "qev-sim-2024-h1-operating_cash_flow-2024-current",
+          "qev-sim-2024-q1-operating_cash_flow-2024-current"
+        ],
+        "binding_sha256": "9f32c61a8845e2cc37095a9580dd5a8619f2e0043c6e825c5ff695389836d7eb",
+        "issued_at": "2026-10-03T03:40:21.616711+00:00",
+        "status": "verified"
+      }
+    }
+  ],
+  "comparisons": [
+    {
+      "comparison_id": "qcompare-qderived-SIM-QUARTERLY-001-revenue-2024-Q2-91f78eaa-b35d-4ec6-9705-8a6635a49d3c-qderived-SIM-QUARTERLY-001-revenue-2023-Q2-3f191bf6-cd37-44ae-8c2d-882e38e4d48c-year_over_year",
+      "metric_id": "revenue",
+      "relation": "year_over_year",
+      "current_id": "qderived-SIM-QUARTERLY-001-revenue-2024-Q2-91f78eaa-b35d-4ec6-9705-8a6635a49d3c",
+      "prior_id": "qderived-SIM-QUARTERLY-001-revenue-2023-Q2-3f191bf6-cd37-44ae-8c2d-882e38e4d48c",
+      "current_value": "1500000",
+      "prior_value": "1400000",
+      "difference": "100000",
+      "growth_rate": "0.071428571428571428571428571428571428571428571428571",
+      "status": "calculated",
+      "failure_reason": null,
+      "limitations": [],
+      "comparability": {
+        "verification_id": "qverify-9d93a444-bc9c-4851-925d-599291eb34ed",
+        "target_type": "quarter_comparability",
+        "target_id": "qderived-SIM-QUARTERLY-001-revenue-2024-Q2-91f78eaa-b35d-4ec6-9705-8a6635a49d3c:qderived-SIM-QUARTERLY-001-revenue-2023-Q2-3f191bf6-cd37-44ae-8c2d-882e38e4d48c:year_over_year",
+        "status": "verified",
+        "checks": [
+          "逐项核对上一年原报告累计数与本年报告同期间比较列；数值、单位、币种及合并口径一致。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.668705+00:00",
+        "details": {
+          "relation": "year_over_year",
+          "basis": "subsequent_comparative_values"
+        }
+      },
+      "verification": {
+        "verification_id": "qverify-e018af4d-e6b6-4a3b-815b-831fbec0287e",
+        "target_type": "quarter_comparison",
+        "target_id": "qcompare-qderived-SIM-QUARTERLY-001-revenue-2024-Q2-91f78eaa-b35d-4ec6-9705-8a6635a49d3c-qderived-SIM-QUARTERLY-001-revenue-2023-Q2-3f191bf6-cd37-44ae-8c2d-882e38e4d48c-year_over_year",
+        "status": "verified",
+        "checks": [
+          "独立重新计算季度差额和增长率。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.669261+00:00",
+        "details": {
+          "recomputed_difference": "100000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-0a50b3cb-c743-4a6c-9261-9b393dfb59c3",
+        "proof_type": "quarter_comparison",
+        "target_id": "qcompare-qderived-SIM-QUARTERLY-001-revenue-2024-Q2-91f78eaa-b35d-4ec6-9705-8a6635a49d3c-qderived-SIM-QUARTERLY-001-revenue-2023-Q2-3f191bf6-cd37-44ae-8c2d-882e38e4d48c-year_over_year",
+        "source_sha256s": [
+          "06521c459463b2d153f3dc0e26e3eaa9c4ccf873e1dd6560d0adf0ffaf36bfb3",
+          "68cabea20f885a06c829b060914139fce6232451a2670fcefed9ae010c30f373",
+          "e792103379cca4a7e8714c8e86307b946ef12cd6c899f56f5a526ab5af0b9f0e",
+          "ee7a6a01c750a601b8829b1b710ee00d00f49dbdf4772d62198791b21abbfad2"
+        ],
+        "evidence_ids": [
+          "qev-sim-2023-h1-revenue-2023-current",
+          "qev-sim-2023-q1-revenue-2023-current",
+          "qev-sim-2024-h1-revenue-2023-comparative",
+          "qev-sim-2024-h1-revenue-2024-current",
+          "qev-sim-2024-q1-revenue-2023-comparative",
+          "qev-sim-2024-q1-revenue-2024-current"
+        ],
+        "binding_sha256": "a3f5ce8e708c5eda9350bc8dc2281526dbefefd41168a5dc8cc4151ef7d724a1",
+        "issued_at": "2026-10-03T03:40:21.669291+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "comparison_id": "qcompare-qderived-SIM-QUARTERLY-001-net_profit_parent-2024-Q2-9b0d96b0-02d5-4497-a92a-7bb305dc250a-qderived-SIM-QUARTERLY-001-net_profit_parent-2023-Q2-6d3c4aef-d24d-44fa-80e2-68d7082c831d-year_over_year",
+      "metric_id": "net_profit_parent",
+      "relation": "year_over_year",
+      "current_id": "qderived-SIM-QUARTERLY-001-net_profit_parent-2024-Q2-9b0d96b0-02d5-4497-a92a-7bb305dc250a",
+      "prior_id": "qderived-SIM-QUARTERLY-001-net_profit_parent-2023-Q2-6d3c4aef-d24d-44fa-80e2-68d7082c831d",
+      "current_value": "180000",
+      "prior_value": "160000",
+      "difference": "20000",
+      "growth_rate": "0.125",
+      "status": "calculated",
+      "failure_reason": null,
+      "limitations": [],
+      "comparability": {
+        "verification_id": "qverify-30a5177e-aa34-41e2-ae49-64af2e22f75a",
+        "target_type": "quarter_comparability",
+        "target_id": "qderived-SIM-QUARTERLY-001-net_profit_parent-2024-Q2-9b0d96b0-02d5-4497-a92a-7bb305dc250a:qderived-SIM-QUARTERLY-001-net_profit_parent-2023-Q2-6d3c4aef-d24d-44fa-80e2-68d7082c831d:year_over_year",
+        "status": "verified",
+        "checks": [
+          "逐项核对上一年原报告累计数与本年报告同期间比较列；数值、单位、币种及合并口径一致。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.721115+00:00",
+        "details": {
+          "relation": "year_over_year",
+          "basis": "subsequent_comparative_values"
+        }
+      },
+      "verification": {
+        "verification_id": "qverify-e99a50ce-8935-427c-aa12-e38dfedad868",
+        "target_type": "quarter_comparison",
+        "target_id": "qcompare-qderived-SIM-QUARTERLY-001-net_profit_parent-2024-Q2-9b0d96b0-02d5-4497-a92a-7bb305dc250a-qderived-SIM-QUARTERLY-001-net_profit_parent-2023-Q2-6d3c4aef-d24d-44fa-80e2-68d7082c831d-year_over_year",
+        "status": "verified",
+        "checks": [
+          "独立重新计算季度差额和增长率。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.721615+00:00",
+        "details": {
+          "recomputed_difference": "20000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-60c89441-e59f-4416-960f-7ba338a4a70a",
+        "proof_type": "quarter_comparison",
+        "target_id": "qcompare-qderived-SIM-QUARTERLY-001-net_profit_parent-2024-Q2-9b0d96b0-02d5-4497-a92a-7bb305dc250a-qderived-SIM-QUARTERLY-001-net_profit_parent-2023-Q2-6d3c4aef-d24d-44fa-80e2-68d7082c831d-year_over_year",
+        "source_sha256s": [
+          "06521c459463b2d153f3dc0e26e3eaa9c4ccf873e1dd6560d0adf0ffaf36bfb3",
+          "68cabea20f885a06c829b060914139fce6232451a2670fcefed9ae010c30f373",
+          "e792103379cca4a7e8714c8e86307b946ef12cd6c899f56f5a526ab5af0b9f0e",
+          "ee7a6a01c750a601b8829b1b710ee00d00f49dbdf4772d62198791b21abbfad2"
+        ],
+        "evidence_ids": [
+          "qev-sim-2023-h1-net_profit_parent-2023-current",
+          "qev-sim-2023-q1-net_profit_parent-2023-current",
+          "qev-sim-2024-h1-net_profit_parent-2023-comparative",
+          "qev-sim-2024-h1-net_profit_parent-2024-current",
+          "qev-sim-2024-q1-net_profit_parent-2023-comparative",
+          "qev-sim-2024-q1-net_profit_parent-2024-current"
+        ],
+        "binding_sha256": "8db07cb6db7f670d2858003389d51a608ead07f5d00900086779bce5a4cde330",
+        "issued_at": "2026-10-03T03:40:21.721644+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "comparison_id": "qcompare-qderived-SIM-QUARTERLY-001-operating_cash_flow-2024-Q2-3d23887d-abe4-4f2d-a698-5b0dcc8c9ebf-qderived-SIM-QUARTERLY-001-operating_cash_flow-2023-Q2-d9b84a97-fc49-4d13-b9c4-6318a12d2fb7-year_over_year",
+      "metric_id": "operating_cash_flow",
+      "relation": "year_over_year",
+      "current_id": "qderived-SIM-QUARTERLY-001-operating_cash_flow-2024-Q2-3d23887d-abe4-4f2d-a698-5b0dcc8c9ebf",
+      "prior_id": "qderived-SIM-QUARTERLY-001-operating_cash_flow-2023-Q2-d9b84a97-fc49-4d13-b9c4-6318a12d2fb7",
+      "current_value": "140000",
+      "prior_value": "100000",
+      "difference": "40000",
+      "growth_rate": "0.4",
+      "status": "calculated",
+      "failure_reason": null,
+      "limitations": [],
+      "comparability": {
+        "verification_id": "qverify-cedefdde-6614-40d9-b166-fbde5f5d41ae",
+        "target_type": "quarter_comparability",
+        "target_id": "qderived-SIM-QUARTERLY-001-operating_cash_flow-2024-Q2-3d23887d-abe4-4f2d-a698-5b0dcc8c9ebf:qderived-SIM-QUARTERLY-001-operating_cash_flow-2023-Q2-d9b84a97-fc49-4d13-b9c4-6318a12d2fb7:year_over_year",
+        "status": "verified",
+        "checks": [
+          "逐项核对上一年原报告累计数与本年报告同期间比较列；数值、单位、币种及合并口径一致。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.771533+00:00",
+        "details": {
+          "relation": "year_over_year",
+          "basis": "subsequent_comparative_values"
+        }
+      },
+      "verification": {
+        "verification_id": "qverify-95555e77-35e5-4cc0-b3f5-2ccb5c4a2027",
+        "target_type": "quarter_comparison",
+        "target_id": "qcompare-qderived-SIM-QUARTERLY-001-operating_cash_flow-2024-Q2-3d23887d-abe4-4f2d-a698-5b0dcc8c9ebf-qderived-SIM-QUARTERLY-001-operating_cash_flow-2023-Q2-d9b84a97-fc49-4d13-b9c4-6318a12d2fb7-year_over_year",
+        "status": "verified",
+        "checks": [
+          "独立重新计算季度差额和增长率。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.772028+00:00",
+        "details": {
+          "recomputed_difference": "40000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-eb3e8978-d10d-4d95-ac6a-8aaeec12b2dd",
+        "proof_type": "quarter_comparison",
+        "target_id": "qcompare-qderived-SIM-QUARTERLY-001-operating_cash_flow-2024-Q2-3d23887d-abe4-4f2d-a698-5b0dcc8c9ebf-qderived-SIM-QUARTERLY-001-operating_cash_flow-2023-Q2-d9b84a97-fc49-4d13-b9c4-6318a12d2fb7-year_over_year",
+        "source_sha256s": [
+          "06521c459463b2d153f3dc0e26e3eaa9c4ccf873e1dd6560d0adf0ffaf36bfb3",
+          "68cabea20f885a06c829b060914139fce6232451a2670fcefed9ae010c30f373",
+          "e792103379cca4a7e8714c8e86307b946ef12cd6c899f56f5a526ab5af0b9f0e",
+          "ee7a6a01c750a601b8829b1b710ee00d00f49dbdf4772d62198791b21abbfad2"
+        ],
+        "evidence_ids": [
+          "qev-sim-2023-h1-operating_cash_flow-2023-current",
+          "qev-sim-2023-q1-operating_cash_flow-2023-current",
+          "qev-sim-2024-h1-operating_cash_flow-2023-comparative",
+          "qev-sim-2024-h1-operating_cash_flow-2024-current",
+          "qev-sim-2024-q1-operating_cash_flow-2023-comparative",
+          "qev-sim-2024-q1-operating_cash_flow-2024-current"
+        ],
+        "binding_sha256": "92338c31caa59b9889d1df1362184fa96fb1a5b0b3b6e7d95e4aa32ae1b19d6f",
+        "issued_at": "2026-10-03T03:40:21.772056+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "comparison_id": "qcompare-qderived-SIM-QUARTERLY-001-revenue-2024-Q2-91f78eaa-b35d-4ec6-9705-8a6635a49d3c-qderived-SIM-QUARTERLY-001-revenue-2024-Q1-37cf12c9-d3e8-4793-8f16-b8e00f8c7d78-quarter_over_quarter",
+      "metric_id": "revenue",
+      "relation": "quarter_over_quarter",
+      "current_id": "qderived-SIM-QUARTERLY-001-revenue-2024-Q2-91f78eaa-b35d-4ec6-9705-8a6635a49d3c",
+      "prior_id": "qderived-SIM-QUARTERLY-001-revenue-2024-Q1-37cf12c9-d3e8-4793-8f16-b8e00f8c7d78",
+      "current_value": "1500000",
+      "prior_value": "1200000",
+      "difference": "300000",
+      "growth_rate": "0.25",
+      "status": "calculated",
+      "failure_reason": null,
+      "limitations": [],
+      "comparability": {
+        "verification_id": "qverify-eacc6a28-dbb7-4903-969c-8b59be83c928",
+        "target_type": "quarter_comparability",
+        "target_id": "qderived-SIM-QUARTERLY-001-revenue-2024-Q2-91f78eaa-b35d-4ec6-9705-8a6635a49d3c:qderived-SIM-QUARTERLY-001-revenue-2024-Q1-37cf12c9-d3e8-4793-8f16-b8e00f8c7d78:quarter_over_quarter",
+        "status": "verified",
+        "checks": [
+          "逐个来源 PDF 核对本指标的未追溯调整声明，并确认公司、期间、单位、币种和口径。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.818108+00:00",
+        "details": {
+          "relation": "quarter_over_quarter",
+          "basis": "source_restatement_declarations"
+        }
+      },
+      "verification": {
+        "verification_id": "qverify-49fb1052-74fb-4f4e-9576-cec3f69f677f",
+        "target_type": "quarter_comparison",
+        "target_id": "qcompare-qderived-SIM-QUARTERLY-001-revenue-2024-Q2-91f78eaa-b35d-4ec6-9705-8a6635a49d3c-qderived-SIM-QUARTERLY-001-revenue-2024-Q1-37cf12c9-d3e8-4793-8f16-b8e00f8c7d78-quarter_over_quarter",
+        "status": "verified",
+        "checks": [
+          "独立重新计算季度差额和增长率。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.818612+00:00",
+        "details": {
+          "recomputed_difference": "300000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-b18db899-eeae-41cc-8bb2-41baf0eeaae4",
+        "proof_type": "quarter_comparison",
+        "target_id": "qcompare-qderived-SIM-QUARTERLY-001-revenue-2024-Q2-91f78eaa-b35d-4ec6-9705-8a6635a49d3c-qderived-SIM-QUARTERLY-001-revenue-2024-Q1-37cf12c9-d3e8-4793-8f16-b8e00f8c7d78-quarter_over_quarter",
+        "source_sha256s": [
+          "06521c459463b2d153f3dc0e26e3eaa9c4ccf873e1dd6560d0adf0ffaf36bfb3",
+          "ee7a6a01c750a601b8829b1b710ee00d00f49dbdf4772d62198791b21abbfad2"
+        ],
+        "evidence_ids": [
+          "qev-sim-2024-h1-revenue-2024-current",
+          "qev-sim-2024-q1-revenue-2024-current"
+        ],
+        "binding_sha256": "6fd8f54b777953dfcbec3635640eea2f5295bb4d855e1dd53f8ce9934ba3d3ad",
+        "issued_at": "2026-10-03T03:40:21.818651+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "comparison_id": "qcompare-qderived-SIM-QUARTERLY-001-net_profit_parent-2024-Q2-9b0d96b0-02d5-4497-a92a-7bb305dc250a-qderived-SIM-QUARTERLY-001-net_profit_parent-2024-Q1-b914e2c1-fabe-4492-8e91-398b818eec54-quarter_over_quarter",
+      "metric_id": "net_profit_parent",
+      "relation": "quarter_over_quarter",
+      "current_id": "qderived-SIM-QUARTERLY-001-net_profit_parent-2024-Q2-9b0d96b0-02d5-4497-a92a-7bb305dc250a",
+      "prior_id": "qderived-SIM-QUARTERLY-001-net_profit_parent-2024-Q1-b914e2c1-fabe-4492-8e91-398b818eec54",
+      "current_value": "180000",
+      "prior_value": "120000",
+      "difference": "60000",
+      "growth_rate": "0.5",
+      "status": "calculated",
+      "failure_reason": null,
+      "limitations": [],
+      "comparability": {
+        "verification_id": "qverify-a2a13687-2cea-4702-8bcf-eb217b197245",
+        "target_type": "quarter_comparability",
+        "target_id": "qderived-SIM-QUARTERLY-001-net_profit_parent-2024-Q2-9b0d96b0-02d5-4497-a92a-7bb305dc250a:qderived-SIM-QUARTERLY-001-net_profit_parent-2024-Q1-b914e2c1-fabe-4492-8e91-398b818eec54:quarter_over_quarter",
+        "status": "verified",
+        "checks": [
+          "逐个来源 PDF 核对本指标的未追溯调整声明，并确认公司、期间、单位、币种和口径。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.864892+00:00",
+        "details": {
+          "relation": "quarter_over_quarter",
+          "basis": "source_restatement_declarations"
+        }
+      },
+      "verification": {
+        "verification_id": "qverify-b64728e8-da1d-4b52-a54b-d9b2a5c5a66d",
+        "target_type": "quarter_comparison",
+        "target_id": "qcompare-qderived-SIM-QUARTERLY-001-net_profit_parent-2024-Q2-9b0d96b0-02d5-4497-a92a-7bb305dc250a-qderived-SIM-QUARTERLY-001-net_profit_parent-2024-Q1-b914e2c1-fabe-4492-8e91-398b818eec54-quarter_over_quarter",
+        "status": "verified",
+        "checks": [
+          "独立重新计算季度差额和增长率。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.865395+00:00",
+        "details": {
+          "recomputed_difference": "60000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-ac924419-8806-47dc-a91a-01fef0f94bdc",
+        "proof_type": "quarter_comparison",
+        "target_id": "qcompare-qderived-SIM-QUARTERLY-001-net_profit_parent-2024-Q2-9b0d96b0-02d5-4497-a92a-7bb305dc250a-qderived-SIM-QUARTERLY-001-net_profit_parent-2024-Q1-b914e2c1-fabe-4492-8e91-398b818eec54-quarter_over_quarter",
+        "source_sha256s": [
+          "06521c459463b2d153f3dc0e26e3eaa9c4ccf873e1dd6560d0adf0ffaf36bfb3",
+          "ee7a6a01c750a601b8829b1b710ee00d00f49dbdf4772d62198791b21abbfad2"
+        ],
+        "evidence_ids": [
+          "qev-sim-2024-h1-net_profit_parent-2024-current",
+          "qev-sim-2024-q1-net_profit_parent-2024-current"
+        ],
+        "binding_sha256": "69347f7a6fb5a4dcbfde6717fa2220c1ceb020d3fc1f2a3a03574ffa1e3a05fb",
+        "issued_at": "2026-10-03T03:40:21.865422+00:00",
+        "status": "verified"
+      }
+    },
+    {
+      "comparison_id": "qcompare-qderived-SIM-QUARTERLY-001-operating_cash_flow-2024-Q2-3d23887d-abe4-4f2d-a698-5b0dcc8c9ebf-qderived-SIM-QUARTERLY-001-operating_cash_flow-2024-Q1-44b22c69-06b2-48ac-af50-a82e62814f4b-quarter_over_quarter",
+      "metric_id": "operating_cash_flow",
+      "relation": "quarter_over_quarter",
+      "current_id": "qderived-SIM-QUARTERLY-001-operating_cash_flow-2024-Q2-3d23887d-abe4-4f2d-a698-5b0dcc8c9ebf",
+      "prior_id": "qderived-SIM-QUARTERLY-001-operating_cash_flow-2024-Q1-44b22c69-06b2-48ac-af50-a82e62814f4b",
+      "current_value": "140000",
+      "prior_value": "-20000",
+      "difference": "160000",
+      "growth_rate": null,
+      "status": "calculated",
+      "failure_reason": null,
+      "limitations": [
+        "比较期基数非正，仅保留有依据的差额；增长率弃权。"
+      ],
+      "comparability": {
+        "verification_id": "qverify-060cbd67-d65a-4651-9016-b760076cdffc",
+        "target_type": "quarter_comparability",
+        "target_id": "qderived-SIM-QUARTERLY-001-operating_cash_flow-2024-Q2-3d23887d-abe4-4f2d-a698-5b0dcc8c9ebf:qderived-SIM-QUARTERLY-001-operating_cash_flow-2024-Q1-44b22c69-06b2-48ac-af50-a82e62814f4b:quarter_over_quarter",
+        "status": "verified",
+        "checks": [
+          "逐个来源 PDF 核对本指标的未追溯调整声明，并确认公司、期间、单位、币种和口径。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.909036+00:00",
+        "details": {
+          "relation": "quarter_over_quarter",
+          "basis": "source_restatement_declarations"
+        }
+      },
+      "verification": {
+        "verification_id": "qverify-2c7c08de-5719-4911-a72b-5d23bb1d5091",
+        "target_type": "quarter_comparison",
+        "target_id": "qcompare-qderived-SIM-QUARTERLY-001-operating_cash_flow-2024-Q2-3d23887d-abe4-4f2d-a698-5b0dcc8c9ebf-qderived-SIM-QUARTERLY-001-operating_cash_flow-2024-Q1-44b22c69-06b2-48ac-af50-a82e62814f4b-quarter_over_quarter",
+        "status": "verified",
+        "checks": [
+          "比较基数非正，仅核验差额并弃权增长率。"
+        ],
+        "conflicts": [],
+        "evidence_ids": [],
+        "limitations": [],
+        "verified_at": "2026-10-03T03:40:21.909528+00:00",
+        "details": {
+          "recomputed_difference": "160000"
+        }
+      },
+      "proof": {
+        "proof_id": "qproof-1e987e14-80db-4708-8999-473c57eb09ab",
+        "proof_type": "quarter_comparison",
+        "target_id": "qcompare-qderived-SIM-QUARTERLY-001-operating_cash_flow-2024-Q2-3d23887d-abe4-4f2d-a698-5b0dcc8c9ebf-qderived-SIM-QUARTERLY-001-operating_cash_flow-2024-Q1-44b22c69-06b2-48ac-af50-a82e62814f4b-quarter_over_quarter",
+        "source_sha256s": [
+          "06521c459463b2d153f3dc0e26e3eaa9c4ccf873e1dd6560d0adf0ffaf36bfb3",
+          "ee7a6a01c750a601b8829b1b710ee00d00f49dbdf4772d62198791b21abbfad2"
+        ],
+        "evidence_ids": [
+          "qev-sim-2024-h1-operating_cash_flow-2024-current",
+          "qev-sim-2024-q1-operating_cash_flow-2024-current"
+        ],
+        "binding_sha256": "0c90666add5c8504c45cc6a1ca9b29d27a5db1e7e166a615333905f615d97c41",
+        "issued_at": "2026-10-03T03:40:21.909556+00:00",
+        "status": "verified"
+      }
+    }
+  ],
+  "limitations": [],
+  "provenance": {
+    "engine": "quarterly-deterministic-v1",
+    "code_sha256": {
+      "scripts/analyze_quarterly.py": "39dc298ca0e9f7a31b146a780a0dbddcf83850c3d7d8c4292679c06e97ac707c",
+      "scripts/prepare_quarterly_samples.py": "3b9ac50010c0ed0ce3630f8d3d1df15df7eb218923585c7dcb9a8078d716ffb9",
+      "backend/src/finagent/schemas/quarterly.py": "7f82f40ca06ef4b1e62e3ff197acd84c542ceefe2e4048d0ffe49e73dcefaef1",
+      "backend/src/finagent/ingestion/quarterly.py": "edf22d1108ae77b74d9f9327645e5d9fbbc5df06d0bccd29a00c8680fe63d959",
+      "backend/src/finagent/finance/quarterly.py": "81c44ef58b870dd4a4b43a6b848d386b3e97b84f50a9b3f0bf387deec0c5a012",
+      "backend/src/finagent/verification/quarterly.py": "61c738dafe6cf0b1b04b6fdb8049570e58b4d218fae5c397e9512defa09e476d",
+      "backend/src/finagent/reports/quarterly_analysis.py": "886833a61dbcc637175496452ee1547f8c872198dd8443ee2ecbe758ff13de82"
+    },
+    "input_manifest_sha256": "f19bacfc6cc6ae170c9b508ccfcbeeb3f9995c4a0854ee3b4def73820f10d6b5",
+    "python_version": "3.14.3"
+  }
+}

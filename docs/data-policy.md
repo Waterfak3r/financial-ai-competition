@@ -14,7 +14,20 @@
 
 海天文件取得时间记录为 2026-09-23T10:25:30+08:00，原文件大小 4,561,223 字节；解析产物位于平行的 data/processed 路径。本文迁移既有登记，未重新下载原文。
 
-茅台/五粮液的 evaluation/cases 案例为 agent_provisional_pending_human 财务事实参考，没有人工 golden、舞弊或异常标签。样例覆盖和历史核验状态见验收记录。data/samples 尚未形成可公开交付演示包。
+茅台/五粮液的 evaluation/cases 案例为 agent_provisional_pending_human 财务事实参考，没有人工 golden、舞弊或异常标签。样例覆盖和历史核验状态见验收记录。年度与季度原创模拟输入已进入 `data/samples/annual/`、`data/samples/quarterly/`；它们可按各自 manifest 登记的条件随比赛提交件和团队演示分发，须保留“原创模拟”提示，不能作为真实财务、舞弊标签或训练标签。
+
+### 季度真实材料登记（2026-10-03）
+
+以下海天味业 603288 报告只用于 C-02 季度开发与评测。原文公开可读，但再分发许可未确认；不要把 PDF、原文片段、整页图或含原文的归档放入提交件或公开演示包。表中哈希绑定 C-02 真实运行的本地输入。
+
+| 文档 ID | 报告 | 官方公开来源 | 本地路径及 SHA256 |
+| --- | --- | --- | --- |
+| `cninfo-1216595428` | 海天味业 2023 Q1 | [巨潮资讯 PDF](https://static.cninfo.com.cn/finalpage/2023-04-26/1216595428.PDF) | `data/raw/603288/2023-Q1/cninfo-1216595428/1216595428.PDF`；`fd1dd62f60f7dc657f825be493785ab38d39dd991914428033def8ed38f45d69` |
+| `cninfo-1217701277` | 海天味业 2023 H1 | [巨潮资讯 PDF](https://static.cninfo.com.cn/finalpage/2023-08-30/1217701277.PDF) | `data/raw/603288/2023-H1/cninfo-1217701277/1217701277.PDF`；`627b7db131610265bfdd1250e8ed296817bc020288e8742d38ab06ba0ad94cae` |
+| `cninfo-1219879629` | 海天味业 2024 Q1 | [巨潮资讯 PDF](https://static.cninfo.com.cn/finalpage/2024-04-27/1219879629.PDF) | `data/raw/603288/2024-Q1/cninfo-1219879629/1219879629.PDF`；`ce20a7333a2d0be336168d890fadfc876152e8f2677df04c157281e14f8aef55` |
+| `cninfo-1221059354` | 海天味业 2024 H1 | [巨潮资讯 PDF](https://static.cninfo.com.cn/finalpage/2024-08-30/1221059354.PDF) | `data/raw/603288/2024-H1/cninfo-1221059354/1221059354.PDF`；`0c5f9254bd762bdd9a913d7942a3137372c5819b54c42c99a0ca7985125e0647` |
+
+来源和用途也随季度归档登记；实际运行引用 24 个来源观察和 9 个派生值，并不授权复印、分发底层文档。完整 run ID、状态与复现限制见[验收记录](verification-history.md)。
 
 指定 Windows 队友的内部便携分发会复制海天原文、解析材料和选定历史运行归档，以支持本地演示和报告回看；源文件与仓库归档保持原样。该内部团队请求不等于取得 PDF、原文片段或报告的公开再分发许可。包内容清单、来源及使用提醒见[便携包说明](portable-package.md)；不得将其上传为公开样例。
 

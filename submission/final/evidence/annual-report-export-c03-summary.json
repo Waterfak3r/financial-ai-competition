@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "fintrace_annual_export_c03_accepted_summary",
+  "software_freeze_commit": "a0b5b3bc26b3004afcd359df48544adb9cba4a13",
+  "accepted_c03_code_commit": "90e3a1faf0c80c68bb78e4795b37b7e17c2f95bf",
+  "accepted_call_accounting_and_html_status_fix_commit": "a0b5b3bc26b3004afcd359df48544adb9cba4a13",
+  "local_reviewer_evidence": {
+    "path": "artifacts/evaluations/report-export-c03-20261003/evidence.json",
+    "sha256": "dd6922057f20f2e18345900bc890a86a62d599845fe3dd7b03f5c04411bb38a4",
+    "distribution_note": "仅当前开发机的详细审阅记录，不随源码 ZIP 提供；本文件是脱敏分发摘要。"
+  },
+  "accepted_annual_api_export": {
+    "run_id": "annual-analysis-caffff8e-1937-4544-ad2f-b3be7f406c47",
+    "job_id": "annual-job-4303a6f6da3d4f57bc930c6421d3a809",
+    "source_pdf_sha256": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7",
+    "json_bytes": 175190,
+    "json_sha256": "2f5801a2e7cbc57946767fab5ad6012d027f58057af16949b5f96779793a3a31",
+    "status": "completed",
+    "mode": "deterministic",
+    "model_called": false,
+    "confirmed_facts": 8,
+    "confirmed_calculations": 8,
+    "formats": {
+      "json": 200,
+      "markdown": 200,
+      "html": 200
+    },
+    "invalid_format_http_status": 422
+  },
+  "export_coverage": {
+    "focused_tests": {
+      "passed": 55,
+      "failed": 0
+    },
+    "historical_archives_read_only": [
+      "m3_screening",
+      "model_investigation",
+      "integrated_analysis"
+    ],
+    "historical_formats_each_http_200": [
+      "json",
+      "markdown",
+      "html"
+    ],
+    "archive_source_binding_and_before_after_unchanged": true,
+    "ai_call_count_representation": "investigation 2 + final review 1 = total 3 (total includes review)",
+    "offline_html_external_requests": 0
+  },
+  "print_qa": {
+    "format": "offline HTML printed by browser",
+    "pdf_pages": 12,
+    "pdf_sha256": "9463c90aacca32981fbe4b2a5bb0d1ea70303ae74b191c3f3fd795e308d9c26b",
+    "html_sha256": "96aee3a2b47c809eb096951afa663235e71ad30bd35eb56f6d66e781978a9559",
+    "confirmed_fact_and_calculation_statuses": "8 facts and 8 calculations displayed as verified",
+    "reviewer_visual_pages": [
+      3,
+      4,
+      5,
+      6,
+      7
+    ]
+  },
+  "scope_note": "本 summary records accepted exporter-specific checks; the separate final frozen-commit UI upload smoke is annual-sample-web-ui-smoke.json. The 12-page print PDF is an offline browser print sample, not a server-generated PDF endpoint."
+}

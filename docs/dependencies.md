@@ -83,3 +83,9 @@ Microsoft Visual C++ Runtime DLL 取自经 Authenticode 验证的 Microsoft 官�
 
 源码包的包含边界、命令与校验细节见 [决赛源码包说明](final-source-package.md)。
 
+## 决赛报告 PDF 作者工具与字体（2026-10-03）
+
+[`scripts/build_final_report.py`](../scripts/build_final_report.py) 是报告排版工具，不是 FINTRACE 应用运行依赖。此构建环境使用 Python 3.14.3、Mistune 3.2.1（AST Markdown 解析；本机 distribution metadata 为 BSD-3-Clause，[PyPI](https://pypi.org/project/mistune/3.2.1/)，[上游](https://github.com/lepture/mistune)）和 ReportLab 4.5.1（PDF 排版；metadata 记录 BSD license，[PyPI](https://pypi.org/project/reportlab/4.5.1/)，[上游产品页](https://www.reportlab.com/)）。这些作者工具包未加入 `backend/pyproject.toml`、前端清单或 Windows runtime 锁；它们仅用于从已审阅的 Markdown 生成提交 PDF。PDF 的逐页渲染与文字提取使用本机 Poppler 26.07.0（`pdftoppm`/`pdftotext`），属于作者验收工具，不随应用分发。
+
+报告排版在本机系统字体 `C:\Windows\Fonts\msyh.ttc` / `msyhbd.ttc` 中使用 Microsoft YaHei Regular / Bold 6.31；文件 SHA256 分别为 `d79c55e68b1131eea0cc1c47be4f572d964f28c682e143db2ad09c1e4cb07a3f` 与 `4508821b3dffe01f0ef5e5326a3e60df705a44633858811f67b6982dce3f6ee6`。微软说明 [Microsoft YaHei](https://learn.microsoft.com/en-us/typography/font-list/microsoft-yahei)，字体文件由 Windows 提供，字形版权依其 Windows 产品许可；PDF 仅嵌入所需字体子集，不复制或分发字体文件。Regular 与 Bold face 的 `OS/2.fsType` 均为 `0x0008`，`0x0100`（No subsetting）未置位；可嵌入与子集行为按 Microsoft 的 [OpenType OS/2 规范](https://learn.microsoft.com/en-us/typography/opentype/spec/os2)和[字体嵌入 FAQ](https://learn.microsoft.com/en-us/typography/fonts/font-faq)解释，仍受适用 Windows 许可条款约束。
+
