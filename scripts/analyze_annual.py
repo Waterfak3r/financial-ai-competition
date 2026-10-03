@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend" / "src"))
 
 from finagent.api.annual_analysis import analyze_annual_pdf  # noqa: E402
+from finagent.core.sample_provenance import resolve_sample_provenance  # noqa: E402
 from finagent.api.m3_annual import (  # noqa: E402
     failed_m3_annual_screening,
     run_m3_annual_screening,
@@ -60,6 +61,7 @@ _PROVENANCE_FILES = (
     "backend/src/finagent/retrieval/annual_context.py",
     "backend/src/finagent/audit/audited_chat.py",
     "backend/src/finagent/core/model_settings.py",
+    "backend/src/finagent/core/sample_provenance.py",
     "backend/src/finagent/llm/chat_completion.py",
     "config/prompts/annual_investigation_v1.md",
     "config/prompts/annual_review_v1.md",
@@ -218,6 +220,18 @@ def _run(args: argparse.Namespace) -> int:
             markdown = render_report_with_investigation(report_payload, investigation)
         if m3_screening is not None:
             markdown = render_report_with_m3_screening(markdown, m3_screening)
+
+        source_provenance = resolve_sample_provenance(
+            actual_copy_sha256,
+            company_id=args.company_id,
+            report_year=args.report_year,
+            document_id=args.document_id,
+        )
+        report_payload["source_provenance"] = source_provenance
+        notice = f"# 来源性质\n\n**{source_provenance['label']}**\n"
+        if source_provenance.get("use_conditions"):
+            notice += "\n" + str(source_provenance["use_conditions"]) + "\n"
+        markdown = notice + "\n" + markdown.lstrip()
 
         _write_json_new(run_dir / "parsed_text_pdf.json", result.parsed_pdf.to_dict())
         _write_json_new(run_dir / "analysis.json", analysis_payload)
@@ -557,6 +571,12 @@ def _manifest(
         "company_id": args.company_id,
         "report_year": args.report_year,
         "document_id": args.document_id,
+        "source_provenance": resolve_sample_provenance(
+            source_sha256,
+            company_id=args.company_id,
+            report_year=args.report_year,
+            document_id=args.document_id,
+        ),
         "inputs": {
             "source_pdf_original_path": str(source_pdf),
             "source_pdf_original_filename": source_pdf.name,

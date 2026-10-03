@@ -4377,6 +4377,10 @@ summary:focus-visible {
   min-width: 0;
 }
 
+.annual-core-table td > strong {
+  white-space: nowrap;
+}
+
 .annual-core-table td > small {
   margin-top: 0.12rem;
   color: #5c6d80;
@@ -5219,5 +5223,98 @@ summary:focus-visible {
 
   .annual-job-actions {
     gap: 0.5rem;
+  }
+}
+
+.annual-source-nature {
+  display: inline-flex;
+  margin: 0.35rem 0;
+  padding: 0.28rem 0.58rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f3f6fa;
+  color: var(--ink);
+  font-size: 0.88rem;
+}
+
+.annual-source-nature-synthetic {
+  border: 2px solid #9b4b00;
+  background: #fff4df;
+  color: #512900;
+}
+
+.annual-source-use-conditions {
+  max-width: 72rem;
+  margin: 0.2rem 0 0.7rem;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.annual-source-use-conditions summary {
+  width: fit-content;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.annual-source-use-conditions p {
+  margin: 0.4rem 0 0;
+  max-width: 76ch;
+}
+
+.annual-export-tools {
+  display: grid;
+  gap: 0.65rem;
+  margin: 0.8rem 0 1.1rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+}
+
+.annual-export-tools > div:first-child {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.75rem;
+}
+
+.annual-export-tools > div:first-child span {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.annual-export-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.annual-export-message,
+.annual-export-error {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.annual-export-message {
+  color: #205b38;
+}
+
+.annual-export-error {
+  color: #9d2222;
+}
+
+@media (max-width: 520px) {
+  .annual-export-tools {
+    padding: 0.75rem;
+  }
+
+  .annual-export-buttons {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .annual-export-buttons button {
+    width: 100%;
   }
 }

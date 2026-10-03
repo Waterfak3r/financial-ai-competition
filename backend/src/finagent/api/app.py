@@ -32,6 +32,7 @@ from finagent.api.annual_report_read import (
     render_evidence_preview,
     render_narrative_evidence_preview,
 )
+from finagent.api.annual_report_export import AnnualReportExportError, export_annual_report
 from finagent.api.annual_analysis_jobs import (
     AnnualAnalysisJobError,
     get_annual_analysis_capabilities,
@@ -353,6 +354,29 @@ def create_app(project_root: Path | None = None) -> FastAPI:
             },
         )
 
+    @app.get("/v1/annual-analyses/{run_id}/export")
+    def export_annual_analysis_report(run_id: str, format: str = Query(default="json")) -> Response:
+        try:
+            exported = export_annual_report(app.state.project_root, run_id, format)
+        except AnnualReportExportError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": exc.message},
+            ) from None
+        except AnnualReportReadError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": exc.message},
+            ) from None
+        headers = {
+            "Cache-Control": "no-store",
+            "Content-Disposition": f'attachment; filename="{exported.filename}"',
+            "X-Content-Type-Options": "nosniff",
+        }
+        if exported.content_security_policy is not None:
+            headers["Content-Security-Policy"] = exported.content_security_policy
+        return Response(content=exported.content, media_type=exported.media_type, headers=headers)
+
     @app.get("/v1/annual-analyses/{run_id:path}")
     def get_annual_analysis_report(run_id: str) -> dict:
         try:
@@ -365,6 +389,7 @@ def create_app(project_root: Path | None = None) -> FastAPI:
         return {
             "report": archive.report,
             "manifest": archive.manifest_summary,
+            "source_provenance": archive.source_provenance,
             # This curated index contains only evidence_ids attached to a
             # verified record under report.confirmed.metrics[*].
             "verification_evidences": list(archive.verification_evidences),

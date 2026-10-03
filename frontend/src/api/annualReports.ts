@@ -4,6 +4,7 @@ import type {
   AnnualAnalysisReport,
   AnnualAnalysisResponse,
   AnnualReportRecord,
+  AnnualSourceProvenance,
   CandidateSignal,
   ConfirmedCalculation,
   ConfirmedMetric,
@@ -32,6 +33,12 @@ export interface EvidencePreviewImage {
   pageNumber: number;
   mode: "focus" | "full_page";
   region: EvidencePreviewRegion;
+}
+
+export type AnnualReportExportFormat = "json" | "markdown" | "html";
+export interface AnnualReportExportDownload {
+  blob: Blob;
+  filename: string;
 }
 
 export class AnnualReportApiError extends Error {
@@ -66,6 +73,47 @@ export async function loadAnnualAnalysis(runId: string): Promise<AnnualAnalysisR
     throw new AnnualReportApiError(failure.message, response.status, failure.code);
   }
   return readAnnualAnalysisResponse(payload, checkedRunId);
+}
+
+export async function downloadAnnualAnalysisExport(
+  runId: string,
+  format: AnnualReportExportFormat,
+): Promise<AnnualReportExportDownload> {
+  const checkedRunId = runId.trim();
+  if (!RUN_ID_PATTERN.test(checkedRunId)) {
+    throw new AnnualReportApiError("run_id 格式无效，无法下载报告。");
+  }
+  const response = await fetch(
+    ANNUAL_ANALYSIS_PATH + "/" + encodeURIComponent(checkedRunId) + "/export?format=" + format,
+    {
+      method: "GET",
+      headers: { Accept: exportMediaType(format) },
+      cache: "no-store",
+      credentials: "omit",
+    },
+  ).catch(() => {
+    throw new AnnualReportApiError("无法连接本地报告导出服务。请确认后端仍在运行。");
+  });
+  if (!response.ok) {
+    const payload = await readJson(response);
+    const failure = failureMessage(response.status, payload, "下载年度报告");
+    throw new AnnualReportApiError(failure.message, response.status, failure.code);
+  }
+  const actualType = (response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
+  if (actualType !== exportMediaType(format)) {
+    throw new AnnualReportApiError("报告导出格式与请求不一致，已停止下载。", response.status);
+  }
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const filename = /(?:^|;)\s*filename="(fintrace-annual-[A-Za-z0-9._-]{1,121}\.(?:json|md|html))"(?:;|$)/i.exec(disposition)?.[1];
+  const expectedExtension = format === "markdown" ? ".md" : "." + format;
+  if (filename === undefined || !filename.endsWith(expectedExtension) || !filename.startsWith("fintrace-annual-" + checkedRunId)) {
+    throw new AnnualReportApiError("报告文件名不符合本机安全下载约定，已停止下载。", response.status);
+  }
+  return { blob: await response.blob(), filename };
+}
+
+function exportMediaType(format: AnnualReportExportFormat): string {
+  return format === "json" ? "application/json" : format === "markdown" ? "text/markdown" : "text/html";
 }
 
 export async function loadVerificationEvidencePreview(
@@ -242,7 +290,42 @@ function readAnnualAnalysisResponse(value: unknown, expectedRunId: string): Annu
     }
     ids.add(evidence.evidence_id);
   }
-  return { report, manifest, verification_evidences: verificationEvidences };
+  const sourceProvenance = readSourceProvenance(payload.source_provenance, manifest.source_pdf_sha256);
+  return { report, manifest, source_provenance: sourceProvenance, verification_evidences: verificationEvidences };
+}
+
+function readSourceProvenance(value: unknown, sourceSha256: string): AnnualSourceProvenance {
+  const record = requireRecord(value, "source_provenance");
+  const statusValue = requireString(record.status, "source_provenance.status");
+  const natureValue = requireString(record.data_nature, "source_provenance.data_nature");
+  let status: AnnualSourceProvenance["status"];
+  let nature: AnnualSourceProvenance["data_nature"];
+  if (statusValue === "registered_synthetic" && natureValue === "original_synthetic") {
+    status = "registered_synthetic";
+    nature = "original_synthetic";
+  } else if (statusValue === "unconfirmed" && natureValue === "unconfirmed") {
+    status = "unconfirmed";
+    nature = "unconfirmed";
+  } else {
+    throw invalidResponse("source_provenance.status/data_nature");
+  }
+  const resolvedSha = nullableString(record.source_sha256, "source_provenance.source_sha256");
+  if (status === "registered_synthetic" && resolvedSha?.toLowerCase() !== sourceSha256.toLowerCase()) {
+    throw new AnnualReportApiError("样例来源性质与已校验 PDF 哈希不一致，未显示该性质。", null);
+  }
+  return {
+    status,
+    data_nature: nature,
+    label: requireString(record.label, "source_provenance.label"),
+    sample_id: nullableString(record.sample_id, "source_provenance.sample_id"),
+    revision: nullableString(record.revision, "source_provenance.revision"),
+    registered_document_id: nullableString(record.registered_document_id, "source_provenance.registered_document_id"),
+    company_name: nullableString(record.company_name, "source_provenance.company_name"),
+    source_sha256: resolvedSha,
+    use_conditions: nullableString(record.use_conditions, "source_provenance.use_conditions"),
+    fraud_label: nullableBoolean(record.fraud_label, "source_provenance.fraud_label"),
+    model_training: nullableBoolean(record.model_training, "source_provenance.model_training"),
+  };
 }
 
 function readManifest(value: Record<string, unknown>, path: string): AnnualAnalysisManifest {
@@ -745,6 +828,13 @@ function optionalString(value: unknown): string | null {
 
 function nullableString(value: unknown, path: string): string | null {
   if (value === null || typeof value === "string") {
+    return value;
+  }
+  throw invalidResponse(path);
+}
+
+function nullableBoolean(value: unknown, path: string): boolean | null {
+  if (value === null || typeof value === "boolean") {
     return value;
   }
   throw invalidResponse(path);

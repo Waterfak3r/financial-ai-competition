@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent, MouseEvent, ReactNode, RefObject } from "react";
 import { loadAnnualAnalysisCapabilities } from "../api/annualAnalysisCapabilities";
-import { AnnualReportApiError, loadAnnualAnalysis, loadVerificationEvidencePreview } from "../api/annualReports";
+import { AnnualReportApiError, downloadAnnualAnalysisExport, loadAnnualAnalysis, loadVerificationEvidencePreview } from "../api/annualReports";
 import { loadAnnualAnalysisHistory } from "../api/annualAnalysisHistory";
 import { createAnnualAnalysisJob, loadAnnualAnalysisJob } from "../api/annualAnalysisJobs";
 import { loadNarrativeEvidences, loadNarrativeEvidencePreview } from "../api/narrativeEvidences";
@@ -1664,6 +1664,9 @@ function AnnualReportView({
   selectedHistoryItem: AnnualAnalysisHistoryItem | null;
   activeMode: AnnualAnalysisJobMode | null;
 }) {
+  const [exporting, setExporting] = useState<"json" | "markdown" | "html" | null>(null);
+  const [exportMessage, setExportMessage] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
   const { report, manifest, verification_evidences: evidenceIndex } = response;
   const evidenceById = new Map(evidenceIndex.map((evidence) => [evidence.evidence_id, evidence]));
   const verifiedMetricCount = report.confirmed.metrics.filter(isIndependentlyVerifiedMetric).length;
@@ -1674,7 +1677,10 @@ function AnnualReportView({
   const candidateCount = report.pending_review.candidate_signals.filter((item) => item.status === "candidate").length;
   const abstainedSignalCount = report.pending_review.candidate_signals.filter((item) => item.status === "abstained").length;
   const sourceMatches = report.source_sha256 === manifest.source_pdf_sha256;
-  const companyName = trustedCompanyName(report.company_id, report.source_document_id, report.source_sha256);
+  const registeredSyntheticCompanyName = response.source_provenance.status === "registered_synthetic"
+    ? response.source_provenance.company_name
+    : null;
+  const companyName = registeredSyntheticCompanyName ?? trustedCompanyName(report.company_id, report.source_document_id, report.source_sha256);
   const mode = activeMode ?? selectedHistoryItem?.run_mode ?? selectedHistoryItem?.mode ??
     response.manifest.mode ?? (report.m3_screening !== null && report.m3_screening !== undefined ? "m3_screening" : null);
   const modeText = mode === "deterministic" ? "标准分析" : mode === "m3_screening" ? "四规则试行" :
@@ -1697,6 +1703,30 @@ function AnnualReportView({
       ? "报告包含模型解释，但解释尚未独立核实；变化原因仍待确认。"
       : "原因尚未说明。";
 
+  const downloadExport = async (format: "json" | "markdown" | "html") => {
+    if (exporting !== null) return;
+    setExporting(format);
+    setExportMessage(null);
+    setExportError(null);
+    try {
+      const result = await downloadAnnualAnalysisExport(report.run_id, format);
+      const objectUrl = URL.createObjectURL(result.blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = result.filename;
+      link.hidden = true;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000);
+      setExportMessage(format === "html" ? "已下载 HTML；可离线查看或用浏览器打印成 PDF。" : "报告已下载。导出保留各层归档状态，不提升核验等级。");
+    } catch (error) {
+      setExportError(errorMessage(error));
+    } finally {
+      setExporting(null);
+    }
+  };
+
   return (
     <div className="annual-report" aria-label="年度分析报告">
       <header id="annual-report-heading" className="annual-report-heading" tabIndex={-1}>
@@ -1710,6 +1740,18 @@ function AnnualReportView({
           {manifestStatusText(manifest.status)}
         </span>
       </header>
+
+      <div className="annual-source-nature-wrap">
+        <p className={response.source_provenance.status === "registered_synthetic" ? "annual-source-nature annual-source-nature-synthetic" : "annual-source-nature"} role="note">
+          <strong>{response.source_provenance.label}</strong>
+        </p>
+        {response.source_provenance.use_conditions ? (
+          <details className="annual-source-use-conditions">
+            <summary>样例分发与使用条件</summary>
+            <p>{response.source_provenance.use_conditions}</p>
+          </details>
+        ) : null}
+      </div>
 
       {mode === "integrated_analysis" ? (
         <p className="annual-scope-summary" role="note">
@@ -1799,6 +1841,26 @@ function AnnualReportView({
           差额与同比只读取归档计算并要求两侧事实、独立重算和对应核验主张全部匹配。单侧金额按本侧已核验证据显示；缺少比较依据时保留金额并说明原因。
           {report.comparability?.limitations.length ? ` 可比性限制：${report.comparability.limitations.join("；")}` : ""}
         </p>
+      </section>
+
+      <section className="annual-export-tools" aria-label="下载报告">
+        <div>
+          <strong>下载报告</strong>
+          <span>下载 HTML 后可离线查看，也可用浏览器打印成 PDF。</span>
+        </div>
+        <div className="annual-export-buttons">
+          <button type="button" className="secondary" disabled={exporting !== null} onClick={() => void downloadExport("json")}>
+            {exporting === "json" ? "正在下载 JSON…" : "下载 JSON"}
+          </button>
+          <button type="button" className="secondary" disabled={exporting !== null} onClick={() => void downloadExport("markdown")}>
+            {exporting === "markdown" ? "正在下载 Markdown…" : "下载 Markdown"}
+          </button>
+          <button type="button" className="secondary" disabled={exporting !== null} onClick={() => void downloadExport("html")}>
+            {exporting === "html" ? "正在下载 HTML…" : "下载可打印 HTML"}
+          </button>
+        </div>
+        {exportMessage !== null ? <p className="annual-export-message" role="status">{exportMessage}</p> : null}
+        {exportError !== null ? <p className="annual-export-error" role="alert">下载失败：{exportError}</p> : null}
       </section>
 
       <NarrativeEvidenceSection

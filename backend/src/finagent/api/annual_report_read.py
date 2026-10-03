@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from finagent.core.sample_provenance import resolve_sample_provenance
 from finagent.core.safe_paths import PathBoundaryError, validate_run_id
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$", re.IGNORECASE)
@@ -44,6 +45,7 @@ class AnnualReportArchive:
     verification_evidences: tuple[dict[str, Any], ...]
     narrative_evidences: tuple[dict[str, Any], ...]
     source_pdf_bytes: bytes
+    source_provenance: dict[str, object]
 
 
 def load_annual_report(project_root: Path, run_id: str) -> AnnualReportArchive:
@@ -161,6 +163,12 @@ def load_annual_report(project_root: Path, run_id: str) -> AnnualReportArchive:
         # hash of the exact report.json bytes returned by this request.
         "report_sha256": report_sha256,
     }
+    source_provenance = resolve_sample_provenance(
+        actual_source_sha256,
+        company_id=manifest["company_id"],
+        report_year=manifest["report_year"],
+        document_id=manifest["document_id"],
+    )
     return AnnualReportArchive(
         run_id=checked_run_id,
         report=report,
@@ -168,6 +176,7 @@ def load_annual_report(project_root: Path, run_id: str) -> AnnualReportArchive:
         verification_evidences=verification_evidences,
         narrative_evidences=narrative_evidences,
         source_pdf_bytes=source_pdf_bytes,
+        source_provenance=source_provenance,
     )
 
 

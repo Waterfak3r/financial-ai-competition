@@ -233,5 +233,20 @@ export interface AnnualAnalysisReport {
 export interface AnnualAnalysisResponse {
   report: AnnualAnalysisReport;
   manifest: AnnualAnalysisManifest;
+  source_provenance: AnnualSourceProvenance;
   verification_evidences: VerificationEvidence[];
+}
+
+export interface AnnualSourceProvenance {
+  status: "registered_synthetic" | "unconfirmed";
+  data_nature: "original_synthetic" | "unconfirmed";
+  label: string;
+  sample_id: string | null;
+  revision: string | null;
+  registered_document_id: string | null;
+  company_name: string | null;
+  source_sha256: string | null;
+  use_conditions: string | null;
+  fraud_label: boolean | null;
+  model_training: boolean | null;
 }
