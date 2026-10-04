@@ -136,7 +136,12 @@ export interface M3AnnualScreeningRule {
   status: string;
   triggered: boolean | null;
   calculated_value: string | null;
-  issues: string[];
+  issues: M3AnnualScreeningIssue[];
+}
+
+export interface M3AnnualScreeningIssue {
+  code: string | null;
+  message: string;
 }
 
 export interface M3AnnualScreening {

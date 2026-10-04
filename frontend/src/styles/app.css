@@ -1460,6 +1460,11 @@ ul {
   font-size: 0.86rem;
 }
 
+.annual-m3-issue code {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
 .annual-m3-raw-value {
   margin-top: 0.4rem;
 }

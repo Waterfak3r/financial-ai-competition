@@ -11,6 +11,7 @@ import type {
   ClaimVerification,
   MetricVerification,
   M3AnnualScreening,
+  M3AnnualScreeningIssue,
   M3AnnualScreeningRule,
   PdfBox,
   VerificationEvidence,
@@ -590,7 +591,20 @@ function readM3AnnualScreeningRule(value: unknown, path: string): M3AnnualScreen
     status: requireString(record.status, path + ".status"),
     triggered: triggeredValue,
     calculated_value: nullableString(record.calculated_value, path + ".calculated_value"),
-    issues: readStringArray(record.issues, path + ".issues"),
+    issues: requireArray(record.issues, path + ".issues").map((item, index) =>
+      readM3AnnualScreeningIssue(item, path + ".issues[" + index + "]"),
+    ),
+  };
+}
+
+function readM3AnnualScreeningIssue(value: unknown, path: string): M3AnnualScreeningIssue {
+  if (typeof value === "string") {
+    return { code: null, message: value };
+  }
+  const record = requireRecord(value, path);
+  return {
+    code: requireString(record.code, path + ".code"),
+    message: requireString(record.message, path + ".message"),
   };
 }
 

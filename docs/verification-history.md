@@ -220,3 +220,13 @@ C-02 独立季度 CLI 已以 `af13785d9ba9d635ea79e670c42beb54415d9bbd` 提交�
 只读浏览器检查使用 Microsoft Edge 154.0.4258.53，通过 Playwright 和本机项目页面 `5174`，数据由本机 API `8001` 提供。1366×900 与 390×844 两种视口均准确显示完整段落与易懂的“为什么显示这段”；键盘 Enter 可展开原始引用和逐块来源详情；聚焦/整页 PDF 图可切换，Escape 将焦点返回来源入口；打开详情及页图时文档宽度均无横向溢出。旧 API 缺少 `reading_context`、引用 bbox 增加 0.05 point 两项是对真实本机 HTTP 响应副本的前端拦截变换，明确属于合成兼容检查，不是服务端归档写入。浏览器仅发本机 GET，无 POST、非本机请求或页面脚本错误。截图保存在任务 `artifacts/tmp/narrative-readability-20261004-8036d75c/`；真实年报页图只保留在该本机临时目录，不进入 Git。
 
 冻结后的修改尚未加载到原默认 API 服务：操作前确认 8000 属于本项目 Uvicorn（PID 18168）、5173 属于项目 Vite（PID 26324），16 个 `job.json` 中无 `queued`/`running` 且无解析错误。尝试为 8000 执行精确重载时，工具在启动 PowerShell 前以 `blocked by policy` 拒绝了命令；命令与工具返回说明留在任务 tmp。没有重试停止进程、没有改变默认端口服务；本段的通过证据仅适用于 8001/5174。默认 API 尚未应用本修正，原 5173 Vite 未停止。
+
+## 2026-10-04 M3 结构化问题项前端读取修复
+
+真实集成归档 `annual-job-68b7f11003be480f8a2d910df3b19ac4` / `annual-analysis-674537c3-3811-40fd-bb60-212ed5fa6e45` 的 API 返回 HTTP 200，但前端把 M3 `issues` 当字符串数组，导致整份报告拒绝显示。前端现在保留 `{code, message}`，兼容旧字符串项并将其归一为 `code: null`；结构化项字段缺失、为 null 或类型不符仍拒绝整份响应。展开规则详情后显示原始原因和 code，M3 弃权与 null 总分保持原样。接口契约见[架构](architecture.md#4-财务与证据契约)的 M3 规则说明。
+
+使用 Microsoft Edge 154.0.4258.53，经默认 Vite 5173 和既有 API 8000 回读真实归档。桌面与 390×844 页面均显示 8 条已确认且独立核验通过的数据、四条 M3 弃权规则与 null 总分；报告中的 **14 条原始 issue code 与完整 message 均在两个视口的展开详情中逐条保留**，包括 `missing_fact`、`comparability_unverified`、`semantic_mapping` 和 `comparability_unbound`。模型评审状态为 completed，页面将其与本地独立核验分开展示。两种视口无横向溢出，页面无 `[object Object]`、console/page error；请求均为本机 GET，没有外网请求。另回读海天既有 M3 运行 `annual-analysis-5e7079fe-9ac9-4e96-85fa-1898f9177d21` 和 integrated 运行 `annual-analysis-ae6587e1-b25b-4ac6-8eb2-1520803f663f`，两者四条空 `issues` 均通过 API 与页面检查。
+
+拦截响应兼容/拒绝矩阵共 16 个 parser case 和 5 个 UI fixture：legacy string、unknown 合法 code、多条 issue、empty array 接受；null/数组/数字项、code/message 缺失/null/错类型及 source SHA mismatch 均 fail-closed，响应路径见证据 JSON。前端 `npm run typecheck`、`npm run build` 均 exit 0。未重启 API、未创建新分析任务、未调用模型供应方。
+
+用户 PDF、上传来源 PDF、运行归档 PDF、source.json、job.json、report.json、M3 JSON 与 manifest 前后哈希一致；PDF 封面核对为贵州茅台 600519 的 2025 年年度报告。详见[本次证据索引](../artifacts/evaluations/m3-issue-contract-20261004-maotai2025/evidence.json)。修复前/后桌面、移动、M3 详情与 PDF 页截图，以及原始日志和完整浏览器 JSON 保存在 `artifacts/tmp/m3-issue-contract-20261004-maotai2025/`。

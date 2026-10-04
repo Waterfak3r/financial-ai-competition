@@ -115,6 +115,8 @@ M3 使用应收账款净额、存货净额、合并净利润、营业成本、�
 
 每条触发计 25 分；任一规则不可计算，总分为 None，不把部分结果按完整总分展示。阈值未经隔离评测校准，分数不是风险概率或舞弊结论。Markdown 计算值最多显示六位小数，JSON 保留 Decimal 原值，规则在舍入前判断。
 
+年度报告 API 中每条规则的 `issues` 是结构化原因数组，正式归档项为 `{code, message}`，`code` 与 `message` 均为字符串；前端保留未知但类型有效的 code，并显示原始 message。客户端兼容字符串项，将其规范化为 `{code: null, message}`；结构化项的 code/message 缺失、为 null 或类型错误，以及 null、数组、数字等非法项均拒绝整份响应。弃权状态仍保留 `total_score: null`，不按零分补齐。
+
 输入必须唯一、同公司同源、单位/币种/期间角色及口径相容，逐条独立核验；提取与核验 evidence ID 不重叠。筛查接收同一进程 verify_financial_fact 的直接结果。VerificationResult 本身不是签名 proof，手工重建对象或反序列化 JSON 不能用来证明已核验。
 
 扣非归母净利润来自“主要会计数据”，保持 statement_type=key_financial_data、scope=unknown，排除同比百分比栏。规则二只对海天 603288 的 2024 年报第 7 页版式建立专属映射：核验器重定位“归属于上市公司股东的净利润”，与合并利润表归母净利润逐年对值后签发 proof；绑定源哈希、document_id、报告年、两年相关 fact ID/值与重定位区域。其他公司/期间不套用此证明。non_recurring_total 是披露合计，不是扣非归母净利润；其显式单位副本只供审计，不输入规则。

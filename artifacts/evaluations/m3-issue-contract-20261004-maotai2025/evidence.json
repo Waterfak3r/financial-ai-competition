@@ -1,0 +1,585 @@
+{
+  "task_id": "m3-issue-contract-20261004-maotai2025",
+  "task_scope": "修复年度报告前端 M3 issues 读取/展示契约；没有修改后端财务分析、核验、归档、提示词或报告内容。",
+  "runtime": {
+    "head": "8b51fdce95fd79d1f0cefc4c967806b7151b9e4e",
+    "frontend_port": 5173,
+    "backend_port": 8000,
+    "frontend_pid": 26324,
+    "backend_pid": 18168,
+    "backend_restarted": false,
+    "online_analysis_created": false,
+    "model_provider_called_during_validation": false
+  },
+  "before_fix": {
+    "api_status": 200,
+    "frontend_error": "年度分析响应字段 report.m3_screening.screening.rules[0].issues[0] 格式无效，未显示该响应。",
+    "screenshot": "artifacts/tmp/m3-issue-contract-20261004-maotai2025/before-fix-desktop.png",
+    "browser_json": "artifacts/tmp/m3-issue-contract-20261004-maotai2025/before-fix-browser.json"
+  },
+  "source_pdf_validation": {
+    "path": "tem/贵州茅台酒股份有限公司2025 年年度报告.pdf",
+    "sha256": "474905deeaf0f875fc0a1b097a626c0c7852c427faadc5d7fc7816cbf45ea288",
+    "size_bytes": 1082847,
+    "pdf_title_metadata": "贵州茅台酒股份有限公司2025年年度报告",
+    "page_count": 143,
+    "cover_title_verified": true,
+    "cover_company_code_verified": true,
+    "rendered_pages": [
+      1,
+      2
+    ],
+    "rendered_page_paths": [
+      "artifacts/tmp/m3-issue-contract-20261004-maotai2025/pdf-page-001.png",
+      "artifacts/tmp/m3-issue-contract-20261004-maotai2025/pdf-page-002.png"
+    ],
+    "pdfinfo_and_pdftotext": "Poppler pdfinfo/pdftotext; PyMuPDF 1.27.2.3"
+  },
+  "real_archive": {
+    "job_id": "annual-job-68b7f11003be480f8a2d910df3b19ac4",
+    "job_status": "completed_with_issues",
+    "run_id": "annual-analysis-674537c3-3811-40fd-bb60-212ed5fa6e45",
+    "company_id": "600519",
+    "report_year": 2025,
+    "mode": "integrated_analysis",
+    "confirmed_metrics": 8,
+    "m3_status": "abstained",
+    "screening_status": "abstained",
+    "m3_total_score": null,
+    "m3_rule_statuses": [
+      "abstained",
+      "abstained",
+      "abstained",
+      "abstained"
+    ],
+    "m3_issue_codes": [
+      "comparability_unbound",
+      "comparability_unverified",
+      "missing_fact",
+      "semantic_mapping"
+    ],
+    "model_review_status": "completed"
+  },
+  "real_browser_assertions": {
+    "confirmed_records_8_visible": true,
+    "independent_verification_8_visible": true,
+    "four_rules_abstained": true,
+    "total_score_remains_null": true,
+    "issue_codes_preserved": true,
+    "original_reasons_visible_after_expansion": true,
+    "model_review_completed_and_visible": true,
+    "model_layer_separate_from_local_verification": true,
+    "no_object_object": true,
+    "desktop_no_horizontal_overflow": true,
+    "mobile_no_horizontal_overflow": true,
+    "mobile_has_8_confirmed_records": true,
+    "visible_reason_checks": {
+      "missing_fact": {
+        "code_visible": true,
+        "original_message_visible": true
+      },
+      "comparability_unverified": {
+        "code_visible": true,
+        "original_message_visible": true
+      },
+      "semantic_mapping": {
+        "code_visible": true,
+        "original_message_visible": true
+      }
+    }
+  },
+  "real_browser_assertions_all_pass": true,
+  "fixture_parser_cases": [
+    {
+      "accepted": true,
+      "metricCount": 8,
+      "totalScore": null,
+      "firstRuleIssues": [
+        {
+          "code": "missing_fact",
+          "message": "缺少 net_profit_consolidated 的 2025 年 current 事实。"
+        },
+        {
+          "code": "comparability_unverified",
+          "message": "年度可比性未通过：年度可比性核验未通过：重要会计政策变更未明确勾选不适用（未找到与 重要会计政策变更 精确关联的不适用披露。）。；重要会计估计变更未明确勾选不适用（未找到与 重要会计估计变更 精确关联的不适用披露。）。；前期差错追溯重述法未明确勾选不适用（未找到与前期会计差错更正关联的追溯重述法披露。）。；缺少“准则追溯调整”对期初未分配利润影响为 0 元的明确披露。；缺少“会计政策变更”对期初未分配利润影响为 0 元的明确披露。；缺少“重大会计差错更正”对期初未分配利润影响为 0 元的明确披露。；缺少“同一控制合并范围变更”对期初未分配利润影响为 0 元的明确披露。；缺少“其他调整”对期初未分配利润影响为 0 元的明确披露。"
+        }
+      ],
+      "firstRuleIssueCount": 2,
+      "case": "real_archive",
+      "expected_accept": true,
+      "pass": true
+    },
+    {
+      "accepted": true,
+      "metricCount": 8,
+      "totalScore": null,
+      "firstRuleIssues": [
+        {
+          "code": null,
+          "message": "LEGACY_REASON_VISIBLE"
+        }
+      ],
+      "firstRuleIssueCount": 1,
+      "case": "legacy_string",
+      "expected_accept": true,
+      "pass": true
+    },
+    {
+      "accepted": true,
+      "metricCount": 8,
+      "totalScore": null,
+      "firstRuleIssues": [
+        {
+          "code": "future_m3_issue_v9",
+          "message": "UNKNOWN_CODE_REASON_VISIBLE"
+        },
+        {
+          "code": "second_issue",
+          "message": "SECOND_REASON_VISIBLE"
+        }
+      ],
+      "firstRuleIssueCount": 2,
+      "case": "structured_unknown_code_multiple",
+      "expected_accept": true,
+      "pass": true
+    },
+    {
+      "accepted": true,
+      "metricCount": 8,
+      "totalScore": null,
+      "firstRuleIssues": [],
+      "firstRuleIssueCount": 0,
+      "case": "empty_array",
+      "expected_accept": true,
+      "pass": true
+    },
+    {
+      "accepted": false,
+      "errorName": "AnnualReportApiError",
+      "errorMessage": "年度分析响应字段 report.m3_screening.screening.rules[0].issues[0] 格式无效，未显示该响应。",
+      "case": "null_entry",
+      "expected_accept": false,
+      "pass": true
+    },
+    {
+      "accepted": false,
+      "errorName": "AnnualReportApiError",
+      "errorMessage": "年度分析响应字段 report.m3_screening.screening.rules[0].issues[0] 格式无效，未显示该响应。",
+      "case": "array_entry",
+      "expected_accept": false,
+      "pass": true
+    },
+    {
+      "accepted": false,
+      "errorName": "AnnualReportApiError",
+      "errorMessage": "年度分析响应字段 report.m3_screening.screening.rules[0].issues[0] 格式无效，未显示该响应。",
+      "case": "number_entry",
+      "expected_accept": false,
+      "pass": true
+    },
+    {
+      "accepted": false,
+      "errorName": "AnnualReportApiError",
+      "errorMessage": "年度分析响应字段 report.m3_screening.screening.rules[0].issues[0].code 格式无效，未显示该响应。",
+      "case": "null_code",
+      "expected_accept": false,
+      "pass": true
+    },
+    {
+      "accepted": false,
+      "errorName": "AnnualReportApiError",
+      "errorMessage": "年度分析响应字段 report.m3_screening.screening.rules[0].issues[0].code 格式无效，未显示该响应。",
+      "case": "missing_code",
+      "expected_accept": false,
+      "pass": true
+    },
+    {
+      "accepted": false,
+      "errorName": "AnnualReportApiError",
+      "errorMessage": "年度分析响应字段 report.m3_screening.screening.rules[0].issues[0].code 格式无效，未显示该响应。",
+      "case": "wrong_code_type",
+      "expected_accept": false,
+      "pass": true
+    },
+    {
+      "accepted": false,
+      "errorName": "AnnualReportApiError",
+      "errorMessage": "年度分析响应字段 report.m3_screening.screening.rules[0].issues[0].message 格式无效，未显示该响应。",
+      "case": "null_message",
+      "expected_accept": false,
+      "pass": true
+    },
+    {
+      "accepted": false,
+      "errorName": "AnnualReportApiError",
+      "errorMessage": "年度分析响应字段 report.m3_screening.screening.rules[0].issues[0].message 格式无效，未显示该响应。",
+      "case": "missing_message",
+      "expected_accept": false,
+      "pass": true
+    },
+    {
+      "accepted": false,
+      "errorName": "AnnualReportApiError",
+      "errorMessage": "年度分析响应字段 report.m3_screening.screening.rules[0].issues[0].message 格式无效，未显示该响应。",
+      "case": "wrong_message_type",
+      "expected_accept": false,
+      "pass": true
+    },
+    {
+      "accepted": false,
+      "errorName": "AnnualReportApiError",
+      "errorMessage": "年度分析响应字段 report.m3_screening.screening.rules[0].issues 格式无效，未显示该响应。",
+      "case": "missing_issues_array",
+      "expected_accept": false,
+      "pass": true
+    },
+    {
+      "accepted": false,
+      "errorName": "AnnualReportApiError",
+      "errorMessage": "年度分析响应字段 report.m3_screening.screening.rules[0].issues 格式无效，未显示该响应。",
+      "case": "null_issues_array",
+      "expected_accept": false,
+      "pass": true
+    },
+    {
+      "accepted": false,
+      "errorName": "AnnualReportApiError",
+      "errorMessage": "年度分析响应字段 report.m3_screening source binding 格式无效，未显示该响应。",
+      "case": "source_sha_mismatch",
+      "expected_accept": false,
+      "pass": true
+    }
+  ],
+  "fixture_ui_cases": [
+    {
+      "case": "legacy_string_ui",
+      "expect_report": true,
+      "report_visible": true,
+      "expected_text_visible": true,
+      "unknown_code_visible": null,
+      "alert_text": null,
+      "body_has_object_object": false,
+      "pass": true
+    },
+    {
+      "case": "structured_unknown_code_multiple_ui",
+      "expect_report": true,
+      "report_visible": true,
+      "expected_text_visible": true,
+      "unknown_code_visible": true,
+      "alert_text": null,
+      "body_has_object_object": false,
+      "pass": true
+    },
+    {
+      "case": "malformed_null_ui",
+      "expect_report": false,
+      "report_visible": false,
+      "expected_text_visible": null,
+      "unknown_code_visible": null,
+      "alert_text": "年度分析响应字段 report.m3_screening.screening.rules[0].issues[0] 格式无效，未显示该响应。",
+      "body_has_object_object": false,
+      "pass": true
+    },
+    {
+      "case": "malformed_null_code_ui",
+      "expect_report": false,
+      "report_visible": false,
+      "expected_text_visible": null,
+      "unknown_code_visible": null,
+      "alert_text": "年度分析响应字段 report.m3_screening.screening.rules[0].issues[0].code 格式无效，未显示该响应。",
+      "body_has_object_object": false,
+      "pass": true
+    },
+    {
+      "case": "source_mismatch_ui",
+      "expect_report": false,
+      "report_visible": false,
+      "alert_text": "年度分析响应字段 report.m3_screening source binding 格式无效，未显示该响应。",
+      "body_has_object_object": false,
+      "pass": true
+    }
+  ],
+  "fixture_parser_all_pass": true,
+  "fixture_ui_all_pass": true,
+  "existing_haitian_empty_issue_archives": [
+    {
+      "case": "m3_screening",
+      "expected_mode": "m3_screening",
+      "api": {
+        "runId": "annual-analysis-5e7079fe-9ac9-4e96-85fa-1898f9177d21",
+        "mode": null,
+        "reportCompany": "603288",
+        "reportYear": 2024,
+        "status": "completed",
+        "screeningStatus": "completed",
+        "totalScore": 0,
+        "ruleCount": 4,
+        "emptyIssueCount": 4
+      },
+      "ui": {
+        "reportVisible": true,
+        "ruleCards": 4,
+        "issueRows": 0
+      },
+      "pass": true
+    },
+    {
+      "case": "integrated_analysis",
+      "expected_mode": "integrated_analysis",
+      "api": {
+        "runId": "annual-analysis-ae6587e1-b25b-4ac6-8eb2-1520803f663f",
+        "mode": "integrated_analysis",
+        "reportCompany": "603288",
+        "reportYear": 2024,
+        "status": "completed",
+        "screeningStatus": "completed",
+        "totalScore": 0,
+        "ruleCount": 4,
+        "emptyIssueCount": 4
+      },
+      "ui": {
+        "reportVisible": true,
+        "ruleCards": 4,
+        "issueRows": 0
+      },
+      "pass": true
+    }
+  ],
+  "existing_haitian_archives_all_pass": true,
+  "browser_safety": {
+    "browser": "Microsoft Edge 154.0.4258.53",
+    "methods": [
+      "GET"
+    ],
+    "hosts": [
+      "127.0.0.1:5173"
+    ],
+    "external_request_count": 0,
+    "console_errors": [],
+    "page_errors": [],
+    "GET_only": true,
+    "no_external_requests": true
+  },
+  "source_integrity": {
+    "files": {
+      "user_pdf": {
+        "before": "474905deeaf0f875fc0a1b097a626c0c7852c427faadc5d7fc7816cbf45ea288",
+        "after": "474905deeaf0f875fc0a1b097a626c0c7852c427faadc5d7fc7816cbf45ea288",
+        "unchanged": true
+      },
+      "uploaded_source_pdf": {
+        "before": "474905deeaf0f875fc0a1b097a626c0c7852c427faadc5d7fc7816cbf45ea288",
+        "after": "474905deeaf0f875fc0a1b097a626c0c7852c427faadc5d7fc7816cbf45ea288",
+        "unchanged": true
+      },
+      "uploaded_source_json": {
+        "before": "82f8369431298e957bef96f502347609f7dcbedcb8f1058c303dec2de422ec41",
+        "after": "82f8369431298e957bef96f502347609f7dcbedcb8f1058c303dec2de422ec41",
+        "unchanged": true
+      },
+      "archived_run_source_pdf": {
+        "before": "474905deeaf0f875fc0a1b097a626c0c7852c427faadc5d7fc7816cbf45ea288",
+        "after": "474905deeaf0f875fc0a1b097a626c0c7852c427faadc5d7fc7816cbf45ea288",
+        "unchanged": true
+      },
+      "job_json": {
+        "before": "d1579ded388596f6fd1ab04dfafd6a5e9c433a216b1628e5ece05680e83aa1d5",
+        "after": "d1579ded388596f6fd1ab04dfafd6a5e9c433a216b1628e5ece05680e83aa1d5",
+        "unchanged": true
+      },
+      "report_json": {
+        "before": "8a3683ce28aee1126429fa801602599db64ac02212f3cb19f7106670f32076f6",
+        "after": "8a3683ce28aee1126429fa801602599db64ac02212f3cb19f7106670f32076f6",
+        "unchanged": true
+      },
+      "m3_screening_json": {
+        "before": "19e45399b7ed4c2901af80156b9eef61a90f2193cc7a0358ba57cabb2e1e84b5",
+        "after": "19e45399b7ed4c2901af80156b9eef61a90f2193cc7a0358ba57cabb2e1e84b5",
+        "unchanged": true
+      },
+      "manifest_json": {
+        "before": "93a254d13848a0af50b7d0dab28f68eb7d843f22ec8a42763630ef0fcd5d58e9",
+        "after": "93a254d13848a0af50b7d0dab28f68eb7d843f22ec8a42763630ef0fcd5d58e9",
+        "unchanged": true
+      }
+    },
+    "all_unchanged": true
+  },
+  "build_checks": {
+    "typecheck": "npm run typecheck: exit 0",
+    "build": "npm run build: exit 0; Vite 8.3.0"
+  },
+  "evidence_files": {
+    "browser_json": "artifacts/tmp/m3-issue-contract-20261004-maotai2025/after-fix-browser.json",
+    "real_api_response": "artifacts/tmp/m3-issue-contract-20261004-maotai2025/real-api-response.json",
+    "browser_raw_log": "artifacts/tmp/m3-issue-contract-20261004-maotai2025/browser-run-final.log",
+    "typecheck_log": "artifacts/tmp/m3-issue-contract-20261004-maotai2025/typecheck-final.log",
+    "build_log": "artifacts/tmp/m3-issue-contract-20261004-maotai2025/build-final.log",
+    "screenshots": {
+      "before_fix_desktop": "artifacts/tmp/m3-issue-contract-20261004-maotai2025/before-fix-desktop.png",
+      "after_fix_desktop_full": "artifacts/tmp/m3-issue-contract-20261004-maotai2025/after-fix-desktop.png",
+      "after_fix_desktop_m3_detail": "artifacts/tmp/m3-issue-contract-20261004-maotai2025/after-fix-desktop-m3-issues.png",
+      "after_fix_mobile_full": "artifacts/tmp/m3-issue-contract-20261004-maotai2025/after-fix-mobile.png",
+      "after_fix_mobile_m3_detail": "artifacts/tmp/m3-issue-contract-20261004-maotai2025/after-fix-mobile-m3-issues.png",
+      "pdf_cover": "artifacts/tmp/m3-issue-contract-20261004-maotai2025/pdf-page-001.png",
+      "pdf_second_page": "artifacts/tmp/m3-issue-contract-20261004-maotai2025/pdf-page-002.png"
+    }
+  },
+  "verification_summary": {
+    "parser_case_count": 16,
+    "parser_rejected_case_count": 12,
+    "ui_fixture_count": 5,
+    "empty_issue_archive_count": 2,
+    "all_checks_pass": true
+  },
+  "all_m3_issue_content_visibility": {
+    "expected_issue_count": 14,
+    "actual_issue_count": 14,
+    "desktop_width": 1366,
+    "mobile_width": 390,
+    "all_original_codes_and_full_messages_visible_at_both_widths": true,
+    "issue_checks": [
+      {
+        "rule_index": 0,
+        "issue_index": 0,
+        "code": "missing_fact",
+        "message": "缺少 net_profit_consolidated 的 2025 年 current 事实。",
+        "desktop_code_visible": true,
+        "desktop_full_message_visible": true,
+        "mobile_code_visible": true,
+        "mobile_full_message_visible": true
+      },
+      {
+        "rule_index": 0,
+        "issue_index": 1,
+        "code": "comparability_unverified",
+        "message": "年度可比性未通过：年度可比性核验未通过：重要会计政策变更未明确勾选不适用（未找到与 重要会计政策变更 精确关联的不适用披露。）。；重要会计估计变更未明确勾选不适用（未找到与 重要会计估计变更 精确关联的不适用披露。）。；前期差错追溯重述法未明确勾选不适用（未找到与前期会计差错更正关联的追溯重述法披露。）。；缺少“准则追溯调整”对期初未分配利润影响为 0 元的明确披露。；缺少“会计政策变更”对期初未分配利润影响为 0 元的明确披露。；缺少“重大会计差错更正”对期初未分配利润影响为 0 元的明确披露。；缺少“同一控制合并范围变更”对期初未分配利润影响为 0 元的明确披露。；缺少“其他调整”对期初未分配利润影响为 0 元的明确披露。",
+        "desktop_code_visible": true,
+        "desktop_full_message_visible": true,
+        "mobile_code_visible": true,
+        "mobile_full_message_visible": true
+      },
+      {
+        "rule_index": 1,
+        "issue_index": 0,
+        "code": "missing_fact",
+        "message": "缺少 net_profit_parent_ex_nonrecurring 的 2025 年 current 事实。",
+        "desktop_code_visible": true,
+        "desktop_full_message_visible": true,
+        "mobile_code_visible": true,
+        "mobile_full_message_visible": true
+      },
+      {
+        "rule_index": 1,
+        "issue_index": 1,
+        "code": "missing_fact",
+        "message": "缺少 net_profit_parent_ex_nonrecurring 的 2024 年 comparative 事实。",
+        "desktop_code_visible": true,
+        "desktop_full_message_visible": true,
+        "mobile_code_visible": true,
+        "mobile_full_message_visible": true
+      },
+      {
+        "rule_index": 1,
+        "issue_index": 2,
+        "code": "comparability_unverified",
+        "message": "年度可比性未通过：年度可比性核验未通过：重要会计政策变更未明确勾选不适用（未找到与 重要会计政策变更 精确关联的不适用披露。）。；重要会计估计变更未明确勾选不适用（未找到与 重要会计估计变更 精确关联的不适用披露。）。；前期差错追溯重述法未明确勾选不适用（未找到与前期会计差错更正关联的追溯重述法披露。）。；缺少“准则追溯调整”对期初未分配利润影响为 0 元的明确披露。；缺少“会计政策变更”对期初未分配利润影响为 0 元的明确披露。；缺少“重大会计差错更正”对期初未分配利润影响为 0 元的明确披露。；缺少“同一控制合并范围变更”对期初未分配利润影响为 0 元的明确披露。；缺少“其他调整”对期初未分配利润影响为 0 元的明确披露。",
+        "desktop_code_visible": true,
+        "desktop_full_message_visible": true,
+        "mobile_code_visible": true,
+        "mobile_full_message_visible": true
+      },
+      {
+        "rule_index": 1,
+        "issue_index": 3,
+        "code": "semantic_mapping",
+        "message": "缺少本进程从原始 PDF 第 7 页签发的规则二专属跨表语义映射 proof。",
+        "desktop_code_visible": true,
+        "desktop_full_message_visible": true,
+        "mobile_code_visible": true,
+        "mobile_full_message_visible": true
+      },
+      {
+        "rule_index": 2,
+        "issue_index": 0,
+        "code": "missing_fact",
+        "message": "缺少 accounts_receivable_net 的 2025 年 current 事实。",
+        "desktop_code_visible": true,
+        "desktop_full_message_visible": true,
+        "mobile_code_visible": true,
+        "mobile_full_message_visible": true
+      },
+      {
+        "rule_index": 2,
+        "issue_index": 1,
+        "code": "missing_fact",
+        "message": "缺少 accounts_receivable_net 的 2024 年 comparative 事实。",
+        "desktop_code_visible": true,
+        "desktop_full_message_visible": true,
+        "mobile_code_visible": true,
+        "mobile_full_message_visible": true
+      },
+      {
+        "rule_index": 2,
+        "issue_index": 2,
+        "code": "comparability_unverified",
+        "message": "年度可比性未通过：年度可比性核验未通过：重要会计政策变更未明确勾选不适用（未找到与 重要会计政策变更 精确关联的不适用披露。）。；重要会计估计变更未明确勾选不适用（未找到与 重要会计估计变更 精确关联的不适用披露。）。；前期差错追溯重述法未明确勾选不适用（未找到与前期会计差错更正关联的追溯重述法披露。）。；缺少“准则追溯调整”对期初未分配利润影响为 0 元的明确披露。；缺少“会计政策变更”对期初未分配利润影响为 0 元的明确披露。；缺少“重大会计差错更正”对期初未分配利润影响为 0 元的明确披露。；缺少“同一控制合并范围变更”对期初未分配利润影响为 0 元的明确披露。；缺少“其他调整”对期初未分配利润影响为 0 元的明确披露。",
+        "desktop_code_visible": true,
+        "desktop_full_message_visible": true,
+        "mobile_code_visible": true,
+        "mobile_full_message_visible": true
+      },
+      {
+        "rule_index": 3,
+        "issue_index": 0,
+        "code": "missing_fact",
+        "message": "缺少 inventory_net 的 2025 年 current 事实。",
+        "desktop_code_visible": true,
+        "desktop_full_message_visible": true,
+        "mobile_code_visible": true,
+        "mobile_full_message_visible": true
+      },
+      {
+        "rule_index": 3,
+        "issue_index": 1,
+        "code": "missing_fact",
+        "message": "缺少 inventory_net 的 2024 年 comparative 事实。",
+        "desktop_code_visible": true,
+        "desktop_full_message_visible": true,
+        "mobile_code_visible": true,
+        "mobile_full_message_visible": true
+      },
+      {
+        "rule_index": 3,
+        "issue_index": 2,
+        "code": "missing_fact",
+        "message": "缺少 cost_of_goods_sold 的 2025 年 current 事实。",
+        "desktop_code_visible": true,
+        "desktop_full_message_visible": true,
+        "mobile_code_visible": true,
+        "mobile_full_message_visible": true
+      },
+      {
+        "rule_index": 3,
+        "issue_index": 3,
+        "code": "missing_fact",
+        "message": "缺少 cost_of_goods_sold 的 2024 年 comparative 事实。",
+        "desktop_code_visible": true,
+        "desktop_full_message_visible": true,
+        "mobile_code_visible": true,
+        "mobile_full_message_visible": true
+      },
+      {
+        "rule_index": 3,
+        "issue_index": 4,
+        "code": "comparability_unbound",
+        "message": "缺少事实，无法把可比性 proof 绑定到本次来源。",
+        "desktop_code_visible": true,
+        "desktop_full_message_visible": true,
+        "mobile_code_visible": true,
+        "mobile_full_message_visible": true
+      }
+    ]
+  }
+}

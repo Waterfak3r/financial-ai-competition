@@ -2541,7 +2541,16 @@ function M3ScreeningBlock({ screening }: { screening: M3AnnualScreening }) {
                   <dt>规则版本</dt><dd><code>{screening.rule_version}</code></dd>
                   <dt>内部状态</dt><dd><code>{rule.status}</code></dd>
                 </dl>
-                {rule.issues.length === 0 ? null : <ul className="annual-m3-issue">{rule.issues.map((issue, index) => <li key={`${index}-${issue}`}>{issue}</li>)}</ul>}
+                {rule.issues.length === 0 ? null : (
+                  <ul className="annual-m3-issue">
+                    {rule.issues.map((issue, index) => (
+                      <li key={`${rule.rule_id}-${index}-${issue.code ?? "legacy"}`}>
+                        <span>{issue.message}</span>
+                        {issue.code === null ? null : <code>{issue.code}</code>}
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </details>
             </article>
           ))}
