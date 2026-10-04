@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 from urllib.parse import quote
 
@@ -9,8 +10,9 @@ import pymupdf
 import pytest
 from fastapi.testclient import TestClient
 
+import finagent.api.annual_report_export as annual_export_module
 from finagent.api.annual_report_export import AnnualReportExportError, export_annual_report
-from finagent.api.annual_report_read import AnnualReportReadError
+from finagent.api.annual_report_read import AnnualReportReadError, load_annual_report
 from finagent.api.app import create_app
 
 
@@ -227,6 +229,124 @@ def test_json_export_projects_four_bound_layers_and_strips_extensions(tmp_path: 
     assert "audit_artifacts" not in exported.content.decode("utf-8")
     assert "request_body" not in exported.content.decode("utf-8")
     assert "D:\\private" not in exported.content.decode("utf-8")
+
+
+def test_review_mixed_fact_calculation_and_discovery_refs_survive_all_exports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    created = _archive(tmp_path)
+    run_id = str(created["run_id"])
+    archive = load_annual_report(tmp_path, run_id)
+    report = json.loads(json.dumps(archive.report, ensure_ascii=False))
+    source_sha = archive.manifest_summary["source_pdf_sha256"]
+    finding_id = f"disc:{source_sha[:12]}-{hashlib.sha256(b'mixed-export-finding').hexdigest()[:20]}"
+    evidence_id = f"adisc-{source_sha[:12]}-p1-b0-c0-{hashlib.sha256(b'mixed-export-evidence').hexdigest()[:12]}"
+    quote_text = "模拟年报：营业收入"
+    review_refs = ["fact-revenue-2025", "calc-export-001", finding_id]
+
+    report["confirmed"]["analyses"] = [{
+        "calculation_id": "calc-export-001",
+        "formula_id": "revenue-change",
+        "formula_expression": "(current - prior) / prior",
+        "input_fact_ids": ["fact-revenue-2025"],
+        "output_value": "stable",
+        "unit": "ratio",
+        "status": "verified",
+        "verifications": [],
+        "failure_reason": None,
+        "placement_reasons": [],
+    }]
+    report["model_investigation"].update({
+        "model_call_count": 4,
+        "model_call_attempt_count": 4,
+        "investigation_call_count": 2,
+        "investigation_call_attempt_count": 2,
+        "discovery_call_count": 1,
+        "discovery_call_attempt_count": 1,
+        "model_review_call_count": 1,
+        "model_review_call_attempt_count": 1,
+    })
+    review = report["model_review"]
+    review["reasons"] = [{"text": "已核验指标、计算和全文线索共同支持复核。", "evidence_ids": review_refs}]
+    report["model_investigation"]["final_review"] = review
+    report["model_discovery"] = {
+        "kind": "fintrace_annual_discovery",
+        "run_id": run_id,
+        "company_id": report["company_id"],
+        "report_year": report["report_year"],
+        "source_document_id": report["source_document_id"],
+        "source_sha256": source_sha,
+        "status": "completed",
+        "prompt_version": "annual_discovery_v1",
+        "model_called": True,
+        "model_call_count": 1,
+        "model_call_attempt_count": 1,
+        "coverage": {
+            "total_pages": 1, "text_pages": 1, "total_blocks": 1, "total_chars": 30,
+            "planned_batches": 1, "processed_batches": 1, "successful_batches": 1,
+            "failed_batches": 0, "processed_chars": 30, "attempted_chars": 30,
+            "unattempted_batches": 0, "unattempted_chars": 0, "planned_chars": 30,
+            "omitted_chars": 0, "unread_pages": [], "failed_pages": [],
+            "no_text_pages": [], "image_pages": [], "unread_image_pages": [],
+            "truncated": False, "complete": True, "source_status": "parsed",
+            "content_status": "text_available", "time_budget_exhausted": False,
+            "text_only_scope": "all extractable text; no OCR",
+            "batch_results": [{
+                "batch_index": 1, "status": "succeeded", "reason": None,
+                "pages": [1], "raw_chars": 30,
+            }],
+        },
+        "findings": [{
+            "finding_id": finding_id,
+            "title": "客户安排披露",
+            "observation": "报告披露一项待核查的业务安排。",
+            "why_it_matters": "相关事项可能影响对经营情况的理解。",
+            "follow_up": "建议核对相关合同和结算记录。",
+            "priority": "medium",
+            "classification": "unverified_model_finding",
+            "verification_status": "unverified",
+            "evidence_ids": [evidence_id],
+            "citations": [{"evidence_id": evidence_id, "quote": quote_text}],
+        }],
+        "limitations": [],
+        "reason": None,
+        "fraud_conclusion": None,
+    }
+    evidence_record = {
+        "evidence_id": evidence_id,
+        "source_document_id": report["source_document_id"],
+        "source_sha256": source_sha,
+        "pdf_page": 1,
+        "block_index": 0,
+        "start_char": 0,
+        "bbox": {"x0": 40.0, "y0": 70.0, "x1": 180.0, "y1": 100.0},
+        "raw_text": quote_text,
+        "finding_ids": [finding_id],
+    }
+    enriched_archive = replace(
+        archive,
+        report=report,
+        discovery_evidences=(evidence_record,),
+    )
+    monkeypatch.setattr(annual_export_module, "load_annual_report", lambda _root, _run_id: enriched_archive)
+
+    results = {
+        format: export_annual_report(tmp_path, run_id, format)
+        for format in ("json", "markdown", "html")
+    }
+
+    json_payload = json.loads(results["json"].content)
+    projected_review_refs = json_payload["report"]["model_review"]["reasons"][0]["evidence_ids"]
+    assert projected_review_refs == review_refs
+    assert json_payload["report"]["model_investigation"]["model_call_count"] == 4
+    assert json_payload["report"]["model_investigation"]["discovery_call_count"] == 1
+    assert json_payload["evidence_index"]["discovery_evidences"][0]["finding_ids"] == [finding_id]
+    for export in results.values():
+        output = export.content.decode("utf-8")
+        assert all(reference in output for reference in review_refs)
+        assert evidence_id in output
+        assert quote_text not in output
+        assert "raw_text" not in output
 
 
 def test_html_and_markdown_escape_untrusted_html_and_links(tmp_path: Path) -> None:

@@ -27,8 +27,10 @@ from finagent.api.annual_analysis_history import (
 )
 from finagent.api.annual_report_read import (
     AnnualReportReadError,
+    DISCOVERY_EVIDENCE_INTERPRETATION,
     NARRATIVE_EVIDENCE_INTERPRETATION,
     load_annual_report,
+    render_discovery_evidence_preview,
     render_evidence_preview,
     render_narrative_evidence_preview,
 )
@@ -289,6 +291,65 @@ def create_app(project_root: Path | None = None) -> FastAPI:
             "items": items,
         }
 
+    @app.get("/v1/annual-analyses/{run_id}/discovery-evidences")
+    def get_annual_analysis_discovery_evidences(run_id: str) -> dict:
+        try:
+            archive = load_annual_report(app.state.project_root, run_id)
+        except AnnualReportReadError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": exc.message},
+            ) from None
+        items = [
+            {
+                **item,
+                "preview_url": (
+                    f"/v1/annual-analyses/{run_id}/discovery-evidences/"
+                    f"{item['evidence_id']}/preview.png"
+                ),
+            }
+            for item in archive.discovery_evidences
+        ]
+        return {
+            "run_id": archive.run_id,
+            "source_document_id": archive.manifest_summary["document_id"],
+            "source_sha256": archive.manifest_summary["source_pdf_sha256"],
+            "interpretation_label": DISCOVERY_EVIDENCE_INTERPRETATION,
+            "items": items,
+        }
+
+    @app.get("/v1/annual-analyses/{run_id}/discovery-evidences/{evidence_id}/preview.png")
+    def get_annual_analysis_discovery_evidence_preview(
+        run_id: str,
+        evidence_id: str,
+        focus: bool = False,
+    ) -> Response:
+        try:
+            archive = load_annual_report(app.state.project_root, run_id)
+            image, page_number = render_discovery_evidence_preview(archive, evidence_id, focus=focus)
+        except AnnualReportReadError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": exc.message},
+            ) from None
+        evidence = next(item for item in archive.discovery_evidences if item["evidence_id"] == evidence_id)
+        return Response(
+            content=image,
+            media_type="image/png",
+            headers={
+                "Cache-Control": "no-store",
+                "X-PDF-Page": str(page_number),
+                "X-Report-SHA256": archive.manifest_summary["report_sha256"],
+                "X-Evidence-Kind": "annual_discovery",
+                "X-Evidence-Interpretation-Code": "annual_report_text_location_unverified_model_finding",
+                "X-Preview-Mode": "focus" if focus else "full_page",
+                "X-Preview-Region": json.dumps(
+                    {"bbox": evidence["bbox"], "coordinate_space": "unrotated_pdf_points"},
+                    separators=(",", ":"),
+                ),
+            },
+        )
+
     @app.get("/v1/annual-analyses/{run_id}/narrative-evidences/{evidence_id}/preview.png")
     def get_annual_analysis_narrative_evidence_preview(
         run_id: str,
@@ -396,6 +457,19 @@ def create_app(project_root: Path | None = None) -> FastAPI:
             "narrative_evidences": {
                 "interpretation_label": NARRATIVE_EVIDENCE_INTERPRETATION,
                 "items": list(archive.narrative_evidences),
+            },
+            "discovery_evidences": {
+                "interpretation_label": DISCOVERY_EVIDENCE_INTERPRETATION,
+                "items": [
+                    {
+                        **item,
+                        "preview_url": (
+                            f"/v1/annual-analyses/{run_id}/discovery-evidences/"
+                            f"{item['evidence_id']}/preview.png"
+                        ),
+                    }
+                    for item in archive.discovery_evidences
+                ],
             },
         }
 

@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
+import stat
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -34,6 +36,8 @@ from finagent.reports.m3_annual_append import (  # noqa: E402
 )
 
 _SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
+_PROGRESS_JOB_ID = re.compile(r"^annual-job-[0-9a-f]{32}$")
+_REPARSE_POINT_ATTRIBUTE = 0x400
 _PROVENANCE_FILES = (
     "scripts/analyze_annual.py",
     "backend/src/finagent/api/annual_analysis.py",
@@ -58,6 +62,8 @@ _PROVENANCE_FILES = (
     "backend/src/finagent/reports/investigation_append.py",
     "backend/src/finagent/agents/annual_investigation.py",
     "backend/src/finagent/agents/annual_review.py",
+    "backend/src/finagent/agents/annual_discovery.py",
+    "backend/src/finagent/retrieval/annual_discovery_context.py",
     "backend/src/finagent/retrieval/annual_context.py",
     "backend/src/finagent/audit/audited_chat.py",
     "backend/src/finagent/core/model_settings.py",
@@ -65,6 +71,8 @@ _PROVENANCE_FILES = (
     "backend/src/finagent/llm/chat_completion.py",
     "config/prompts/annual_investigation_v1.md",
     "config/prompts/annual_review_v1.md",
+    "config/prompts/annual_review_v2.md",
+    "config/prompts/annual_discovery_v1.md",
 )
 
 
@@ -104,13 +112,18 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--with-model",
         action="store_true",
-        help="显式启用 M3 年报调查和最终模型评审；仅此选项会读取 MODEL_* 环境变量",
+        help="显式启用全文开放式发现、固定候选调查和最终模型评审；仅此选项会读取 MODEL_* 环境变量",
     )
     parser.add_argument(
         "--source-record",
         type=Path,
         default=None,
         help="绑定当前 PDF 的 source.json；仅与 --with-model 一起使用",
+    )
+    parser.add_argument(
+        "--discovery-progress-job-id",
+        default=None,
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--with-m3-screening",
@@ -134,8 +147,17 @@ def _run(args: argparse.Namespace) -> int:
         raise ValueError("--with-model 需要同时提供 --source-record。")
     if args.source_record is not None and not args.with_model:
         raise ValueError("--source-record 仅能与 --with-model 一起使用。")
+    progress_job_id = getattr(args, "discovery_progress_job_id", None)
+    if progress_job_id is not None:
+        if not args.with_model or not isinstance(progress_job_id, str) or _PROGRESS_JOB_ID.fullmatch(progress_job_id) is None:
+            raise ValueError("discovery 进度任务标识无效。")
 
     artifacts_root = _safe_artifacts_root(args.artifacts_root)
+    job_progress_path = (
+        _job_progress_path(artifacts_root, progress_job_id)
+        if progress_job_id is not None
+        else None
+    )
     source_sha256 = _sha256(source_pdf)
     run_id, run_dir, report_dir = _reserve_run_dirs(artifacts_root)
     input_copy = run_dir / "source.pdf"
@@ -204,7 +226,20 @@ def _run(args: argparse.Namespace) -> int:
                 source_record_path=args.source_record.expanduser().resolve(),
                 run_dir=run_dir,
                 artifacts_root=artifacts_root,
+                progress_callback=_progress_writer(
+                    run_dir,
+                    job_progress_path,
+                    run_id=run_id,
+                    company_id=args.company_id,
+                    report_year=args.report_year,
+                    document_id=args.document_id,
+                    source_sha256=actual_copy_sha256,
+                    job_id=progress_job_id,
+                ),
             )
+            discovery = investigation.get("discovery")
+            if isinstance(discovery, dict):
+                _write_json_new(run_dir / "discovery.json", discovery)
             _write_json_new(run_dir / "investigation.json", investigation)
             investigation_path = _relative_or_absolute(
                 run_dir / "investigation.json", artifacts_root
@@ -684,6 +719,26 @@ def _add_investigation_manifest(
         "source_record_path": _relative_or_absolute(source_record_path, ROOT),
         "source_record_sha256": source_record_sha256,
     }
+    discovery = investigation.get("discovery")
+    if isinstance(discovery, dict):
+        outputs = manifest.get("outputs")
+        if isinstance(outputs, dict):
+            outputs["discovery_json"] = _relative_or_absolute(run_dir / "discovery.json", artifacts_root)
+            if (run_dir / "discovery-progress.json").is_file():
+                outputs["discovery_progress_json"] = _relative_or_absolute(
+                    run_dir / "discovery-progress.json", artifacts_root
+                )
+        manifest["model_discovery_status"] = discovery.get("status")
+        manifest["model_discovery"] = {
+            "requested": True,
+            "status": discovery.get("status"),
+            "model_called": bool(discovery.get("model_called")),
+            "model_call_count": discovery.get("model_call_count", 0),
+            "model_call_attempt_count": discovery.get("model_call_attempt_count", 0),
+            "prompt_version": discovery.get("prompt_version"),
+            "coverage": _discovery_manifest_coverage(discovery.get("coverage")),
+            "output_path": _relative_or_absolute(run_dir / "discovery.json", artifacts_root),
+        }
     final_review = investigation.get("final_review")
     if isinstance(final_review, dict):
         manifest["model_review_status"] = final_review.get("status")
@@ -698,6 +753,9 @@ def _add_investigation_manifest(
 
 
 def _investigation_has_issue(investigation: dict[str, object]) -> bool:
+    discovery = investigation.get("discovery")
+    if isinstance(discovery, dict) and discovery.get("status") != "completed":
+        return True
     if investigation.get("status") == "completed":
         return False
     final_review = investigation.get("final_review")
@@ -707,6 +765,18 @@ def _investigation_has_issue(investigation: dict[str, object]) -> bool:
         and isinstance(final_review, dict)
         and final_review.get("status") == "completed"
     )
+
+
+def _discovery_manifest_coverage(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {"complete": False, "truncated": True}
+    fields = (
+        "total_pages", "text_pages", "planned_batches", "processed_batches",
+        "successful_batches", "failed_batches", "processed_chars", "unread_pages",
+        "failed_pages", "truncated", "complete", "time_budget_exhausted",
+        "content_status", "source_status",
+    )
+    return {key: value.get(key) for key in fields}
 
 
 def _git_state() -> tuple[str, bool | None]:
@@ -735,6 +805,143 @@ def _relative_or_absolute(path: Path, parent: Path) -> str:
         return path.relative_to(parent).as_posix()
     except ValueError:
         return str(path)
+
+
+def _job_progress_path(artifacts_root: Path, job_id: str) -> Path:
+    """Resolve only this job's reserved discovery-progress file."""
+
+    if _PROGRESS_JOB_ID.fullmatch(job_id) is None:
+        raise ValueError("discovery 进度任务标识无效。")
+    root = Path(artifacts_root).resolve()
+    jobs_root = root / "annual-analysis-jobs"
+    job_dir = jobs_root / job_id
+    for directory, expected in ((jobs_root, root), (job_dir, jobs_root)):
+        info = directory.lstat()
+        if stat.S_ISLNK(info.st_mode) or bool(getattr(info, "st_file_attributes", 0) & _REPARSE_POINT_ATTRIBUTE):
+            raise ValueError("年度分析任务进度目录不可用。")
+        resolved = directory.resolve(strict=True)
+        if resolved.parent != expected.resolve() or not stat.S_ISDIR(info.st_mode):
+            raise ValueError("年度分析任务进度目录不匹配。")
+    return job_dir / "discovery-progress.json"
+
+
+def _progress_writer(
+    run_dir: Path,
+    job_path: Path | None,
+    *,
+    run_id: str,
+    company_id: str,
+    report_year: int,
+    document_id: str,
+    source_sha256: str,
+    job_id: str | None,
+):
+    allowed_events = {"planned", "batch_started", "batch_finished", "budget_exhausted"}
+    allowed_statuses = {"not_called", "running", "completed", "partial", "failed", "budget_exhausted"}
+
+    def write(event: dict[str, object]) -> None:
+        expected_event_fields = {
+            "event", "status", "batch_index", "planned_batches", "processed_batches",
+            "successful_batches", "failed_batches", "total_pages", "total_chars",
+        }
+        if set(event) != expected_event_fields:
+            raise ValueError("discovery progress schema invalid")
+        if event.get("event") not in allowed_events or event.get("status") not in allowed_statuses:
+            raise ValueError("discovery progress state invalid")
+        integer_fields = (
+            "batch_index", "planned_batches", "processed_batches", "successful_batches",
+            "failed_batches", "total_pages", "total_chars",
+        )
+        safe_event: dict[str, object] = {"event": event["event"], "status": event["status"]}
+        for field in integer_fields:
+            value = event.get(field)
+            if type(value) is not int or value < 0:
+                raise ValueError("discovery progress count invalid")
+            safe_event[field] = value
+        planned = int(safe_event["planned_batches"])
+        processed = int(safe_event["processed_batches"])
+        failed = int(safe_event["failed_batches"])
+        if (
+            planned > 128
+            or processed > planned
+            or failed > processed
+            or int(safe_event["successful_batches"]) != max(processed - failed, 0)
+            or int(safe_event["batch_index"]) > planned
+        ):
+            raise ValueError("discovery progress relation invalid")
+        record = {
+            "kind": "fintrace_annual_discovery_progress_v1",
+            "job_id": job_id,
+            "run_id": run_id,
+            "company_id": company_id,
+            "report_year": report_year,
+            "source_document_id": document_id,
+            "source_sha256": source_sha256,
+            **safe_event,
+            "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        failures: list[Exception] = []
+        try:
+            _atomic_write_progress(run_dir / "discovery-progress.json", record, expected_parent=run_dir)
+        except Exception as exc:
+            failures.append(exc)
+        if job_path is not None:
+            try:
+                _atomic_write_progress(job_path, record, expected_parent=job_path.parent)
+            except Exception as exc:
+                failures.append(exc)
+        if failures:
+            raise OSError("discovery progress persistence failed")
+
+    return write
+
+
+def _atomic_write_progress(path: Path, payload: dict[str, object], *, expected_parent: Path) -> None:
+    parent = expected_parent.resolve(strict=True)
+    if path.parent.resolve(strict=True) != parent:
+        raise ValueError("discovery progress path escaped expected directory")
+    parent_info = path.parent.lstat()
+    if stat.S_ISLNK(parent_info.st_mode) or bool(getattr(parent_info, "st_file_attributes", 0) & _REPARSE_POINT_ATTRIBUTE):
+        raise ValueError("discovery progress parent is not a regular directory")
+    try:
+        target_info = path.lstat()
+    except FileNotFoundError:
+        target_info = None
+    if target_info is not None and (
+        stat.S_ISLNK(target_info.st_mode)
+        or bool(getattr(target_info, "st_file_attributes", 0) & _REPARSE_POINT_ATTRIBUTE)
+        or not stat.S_ISREG(target_info.st_mode)
+    ):
+        raise ValueError("discovery progress target is not a regular file")
+    temporary = path.with_name(f".discovery-progress-{uuid4().hex}.tmp")
+    encoded = (json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+    descriptor = os.open(
+        temporary,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
+        0o600,
+    )
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(encoded)
+            handle.flush()
+        if path.parent.resolve(strict=True) != parent:
+            raise ValueError("discovery progress parent changed")
+        try:
+            current = path.lstat()
+        except FileNotFoundError:
+            current = None
+        if current is not None and (
+            stat.S_ISLNK(current.st_mode)
+            or bool(getattr(current, "st_file_attributes", 0) & _REPARSE_POINT_ATTRIBUTE)
+            or not stat.S_ISREG(current.st_mode)
+        ):
+            raise ValueError("discovery progress target changed")
+        os.replace(temporary, path)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _is_relative_to(path: Path, parent: Path) -> bool:

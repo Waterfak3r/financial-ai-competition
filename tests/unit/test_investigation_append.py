@@ -306,9 +306,11 @@ def test_http_failure_audit_counts_persisted_request_as_actual_call(
     assert investigation["status"] == "failed"
     assert investigation["reason"] == "annual_investigation_failed"
     assert investigation["model_called"] is True
-    assert investigation["investigation_call_count"] == 1
+    assert investigation["investigation_call_count"] == 0
+    assert investigation["investigation_call_attempt_count"] == 1
     assert investigation["model_review_call_count"] == 1
-    assert investigation["model_call_count"] == investigation["model_call_attempt_count"] == 2
+    assert investigation["model_call_count"] == 1
+    assert investigation["model_call_attempt_count"] == 2
     assert investigation["audit_artifacts"][0]["status"] == "failed"
     assert "sensitive details" not in json.dumps(investigation)
 
@@ -393,6 +395,6 @@ def test_report_appendix_updates_scope_and_model_flag_without_moving_verified_se
     assert updated_report["model_investigation"]["status"] == "completed"
     assert updated_report["model_review"]["status"] == "completed"
     assert updated_analysis["model_review"]["assessment"] == "insufficient_evidence"
-    assert "M3 年报文本调查" in markdown
+    assert "## 年报模型调查" in markdown
     assert "未核实模型解释" in markdown
     assert "response.json" in markdown

@@ -31,9 +31,11 @@ _MAX_SOURCE_PDF_BYTES = 256 * 1024 * 1024
 _MAX_SOURCE_RECORD_BYTES = 1024 * 1024
 _MAX_WORKERS = 1
 _MAX_QUEUED_JOBS = 3
-_DEFAULT_CLI_TIMEOUT_SECONDS = 900
+_DEFAULT_DETERMINISTIC_CLI_TIMEOUT_SECONDS = 900
+_DEFAULT_MODEL_CLI_TIMEOUT_SECONDS = 3600
 _MIN_CLI_TIMEOUT_SECONDS = 60
-_MAX_CLI_TIMEOUT_SECONDS = 900
+_MAX_DETERMINISTIC_CLI_TIMEOUT_SECONDS = 900
+_MAX_MODEL_CLI_TIMEOUT_SECONDS = 3600
 _SERVICE_REGISTRY_LOCK = threading.Lock()
 _SERVICE_REGISTRY: dict[str, "AnnualAnalysisJobService"] = {}
 
@@ -173,7 +175,12 @@ class AnnualAnalysisJobService:
             if state.get("job_id") != checked:
                 raise AnnualAnalysisJobError(404, "job_not_found", "找不到该年度分析任务。")
             self._states[checked] = state
-            return _public_state(state)
+            public = _public_state(state)
+            if state.get("status") == "running" and state.get("stage") == "annual_analysis_cli":
+                progress = _read_discovery_progress(job_dir, checked, state)
+                if progress is not None:
+                    public["discovery_progress"] = progress
+            return public
 
     def _execute(self, job_id: str) -> None:
         try:
@@ -182,7 +189,9 @@ class AnnualAnalysisJobService:
             normalized = validate_job_request(self.project_root, state["request"])
             self._update(job_id, stage="annual_analysis_cli")
             artifacts_root = self.project_root / "artifacts"
-            result = _invoke_cli(self.project_root, artifacts_root, normalized)
+            runner_request = dict(normalized)
+            runner_request["_internal_job_id"] = job_id
+            result = _invoke_cli(self.project_root, artifacts_root, runner_request)
             run_id = _run_id_from_output(result.stdout + "\n" + result.stderr)
             if run_id is None:
                 self._finish_failure(
@@ -500,6 +509,9 @@ def _invoke_cli(project_root: Path, artifacts_root: Path, request: Mapping[str, 
     if request["mode"] in {"model_investigation", "integrated_analysis"}:
         source_record = source_pdf.parent / "source.json"
         command.extend(["--with-model", "--source-record", str(source_record)])
+        internal_job_id = request.get("_internal_job_id")
+        if isinstance(internal_job_id, str) and _JOB_ID.fullmatch(internal_job_id):
+            command.extend(["--discovery-progress-job-id", internal_job_id])
         settings = resolve_model_settings(project_root)
         environment.update(
             {
@@ -517,22 +529,121 @@ def _invoke_cli(project_root: Path, artifacts_root: Path, request: Mapping[str, 
         encoding="utf-8",
         errors="replace",
         check=False,
-        timeout=_configured_cli_timeout_seconds(),
+        timeout=_configured_cli_timeout_seconds(str(request["mode"])),
     )
     return CliResult(completed.returncode, completed.stdout, completed.stderr)
 
 
-def _configured_cli_timeout_seconds() -> int:
+def _configured_cli_timeout_seconds(mode: str = "deterministic") -> int:
+    model_mode = mode in {"model_investigation", "integrated_analysis"}
+    default = _DEFAULT_MODEL_CLI_TIMEOUT_SECONDS if model_mode else _DEFAULT_DETERMINISTIC_CLI_TIMEOUT_SECONDS
+    maximum = _MAX_MODEL_CLI_TIMEOUT_SECONDS if model_mode else _MAX_DETERMINISTIC_CLI_TIMEOUT_SECONDS
     raw_value = os.environ.get("FINTRACE_ANNUAL_JOB_TIMEOUT_SECONDS")
     if raw_value is None:
-        return _DEFAULT_CLI_TIMEOUT_SECONDS
+        return default
     try:
         value = int(raw_value)
     except ValueError:
-        raise RuntimeError("FINTRACE_ANNUAL_JOB_TIMEOUT_SECONDS 必须是 60 到 900 之间的整数。") from None
-    if not _MIN_CLI_TIMEOUT_SECONDS <= value <= _MAX_CLI_TIMEOUT_SECONDS:
-        raise RuntimeError("FINTRACE_ANNUAL_JOB_TIMEOUT_SECONDS 必须是 60 到 900 之间的整数。")
+        raise RuntimeError(f"FINTRACE_ANNUAL_JOB_TIMEOUT_SECONDS 必须是 60 到 {maximum} 之间的整数。") from None
+    if not _MIN_CLI_TIMEOUT_SECONDS <= value <= maximum:
+        raise RuntimeError(f"FINTRACE_ANNUAL_JOB_TIMEOUT_SECONDS 必须是 60 到 {maximum} 之间的整数。")
     return value
+
+
+def _read_discovery_progress(
+    job_dir: Path,
+    job_id: str,
+    state: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Read only the current job's strictly bound, count-only progress record."""
+
+    path = job_dir / "discovery-progress.json"
+    expected_fields = {
+        "kind", "job_id", "run_id", "company_id", "report_year", "source_document_id",
+        "source_sha256", "event", "status", "batch_index", "planned_batches",
+        "processed_batches", "successful_batches", "failed_batches", "total_pages",
+        "total_chars", "updated_at",
+    }
+    try:
+        parent = job_dir.resolve(strict=True)
+        if path.parent.resolve(strict=True) != parent:
+            return None
+        before = path.lstat()
+        if _is_reparse_point(before) or not stat.S_ISREG(before.st_mode) or before.st_size > 16 * 1024:
+            return None
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            opened = os.fstat(descriptor)
+            if _is_reparse_point(opened) or not stat.S_ISREG(opened.st_mode) or _file_identity(before) != _file_identity(opened):
+                return None
+            with os.fdopen(descriptor, "rb", closefd=False) as handle:
+                raw = handle.read(16 * 1024 + 1)
+        finally:
+            os.close(descriptor)
+        after = path.lstat()
+        if _is_reparse_point(after) or _file_identity(before) != _file_identity(after) or len(raw) > 16 * 1024:
+            return None
+        record = json.loads(raw.decode("utf-8"))
+        request = state.get("request")
+        if not isinstance(record, dict) or set(record) != expected_fields or not isinstance(request, Mapping):
+            return None
+        if (
+            record.get("kind") != "fintrace_annual_discovery_progress_v1"
+            or record.get("job_id") != job_id
+            or record.get("company_id") != request.get("company_id")
+            or record.get("report_year") != request.get("report_year")
+            or record.get("source_document_id") != request.get("document_id")
+            or not isinstance(record.get("source_sha256"), str)
+            or record["source_sha256"].lower() != request.get("sha256")
+            or request.get("mode") not in {"model_investigation", "integrated_analysis"}
+        ):
+            return None
+        try:
+            run_id = _safe_run_id(record.get("run_id"))
+        except (AnnualAnalysisJobError, TypeError):
+            return None
+        if record.get("run_id") != run_id:
+            return None
+        event = record.get("event")
+        status = record.get("status")
+        if not isinstance(event, str) or event not in {"planned", "batch_started", "batch_finished", "budget_exhausted"}:
+            return None
+        if not isinstance(status, str) or status not in {"not_called", "running", "completed", "partial", "failed", "budget_exhausted"}:
+            return None
+        integer_fields = (
+            "batch_index", "planned_batches", "processed_batches", "successful_batches",
+            "failed_batches", "total_pages", "total_chars",
+        )
+        counts: dict[str, int] = {}
+        for field in integer_fields:
+            value = record.get(field)
+            if type(value) is not int or value < 0:
+                return None
+            counts[field] = value
+        if (
+            counts["planned_batches"] > 128
+            or counts["processed_batches"] > counts["planned_batches"]
+            or counts["failed_batches"] > counts["processed_batches"]
+            or counts["successful_batches"] != counts["processed_batches"] - counts["failed_batches"]
+            or counts["batch_index"] > counts["planned_batches"]
+            or counts["total_pages"] > 100_000
+            or counts["total_chars"] > 9_007_199_254_740_991
+        ):
+            return None
+        updated_at = record.get("updated_at")
+        if not isinstance(updated_at, str) or len(updated_at) > 40:
+            return None
+        timestamp = datetime.fromisoformat(updated_at)
+        if timestamp.tzinfo is None:
+            return None
+        return {
+            "event": event,
+            "status": status,
+            **counts,
+            "updated_at": updated_at,
+        }
+    except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
 
 
 def _cli_environment_without_credentials() -> dict[str, str]:
@@ -560,15 +671,31 @@ def get_annual_analysis_capabilities(project_root: Path | None = None) -> dict[s
 
         importlib.import_module("langgraph.graph")
     except ImportError:
-        return {"model_investigation": {"available": False, "status": "dependency_unavailable"}}
+        return {"model_investigation": {
+            "available": False,
+            "status": "dependency_unavailable",
+            "annual_discovery_supported": True,
+        }}
     try:
         root = Path(project_root).resolve() if project_root is not None else Path(__file__).resolve().parents[4]
         resolve_model_settings(root)
     except (ModelConfigError, ModelSettingsStoreError):
-        return {"model_investigation": {"available": False, "status": "not_configured"}}
+        return {"model_investigation": {
+            "available": False,
+            "status": "not_configured",
+            "annual_discovery_supported": True,
+        }}
     except Exception:
-        return {"model_investigation": {"available": False, "status": "not_configured"}}
-    return {"model_investigation": {"available": True, "status": "ready"}}
+        return {"model_investigation": {
+            "available": False,
+            "status": "not_configured",
+            "annual_discovery_supported": True,
+        }}
+    return {"model_investigation": {
+        "available": True,
+        "status": "ready",
+        "annual_discovery_supported": True,
+    }}
 
 
 def _run_id_from_output(output: str) -> str | None:

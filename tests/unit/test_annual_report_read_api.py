@@ -13,6 +13,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from finagent.api.app import create_app
+from finagent.retrieval.annual_discovery_context import (
+    build_annual_discovery_context,
+    coverage_is_complete,
+)
 
 
 def _make_archive(
@@ -176,6 +180,86 @@ def _make_archive(
     }
 
 
+def _attach_valid_discovery(root: Path, run_id: str, created: dict[str, object]) -> tuple[str, str]:
+    report_path = root / "artifacts" / "reports" / run_id / "report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    source_path = root / "artifacts" / "runs" / run_id / "source.pdf"
+    source_record = {
+        "company_id": report["company_id"],
+        "document_id": report["source_document_id"],
+        "report_period": "2024-12-31",
+        "sha256": created["source_sha256"],
+        "local_path": "data/raw/fixture.pdf",
+    }
+    context = build_annual_discovery_context(
+        report,
+        source_path,
+        source_record,
+        system_prompt="test prompt",
+        model_name="local-mock",
+    )
+    batch = context.batches[0]
+    fragment = batch.fragments[0]
+    coverage = dict(context.coverage)
+    coverage.update({
+        "processed_batches": len(context.batches),
+        "successful_batches": len(context.batches),
+        "failed_batches": 0,
+        "processed_chars": coverage["planned_chars"],
+        "attempted_chars": coverage["planned_chars"],
+        "unattempted_batches": 0,
+        "unattempted_chars": 0,
+        "omitted_chars": coverage["total_chars"] - coverage["planned_chars"],
+        "batch_results": [
+            {
+                "batch_index": item.batch_index,
+                "status": "succeeded",
+                "reason": None,
+                "pages": sorted({part.pdf_page for part in item.fragments}),
+                "raw_chars": item.raw_chars,
+            }
+            for item in context.batches
+        ],
+    })
+    coverage["complete"] = coverage_is_complete(coverage)
+    finding_id = f"disc:{created['source_sha256'][:12]}-{hashlib.sha256(b'fixture-finding').hexdigest()[:20]}"
+    quote_text = fragment.raw_text[: min(30, len(fragment.raw_text))]
+    evidence = fragment.evidence_value(str(report["source_document_id"]), str(created["source_sha256"]))
+    report["model_discovery"] = {
+        "kind": "fintrace_annual_discovery",
+        "run_id": run_id,
+        "company_id": report["company_id"],
+        "report_year": report["report_year"],
+        "source_document_id": report["source_document_id"],
+        "source_sha256": created["source_sha256"],
+        "status": "completed",
+        "prompt_version": "annual_discovery_v1",
+        "model_called": True,
+        "model_call_count": len(context.batches),
+        "model_call_attempt_count": len(context.batches),
+        "coverage": coverage,
+        "findings": [{
+            "finding_id": finding_id,
+            "title": "构造的业务安排线索",
+            "observation": "报告原文披露一项待进一步核对的安排。",
+            "why_it_matters": "相关安排可能影响对业务披露的理解。",
+            "follow_up": "建议复核相关合同与审批材料。",
+            "priority": "medium",
+            "classification": "unverified_model_finding",
+            "verification_status": "unverified",
+            "evidence_ids": [fragment.evidence_id],
+            "citations": [{"evidence_id": fragment.evidence_id, "quote": quote_text}],
+        }],
+        "evidences": [evidence],
+        "audit_artifacts": [],
+        "limitations": [],
+        "reason": None,
+        "fraud_conclusion": None,
+    }
+    report_path.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+    return str(fragment.evidence_id), str(finding_id)
+
+
 def test_report_api_returns_manifest_binding_and_only_verified_evidence(tmp_path: Path) -> None:
     run_id = "synthetic-report-001"
     created = _make_archive(tmp_path, run_id)
@@ -192,6 +276,68 @@ def test_report_api_returns_manifest_binding_and_only_verified_evidence(tmp_path
     assert [item["evidence_id"] for item in payload["verification_evidences"]] == ["ev-independent"]
     assert payload["narrative_evidences"]["items"] == []
     assert "D:\\private\\source.pdf" not in response.text
+
+
+@pytest.mark.parametrize("invalid_case", ["source_sha", "quote", "extra_field", "failed_with_findings", "unsafe_reason"])
+def test_invalid_discovery_archive_is_rejected_by_all_read_and_export_routes(
+    tmp_path: Path, invalid_case: str
+) -> None:
+    run_id = f"synthetic-discovery-invalid-{invalid_case}"
+    created = _make_archive(tmp_path, run_id)
+    evidence_id, _finding_id = _attach_valid_discovery(tmp_path, run_id, created)
+    report_path = tmp_path / "artifacts" / "reports" / run_id / "report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    layer = report["model_discovery"]
+    if invalid_case == "source_sha":
+        layer["source_sha256"] = "0" * 64
+    elif invalid_case == "quote":
+        layer["findings"][0]["citations"][0]["quote"] = "not present in the source"
+    elif invalid_case == "extra_field":
+        layer["unexpected_raw_field"] = "must fail closed"
+    elif invalid_case == "failed_with_findings":
+        coverage = layer["coverage"]
+        assert coverage["planned_batches"] == 1
+        pages = coverage["batch_results"][0]["pages"]
+        raw_chars = coverage["batch_results"][0]["raw_chars"]
+        layer["status"] = "failed"
+        layer["reason"] = "all_batches_failed"
+        layer["model_call_count"] = 0
+        layer["model_call_attempt_count"] = 1
+        coverage.update({
+            "processed_batches": 1,
+            "successful_batches": 0,
+            "failed_batches": 1,
+            "processed_chars": 0,
+            "attempted_chars": raw_chars,
+            "failed_pages": pages,
+            "unread_pages": pages,
+            "complete": False,
+            "batch_results": [{
+                "batch_index": 1,
+                "status": "failed",
+                "reason": "model_call_failed",
+                "pages": pages,
+                "raw_chars": raw_chars,
+            }],
+        })
+    else:
+        layer["reason"] = "private error detail must never be persisted"
+    report_path.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+
+    client = TestClient(create_app(tmp_path))
+    endpoints = [
+        f"/v1/annual-analyses/{run_id}",
+        f"/v1/annual-analyses/{run_id}/discovery-evidences",
+        f"/v1/annual-analyses/{run_id}/discovery-evidences/{evidence_id}/preview.png",
+        *(f"/v1/annual-analyses/{run_id}/export?format={format}" for format in ("json", "markdown", "html")),
+    ]
+
+    responses = [client.get(endpoint) for endpoint in endpoints]
+
+    assert all(response.status_code in {409, 422} for response in responses), [
+        (response.status_code, response.text) for response in responses
+    ]
+    assert all("private error detail" not in response.text for response in responses)
 
 
 @pytest.mark.parametrize("invalid_mode", [[], {}, ["integrated_analysis"], 3, "future_mode"])

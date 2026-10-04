@@ -256,6 +256,31 @@ def test_no_candidate_can_receive_scoped_no_priority_only_with_complete_verified
 ) -> None:
     report = _report(candidate=False)
     investigation = _investigation(report)
+    investigation["discovery"] = {
+        "kind": "fintrace_annual_discovery",
+        "run_id": RUN_ID,
+        "company_id": "603288",
+        "report_year": 2024,
+        "source_document_id": SOURCE_ID,
+        "source_sha256": SOURCE_SHA,
+        "status": "completed",
+        "coverage": {
+            "complete": True,
+            "truncated": False,
+            "planned_batches": 1,
+            "processed_batches": 1,
+            "successful_batches": 1,
+            "failed_batches": 0,
+            "total_pages": 1,
+            "text_pages": 1,
+            "total_blocks": 1,
+            "total_chars": 50,
+            "processed_chars": 50,
+            "unread_pages": [],
+        },
+        "findings": [],
+        "evidences": [],
+    }
     answer = _response(
         assessment="no_priority_issue_identified_within_scope",
         reference=FACT_1,
@@ -267,6 +292,92 @@ def test_no_candidate_can_receive_scoped_no_priority_only_with_complete_verified
     assert review["status"] == "completed"
     assert review["assessment"] == "no_priority_issue_identified_within_scope"
     assert json.loads(server.requests[0]["messages"][1]["content"])["coverage"]["no_priority_eligible"] is True
+
+
+def test_discovery_review_budget_counts_actual_payload_and_preserves_high_priority_tail() -> None:
+    report = _report(candidate=False, valid_facts=False)
+    investigation = _investigation(report)
+    source_identity = {
+        "run_id": RUN_ID,
+        "company_id": report["company_id"],
+        "report_year": report["report_year"],
+        "source_document_id": SOURCE_ID,
+        "source_sha256": SOURCE_SHA,
+    }
+    findings = []
+    evidences = []
+    for index in range(1, 14):
+        evidence_id = f"adisc-{SOURCE_SHA[:12]}-p{index}-b0-c0-{index:012x}"
+        finding_id = f"disc:{SOURCE_SHA[:12]}-{index:020x}"
+        priority = "high" if index == 13 else "low"
+        findings.append({
+            "finding_id": finding_id,
+            "title": "动态核查主题",
+            "observation": "该事项的年报描述需要结合相关业务记录进一步复核。" * 2,
+            "why_it_matters": "相关披露可能影响对业务安排和风险敞口的理解。" * 2,
+            "follow_up": "建议核对披露对应的合同及期后执行情况。" * 2,
+            "priority": priority,
+            "classification": "unverified_model_finding",
+            "verification_status": "unverified",
+            "evidence_ids": [evidence_id],
+            "citations": [{"evidence_id": evidence_id, "quote": "年报原文引用片段"}],
+        })
+        evidences.append({
+            "evidence_id": evidence_id,
+            "source_document_id": SOURCE_ID,
+            "source_sha256": SOURCE_SHA,
+            "pdf_page": index,
+            "block_index": 0,
+            "start_char": 0,
+            "bbox": {"x0": 10.0, "y0": 10.0, "x1": 100.0, "y1": 25.0},
+            "raw_text": "年报原文引用片段",
+        })
+    original_findings = list(findings)
+    investigation["discovery"] = {
+        "kind": "fintrace_annual_discovery",
+        **source_identity,
+        "status": "completed",
+        "coverage": {"complete": True, "truncated": False, "total_pages": 13, "text_pages": 13},
+        "findings": findings,
+        "evidences": evidences,
+    }
+
+    model = "long-test-model-" + "x" * 1100
+    system_prompt = "系统说明" * 900
+    data, allowed, evidence_refs, no_priority = annual_review._build_review_input(
+        report,
+        investigation,
+        annual_review._report_identity(report),
+        request_model=model,
+        system_prompt=system_prompt,
+    )
+    serialized = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+
+    assert len(investigation["discovery"]["findings"]) == len(original_findings)
+    assert investigation["discovery"]["findings"] == original_findings
+    assert len(data["discovery_items"]) == 12
+    assert data["discovery_items"][0]["priority"] == "high"
+    assert data["coverage"]["discovery_omitted_count"] == 1
+    assert data["coverage"]["discovery_sent_finding_ids"] == [
+        item["finding_id"] for item in data["discovery_items"]
+    ]
+    assert data["coverage"]["no_priority_eligible"] is False
+    assert not no_priority
+    actual_chars = annual_review._actual_request_chars(model, system_prompt, serialized)
+    assert actual_chars <= annual_review.MAX_REQUEST_CHARS
+    assert 12_000 <= actual_chars
+    expected_pages = {
+        page for item in data["discovery_items"] for page in item["citation_pages"]
+    }
+    assert {item.page for item in evidence_refs} == expected_pages
+    assert data["discovery_items"][0]["finding_id"] in allowed
+    assert data["discovery_items"][0]["evidence_ids"][0] not in allowed
+    with pytest.raises(ValueError, match="model_review_response_invalid"):
+        annual_review.parse_model_review(
+            _response(reference=data["discovery_items"][0]["evidence_ids"][0]),
+            allowed_ids=allowed,
+            no_priority_allowed=False,
+        )
 
 
 @pytest.mark.parametrize(
@@ -411,7 +522,8 @@ def test_review_failure_is_audited_and_contains_no_model_opinion(
     assert review["status"] == "failed"
     assert review["reason"] == "model_review_call_failed"
     assert review["model_called"] is True
-    assert review["call_count"] == review["call_attempt_count"] == 1
+    assert review["call_count"] == 0
+    assert review["call_attempt_count"] == 1
     assert review["summary"] is None
     assert review["audit_artifacts"][0]["status"] == "failed"
 

@@ -234,7 +234,7 @@ def test_cli_explicit_model_mode_keeps_deterministic_report_when_audit_root_is_c
     assert len(report["confirmed"]["metrics"]) == 8
     assert len(report["confirmed"]["analyses"]) == 8
     markdown = (report_dir / "report.md").read_text(encoding="utf-8")
-    assert "## M3 年报文本调查" in markdown
+    assert "## 年报模型调查" in markdown
     assert "报告不调用模型" not in markdown
 
 

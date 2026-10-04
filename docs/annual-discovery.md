@@ -1,0 +1,43 @@
+# 年报开放发现模块
+
+本文说明 `finagent.agents.annual_discovery.run_annual_discovery`、`finagent.retrieval.annual_discovery_context` 及本阶段年度 CLI、API、归档与导出接入契约。页面尚未接入，前端呈现由后续阶段维护。开放式发现不替代既有确定性分析、M3 筛查、固定候选调查或最终评审。
+
+## 输入与来源绑定
+
+调用方必须显式传入标准年度报告、同源 `source.json`、原 PDF、`ModelSettings` 和 `artifacts/runs/<run_id>/` 下已存在的运行目录。模块核对报告类型、run/company/year/document/SHA、来源记录中的公司/文档/报告期/SHA，以及原 PDF 实际 SHA；运行目录必须是 `report.run_id` 对应的仓库运行目录直接子目录。身份或目录错误会在调用前拒绝；原 PDF 哈希错配会返回 `not_called`，不发模型请求。模块不读取 `.env`，也不修改输入报告。
+
+发现上下文不依赖 fixed candidates、confirmed facts、M3 状态或历史评测标签。它复用 `parse_text_pdf` 逐页读取所有非空提取文字块，没有章节、财务主题或现金流关键词过滤。文字块编号沿用解析器的过滤后 `block_index`，不是 PyMuPDF 原始块编号。长块按字符位置顺序拆成不超过 1200 字的片段，片段绑定 PDF SHA、物理页序号、文字块编号、块内起始字符位置与 bbox；稳定 ASCII `evidence_id` 不由模型生成。
+
+## 批次和覆盖范围
+
+默认每批原始正文不超过 12000 字，按实际 Chat Completions 请求 JSON 体计算的序列化输入不超过 24000 字符；全文最多 128 批、120 万字符。所有上限都不可由调用方调高。遇到限制时保留已规划批次，并在 coverage 中明确遗漏字符、页面和 `truncated`，不把前段扫描描述为全文完成。每次只对一批调用一次 `audited_complete_chat`，单批调用或解析失败后继续后续批次。
+
+coverage 区分原始 PDF 页数、含可提取文字的页数、原始文字块数、文字字符数、规划批次和已结束批次。`processed_batches` 表示已结束批次（成功与失败均计入），`successful_batches` 单列通过严格响应检查的批次，`failed_batches` 单列调用或解析失败；`batch_results` 为每批记录安全状态、失败类别、页码和字符数，不含正文。`processed_chars` 只计严格通过响应检查的批次；`attempted_chars` 计实际送入模型的正文，`unattempted_chars` 和 `unread_pages` 表示尚未扫描范围。失败批次所含页面列入 `failed_pages` 与 `unread_pages`，即使同页其他片段成功，该页也不是完整处理。
+
+`no_text_pages` 记录没有可提取文字的页；`image_pages` 记录存在图片块的页；`unread_image_pages` 只记录没有文字且有图片的页。带正文和 logo/插图的页面仍可完整处理其中全部可提取文字。`text_only_scope` 明确本模块不执行 OCR，图片本身和图片中的文字不在范围内。`complete` 仅表示至少有可提取文字，且全部可提取文字均在上限内成功处理、没有未读图片页；零文字来源不能因零字符等于零计划字符而标为完整。它不表示没有风险，也不证明模型发现正确。空白 PDF 状态为 `not_called`。
+
+## 模型输出与证据
+
+模型每批只允许返回 `findings` 与 `limitations`，并提出动态标题、观察、关注理由、后续核查动作、优先级和本批精确引用；程序只生成发现 ID、固定未核验分类和状态，并检查引用与字段。仅标题/目录、泛泛行业风险和标准免责句不能构成公司特有发现；具体的清洁对照不自动算作风险。没有足够原文支持时允许空 `findings`。解析器在 JSON 解码前限制响应为八万字符，拒绝多余/缺失字段、重复 JSON 键、null、越界文本、观点文字中的阿拉伯数字、肯定性核实/舞弊断言、肯定性舞弊排除断言、跨批 ID、重复引用 ID 和非精确/过短/空白 quote；任一问题使整批无效。句式守卫只检查有限的中英文短语及当前标点/转折分句，保留“不能排除舞弊”“无法认定不存在舞弊”“目前未发现舞弊，仍需复核”等审慎表达。该守卫是程序措辞检查，不能独立判定全部语义，也不替代独立核验。每批最多六条发现、每条最多四个引用且单条 quote 最多三百字符，八万字符足以容纳这些字段在既定长度限制下的有效完整响应。数字可出现在其来源 quote 中，不会被转成观点结论。词法子串匹配只绑定引用位置，不是语义核验。
+
+程序为每条发现生成 `disc:<sha摘要>` ID，固定写入 `classification=unverified_model_finding`、`verification_status=unverified`，并将 `fraud_conclusion` 固定为 null。完全重复的发现去重；不同批次成功发现会保留。`evidences` 只返回实际被 findings 引用的原文片段。模型可返回空 findings；这表示本批没有提出可引用线索，不代表年报没有风险。
+
+状态为 `completed`（完整覆盖且所有批次检查通过）、`partial`（至少一个批次成功且仍有失败、超时或覆盖缺口）、`failed`（全部已尝试批次均失败；预算终止时若已有失败且没有成功批次也属此状态）或 `not_called`（没有进入任何模型调用）。总墙钟预算为三十分钟；每次连接器超时不超过该预算剩余时间，预算耗尽时未尝试批次/字符/页面显式记录并保留此前成功发现；全部已尝试批次失败时，未尝试范围仍列入 coverage。`model_call_count` 统计返回模型响应的审计调用；`model_call_attempt_count` 统计实际进入审计连接器的尝试。Progress callback 只收计数、序号和状态，不传入正文、quote、模型设置或路径；回调异常作为安全 limitation 记录，不中断发现流程。
+
+每批请求和响应通过现有审计连接器归档至运行目录的 UUID 子目录。发现结果本身不复制凭据、服务地址或异常原文；审计连接器记录请求前先脱敏，调用失败只记录安全类别。不得将调用审计文件当作公开分发内容。
+
+## 年度 CLI、API 与导出接入
+
+显式模型年度 CLI（`--with-model`）以及 Web 的 `model_investigation`、`integrated_analysis` 模式在来源和设置验证后独立运行全文发现；它不依赖固定候选或确认指标是否存在。报告顶层 `model_discovery` 与 `model_investigation.discovery` 必须一致。旧调查、独立 M3 和最终评审继续保留；发现观点只作为未核验材料，不写入已核验事实、计算或候选信号。总模型调用计数合并旧调查、全文发现与最终评审，并单列各层次数。模型发现失败或覆盖不完整会体现在年度归档状态中，不会显示为完整全文分析。
+
+年度报告读取接口包含 `discovery_evidences`，并提供 `GET /v1/annual-analyses/{run_id}/discovery-evidences` 索引及 `GET /v1/annual-analyses/{run_id}/discovery-evidences/{evidence_id}/preview.png` 页图。读取时重新解析已归档 PDF，校验来源 SHA、过滤后文字块编号、片段字符位置、bbox 和逐字引用；身份、引用或结构不匹配时拒绝该年度报告读取，不返回发现证据或页图。只暴露实际被发现引用的片段。
+
+对新增发现层，JSON、Markdown 与离线 HTML 导出使用白名单投影来源身份、发现观点、未核验标签、优先级、覆盖与限制，以及可追溯的证据 ID/页码定位；发现层不导出其证据 `raw_text`、quote、审计请求/响应或原 PDF。既有 narrative 导出继续遵守自己的受控投影规则。最终评审可引用本次实际送入评审的发现 `finding_id`，不能把证据片段 ID 当成评审对象。页面可继续使用独立索引和 preview API 呈现原文片段。
+
+任务进度写入当前 job 专属的 `discovery-progress.json`，GET 只在 job 正运行年度 CLI 阶段读取；路径、job ID 和来源身份必须匹配，未知字段、链接文件或不安全计数均被丢弃。响应只给状态、批次数、页数、全文字符计数与时间，不含原文或密钥。`annual-analysis-capabilities` 的 `model_investigation.annual_discovery_supported` 表示当前后端代码具备此接入能力；旧后端缺少该字段时客户端不应把旧两条规则能力说明成全文发现。
+
+Web job 启动的 CLI 子进程默认和最大超时均为 3600 秒（60 分钟）；独立 CLI 没有该 job 外部超时。发现引擎自身有 1800 秒（30 分钟）预算，会在批次边界结束任务并保留已通过检查的发现。进度文件只代表已结束批次事件，不代表最终报告完成。操作系统或 job runner 在引擎完成归档前硬中断进程时，不能据进度推断存在完整发现结果；以正式 run manifest 与 report 为准。
+
+## 未完成边界
+
+本能力仅表示在给定预算内处理了哪些可提取文字。它没有独立财务事实核验、因果核验或舞弊分类能力。本地 mock 与构造 PDF 测试只验证接口、归档、引用、进度和导出流程，不是在线供应方实测，也不证明全文语义准确或跨公司发现质量。扫描件、图片、被 PDF 解析器漏掉的内容、跨批推理和超出预算的尾部内容仍可能产生覆盖缺口。前端展示与交互、真实供应方表现以及开放问题的跨公司泛化能力尚未验收，后者须用隔离案例和人工复核另行评测。

@@ -1,4 +1,4 @@
-"""Optional M3 annual-investigation CLI integration and report appendix."""
+"""Optional model-based annual investigation and report appendix."""
 
 from __future__ import annotations
 
@@ -23,8 +23,9 @@ def run_annual_investigation_appendix(
     source_record_path: Path,
     run_dir: Path,
     artifacts_root: Path,
+    progress_callback: Any | None = None,
 ) -> dict[str, Any]:
-    """Run M3 when explicitly requested and always return a serializable state.
+    """Run the optional model investigation when explicitly requested.
 
     Configuration is read only inside this function, which the CLI calls only
     for ``--with-model``. Input or runtime failures are represented in the
@@ -70,6 +71,7 @@ def run_annual_investigation_appendix(
         "model_call_attempt_count": 0,
         "supplementary_retrieval_used": False,
         "items": [],
+        "discovery": _not_called_discovery(identity, "annual_discovery_not_started"),
         "audit_artifacts": [],
         "fraud_conclusion": None,
         "archive_path": archive_path,
@@ -162,12 +164,48 @@ def run_annual_investigation_appendix(
         else:
             state.update(status="failed", reason="annual_investigation_failed")
         state.update(
-            model_called=calls > 0,
+            model_called=attempts > 0,
             model_call_count=calls,
             model_call_attempt_count=attempts,
             audit_artifacts=audits,
         )
         payload = state
+
+    # Open-ended discovery is an independent pass over all extracted source
+    # text. It deliberately does not depend on the fixed candidate list or M3.
+    discovery = _invoke_discovery(
+        report,
+        source_pdf_path=archived_pdf_path,
+        source_record=record,
+        settings=settings,
+        run_dir=run_dir,
+        artifacts_root=artifacts_root,
+        progress_callback=progress_callback,
+    )
+    payload["discovery"] = discovery
+    payload["discovery_call_count"] = _nonnegative_int(discovery.get("model_call_count"))
+    payload["discovery_call_attempt_count"] = _nonnegative_int(
+        discovery.get("model_call_attempt_count")
+    )
+    payload["investigation_call_count"] = _nonnegative_int(payload.get("model_call_count"))
+    payload["investigation_call_attempt_count"] = _nonnegative_int(
+        payload.get("model_call_attempt_count")
+    )
+    payload["model_call_count"] = (
+        _nonnegative_int(payload.get("model_call_count"))
+        + payload["discovery_call_count"]
+    )
+    payload["model_call_attempt_count"] = (
+        _nonnegative_int(payload.get("model_call_attempt_count"))
+        + payload["discovery_call_attempt_count"]
+    )
+    payload["model_called"] = payload["model_call_attempt_count"] > 0
+    existing_audits = payload.get("audit_artifacts")
+    discovery_audits = discovery.get("audit_artifacts")
+    payload["audit_artifacts"] = [
+        *(existing_audits if isinstance(existing_audits, list) else []),
+        *(discovery_audits if isinstance(discovery_audits, list) else []),
+    ]
 
     try:
         review = _invoke_review(
@@ -181,6 +219,97 @@ def run_annual_investigation_appendix(
         review = not_called_model_review(report, "model_review_call_failed")
         review["status"] = "failed"
     return _attach_review_outcome(payload, review)
+
+
+def _invoke_discovery(
+    report: Mapping[str, Any],
+    *,
+    source_pdf_path: Path,
+    source_record: Mapping[str, Any],
+    settings: ModelSettings,
+    run_dir: Path,
+    artifacts_root: Path,
+    progress_callback: Any | None,
+) -> dict[str, Any]:
+    identity = _report_identity(report)
+    before = _run_children(run_dir)
+    try:
+        agent = importlib.import_module("finagent.agents.annual_discovery")
+        result = agent.run_annual_discovery(
+            report,
+            source_pdf_path,
+            source_record,
+            settings,
+            run_dir=run_dir,
+            progress_callback=progress_callback,
+        )
+        payload = result.to_dict()
+        _validate_discovery_identity(payload, identity)
+        return payload
+    except Exception:
+        audits, attempts, responses = _discover_new_audits(
+            run_dir, before, artifacts_root, prompt_version="annual_discovery_v1"
+        )
+        status = "failed" if attempts else "not_called"
+        result = _not_called_discovery(
+            identity,
+            "annual_discovery_failed",
+            status=status,
+        )
+        result["audit_artifacts"] = audits
+        result["model_call_attempt_count"] = attempts
+        result["model_call_count"] = responses
+        result["model_called"] = attempts > 0
+        # Audit responses may have existed before an unexpected local failure,
+        # but do not prove strict parsing/acceptance or the planned batch total.
+        # Keep the full scan unavailable instead of synthesizing success rows.
+        result["coverage"]["source_status"] = "unavailable"
+        result["coverage"]["content_status"] = "unavailable"
+        result["limitations"] = [
+            "开放式发现流程发生内部错误；已从安全审计目录恢复实际请求与响应计数。",
+            "无法从失败流程恢复完整批次覆盖；不得解释为已完成全文扫描。",
+        ]
+        return result
+
+
+def _not_called_discovery(
+    identity: Mapping[str, Any],
+    reason: str,
+    *,
+    status: str = "not_called",
+) -> dict[str, Any]:
+    from finagent.retrieval.annual_discovery_context import empty_coverage
+
+    return {
+        "kind": "fintrace_annual_discovery",
+        **dict(identity),
+        "status": status,
+        "prompt_version": "annual_discovery_v1",
+        "model_called": False,
+        "model_call_count": 0,
+        "model_call_attempt_count": 0,
+        "coverage": empty_coverage(),
+        "findings": [],
+        "evidences": [],
+        "audit_artifacts": [],
+        "limitations": ["本次开放式发现尚未进入模型调用。"] if status == "not_called" else [],
+        "reason": reason,
+        "fraud_conclusion": None,
+    }
+
+
+def _validate_discovery_identity(payload: Mapping[str, Any], identity: Mapping[str, Any]) -> None:
+    if payload.get("kind") != "fintrace_annual_discovery":
+        raise ValueError("annual_discovery_kind_invalid")
+    for key in ("run_id", "company_id", "report_year", "source_document_id", "source_sha256"):
+        actual = payload.get(key)
+        expected = identity[key]
+        if key == "source_sha256" and isinstance(actual, str):
+            actual = actual.lower()
+        if actual != expected:
+            raise ValueError("annual_discovery_identity_mismatch")
+    if payload.get("status") not in {"completed", "partial", "failed", "not_called"}:
+        raise ValueError("annual_discovery_status_invalid")
 
 
 def _invoke_review(
@@ -209,13 +338,19 @@ def _attach_review_outcome(
     base_attempts = _nonnegative_int(payload.get("model_call_attempt_count"))
     review_calls = _nonnegative_int(review.get("call_count"))
     review_attempts = _nonnegative_int(review.get("call_attempt_count"))
-    payload["investigation_call_count"] = base_calls
-    payload["investigation_call_attempt_count"] = base_attempts
+    discovery_calls = _nonnegative_int(payload.get("discovery_call_count"))
+    discovery_attempts = _nonnegative_int(payload.get("discovery_call_attempt_count"))
+    payload["investigation_call_count"] = _nonnegative_int(
+        payload.get("investigation_call_count", max(base_calls - discovery_calls, 0))
+    )
+    payload["investigation_call_attempt_count"] = _nonnegative_int(
+        payload.get("investigation_call_attempt_count", max(base_attempts - discovery_attempts, 0))
+    )
     payload["model_review_call_count"] = review_calls
     payload["model_review_call_attempt_count"] = review_attempts
     payload["model_call_count"] = base_calls + review_calls
     payload["model_call_attempt_count"] = base_attempts + review_attempts
-    payload["model_called"] = payload["model_call_count"] > 0
+    payload["model_called"] = payload["model_call_attempt_count"] > 0
     audits = payload.get("audit_artifacts")
     review_audits = review.get("audit_artifacts")
     payload["audit_artifacts"] = [
@@ -242,6 +377,9 @@ def attach_investigation_to_report(
     updated_report["scope"] = scope
     updated_report["model_called"] = bool(investigation.get("model_called"))
     updated_report["model_investigation"] = dict(investigation)
+    discovery = investigation.get("discovery")
+    if isinstance(discovery, Mapping):
+        updated_report["model_discovery"] = dict(discovery)
     final_review = investigation.get("final_review")
     if isinstance(final_review, Mapping):
         updated_report["model_review"] = dict(final_review)
@@ -258,13 +396,21 @@ def attach_investigation_to_report(
         "model_call_attempt_count": investigation.get("model_call_attempt_count", 0),
         "output_path": investigation_path,
     }
+    if isinstance(discovery, Mapping):
+        updated_analysis["model_discovery"] = {
+            "status": discovery.get("status"),
+            "model_called": discovery.get("model_called"),
+            "model_call_count": discovery.get("model_call_count", 0),
+            "model_call_attempt_count": discovery.get("model_call_attempt_count", 0),
+            "output_path": "discovery.json",
+        }
     return updated_report, updated_analysis
 
 
 def render_investigation_markdown(investigation: Mapping[str, Any]) -> str:
     """Render model interpretations as explicitly unverified material."""
 
-    lines = ["## M3 年报文本调查", "", "本节仅为模型提出的未核实解释或弃权，不属于已核实事实、计算或结论。", ""]
+    lines = ["## 年报模型调查", "", "本节模型观点均未经独立核验；开放式发现不参与基础核验，也不确认或排除舞弊。", ""]
     lines.append(f"- 调查状态：`{investigation.get('status', 'failed')}`")
     lines.append(f"- 实际模型调用：{'是' if investigation.get('model_called') else '否'}")
     lines.append(f"- 调查归档：`{investigation.get('archive_path', 'investigation.json')}`")
@@ -273,9 +419,56 @@ def render_investigation_markdown(investigation: Mapping[str, Any]) -> str:
     if investigation.get("reason_detail"):
         lines.append(f"- 详情：{investigation['reason_detail']}")
 
+    discovery = investigation.get("discovery")
+    if isinstance(discovery, Mapping):
+        coverage = discovery.get("coverage") if isinstance(discovery.get("coverage"), Mapping) else {}
+        lines.extend(["", "### 全文开放式发现", ""])
+        lines.append(f"- 发现状态：`{discovery.get('status', 'not_called')}`；实际调用：{'是' if discovery.get('model_called') else '否'}")
+        lines.append(
+            "- 文字覆盖："
+            f"{coverage.get('total_pages', 0)} 页（有文字 {coverage.get('text_pages', 0)} 页），"
+            f"{coverage.get('total_blocks', 0)} 个原始文字块 / {coverage.get('total_chars', 0)} 字符；"
+            f"计划 {coverage.get('planned_batches', 0)} 批、已结束 {coverage.get('processed_batches', 0)} 批 "
+            f"（成功 {coverage.get('successful_batches', 0)}、失败 {coverage.get('failed_batches', 0)}），"
+            f"已处理 {coverage.get('processed_chars', 0)} 字符；完整={coverage.get('complete', False)}，"
+            f"截断={coverage.get('truncated', False)}。"
+        )
+        unread_pages = coverage.get("unread_pages")
+        if isinstance(unread_pages, list) and unread_pages:
+            lines.append("- 未完整处理页码：" + ", ".join(str(page) for page in unread_pages))
+        lines.append("- 观点标签：模型提出、未独立语义核验；不参与事实/计算/主张核验。")
+        findings = discovery.get("findings")
+        if not isinstance(findings, list) or not findings:
+            lines.append("- 本次没有通过引用校验的开放式发现。")
+        else:
+            evidence_pages: dict[str, int] = {}
+            for evidence in discovery.get("evidences", []) if isinstance(discovery.get("evidences"), list) else []:
+                if isinstance(evidence, Mapping) and isinstance(evidence.get("evidence_id"), str) and type(evidence.get("pdf_page")) is int:
+                    evidence_pages[evidence["evidence_id"]] = evidence["pdf_page"]
+            for finding in findings:
+                if not isinstance(finding, Mapping):
+                    continue
+                lines.extend(["", f"#### {finding.get('title', '未命名发现')}（{finding.get('priority', '未提供')}，未核实）", ""])
+                lines.append("**观察：**" + str(finding.get("observation", "")))
+                lines.append("- 影响说明：" + str(finding.get("why_it_matters", "")))
+                lines.append("- 后续核查：" + str(finding.get("follow_up", "")))
+                citations = finding.get("citations")
+                if isinstance(citations, list):
+                    refs = []
+                    for citation in citations:
+                        if not isinstance(citation, Mapping):
+                            continue
+                        evidence_id = citation.get("evidence_id")
+                        page = evidence_pages.get(evidence_id)
+                        if isinstance(evidence_id, str) and page is not None:
+                            refs.append(f"PDF 第{page}页 / {evidence_id}")
+                    lines.append("- 原文定位：" + ("；".join(refs) if refs else "无有效引用定位"))
+        for item in discovery.get("limitations", []) if isinstance(discovery.get("limitations"), list) else []:
+            lines.append(f"- 开放式发现限制：{item}")
+
     review = investigation.get("final_review")
     if isinstance(review, Mapping):
-        lines.extend(["", "## M3 最终评审（模型观点，未独立核验）", ""])
+        lines.extend(["", "## 最终模型评审（模型观点，未独立核验）", ""])
         lines.append(f"- 评审状态：`{review.get('status', 'failed')}`")
         lines.append(f"- 实际模型调用：{'是' if review.get('model_called') else '否'}")
         if review.get("reason"):
@@ -295,7 +488,7 @@ def render_investigation_markdown(investigation: Mapping[str, Any]) -> str:
 
     items = investigation.get("items")
     if not isinstance(items, list) or not items:
-        lines.extend(["", "没有可用的模型解释；本次状态和原因已写入 investigation.json。"])
+        lines.extend(["", "基础比较候选调查没有可用的模型解释；开放式发现状态已单独列示。"])
     else:
         for item in items:
             if not isinstance(item, Mapping):
@@ -335,7 +528,7 @@ def render_investigation_markdown(investigation: Mapping[str, Any]) -> str:
 def render_report_with_investigation(
     report: Mapping[str, Any], investigation: Mapping[str, Any]
 ) -> str:
-    """Re-render the standard report and append its separate M3 section."""
+    """Re-render the standard report and append the model investigation section."""
 
     from finagent.reports.annual_report import render_markdown
 
@@ -480,15 +673,20 @@ def _discover_new_audits(
     run_dir: Path,
     before: set[str],
     artifacts_root: Path,
+    *,
+    prompt_version: str = "annual_investigation_v1",
 ) -> tuple[list[dict[str, Any]], int, int]:
     audits: list[dict[str, Any]] = []
     persisted_attempts = 0
+    persisted_responses = 0
     for child in _new_uuid_children(run_dir, before):
         request = child / "request.json"
         response = child / "response.json"
         failure = child / "failure.json"
         if request.exists():
             persisted_attempts += 1
+        if response.exists():
+            persisted_responses += 1
         try:
             audit_dir = child.resolve().relative_to(artifacts_root.resolve()).as_posix()
         except (OSError, ValueError):
@@ -500,13 +698,12 @@ def _discover_new_audits(
                 "response_path": f"{audit_dir}/response.json" if response.exists() else None,
                 "failure_path": f"{audit_dir}/failure.json" if failure.exists() else None,
                 "status": "succeeded" if response.exists() else ("failed" if failure.exists() else "started"),
-                "prompt_version": "annual_investigation_v1",
+                "prompt_version": prompt_version,
             }
         )
-    # AnnualInvestigationResult.model_call_count counts requests whose audit
-    # record was persisted, including HTTP failures. A response file separately
-    # indicates successful completion and is already visible in each artifact.
-    return audits, persisted_attempts, persisted_attempts
+    # A request record proves an attempt; a response record proves a returned
+    # model response. Keep the two counters distinct even on workflow errors.
+    return audits, persisted_attempts, persisted_responses
 
 
 def _new_uuid_children(run_dir: Path, before: set[str]) -> list[Path]:
@@ -548,8 +745,9 @@ def _is_matching_period(value: str, year: int) -> bool:
 
 def _model_scope_note(note: str) -> str:
     sentence = (
-        "显式启用的 M3 年报调查与最终评审会调用模型：调查只提出未核实解释或弃权，"
-        "最终评审只提供模型观点；两者都不参与事实、计算和主张核验，也不确认或排除舞弊。"
+        "显式启用的年度模型调查会调用模型：全文开放式发现扫描可提取文字并提出公司特有的未核实线索，"
+        "不经过独立语义核验且不参与基础事实、计算和主张核验；固定候选调查与最终评审只提供模型观点，"
+        "也不提升核验状态或确认、排除舞弊。"
     )
     for original in ("报告不调用模型，也不确认舞弊。", "报告不调用模型。"):
         if original in note:

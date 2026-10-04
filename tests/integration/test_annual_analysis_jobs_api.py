@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import os
 import subprocess
@@ -163,7 +164,9 @@ def test_integrated_mode_passes_http_contract_and_returns_both_layers(
     monkeypatch.setattr(
         jobs_module,
         "get_annual_analysis_capabilities",
-        lambda _project_root=None: {"model_investigation": {"available": True, "status": "ready"}},
+        lambda _project_root=None: {"model_investigation": {
+            "available": True, "status": "ready", "annual_discovery_supported": True,
+        }},
     )
     monkeypatch.setattr(jobs_module, "_invoke_cli", _successful_runner)
     client = TestClient(create_app(tmp_path))
@@ -237,7 +240,9 @@ def test_model_investigation_requires_server_configuration_before_creating_job(
     monkeypatch.setattr(
         jobs_module,
         "get_annual_analysis_capabilities",
-        lambda _project_root=None: {"model_investigation": {"available": False, "status": "not_configured"}},
+        lambda _project_root=None: {"model_investigation": {
+            "available": False, "status": "not_configured", "annual_discovery_supported": True,
+        }},
     )
     client = TestClient(create_app(tmp_path))
 
@@ -256,7 +261,11 @@ def test_capabilities_endpoint_returns_only_stable_readiness_fields(
 ) -> None:
     monkeypatch.setenv("MODEL_API_KEY", "mock-secret-value")
     monkeypatch.setenv("MODEL_BASE_URL", "https://private.example.invalid/v1")
-    expected = {"model_investigation": {"available": False, "status": "not_configured"}}
+    expected = {"model_investigation": {
+        "available": False,
+        "status": "not_configured",
+        "annual_discovery_supported": True,
+    }}
     monkeypatch.setattr(jobs_module, "get_annual_analysis_capabilities", lambda _project_root=None: expected)
     client = TestClient(create_app(tmp_path))
 
@@ -264,8 +273,42 @@ def test_capabilities_endpoint_returns_only_stable_readiness_fields(
 
     assert response.status_code == 200
     assert response.json() == expected
+    assert response.json()["model_investigation"]["annual_discovery_supported"] is True
     assert "mock-secret-value" not in response.text
     assert "private.example.invalid" not in response.text
+
+
+@pytest.mark.parametrize(
+    ("dependency_available", "settings_available", "expected_status"),
+    [(False, False, "dependency_unavailable"), (True, False, "not_configured"), (True, True, "ready")],
+)
+def test_capability_code_support_flag_is_stable_without_loading_real_settings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dependency_available: bool,
+    settings_available: bool,
+    expected_status: str,
+) -> None:
+    def import_mock(_name: str):
+        if not dependency_available:
+            raise ImportError("test dependency unavailable")
+        return SimpleNamespace()
+
+    monkeypatch.setattr(importlib, "import_module", import_mock)
+    if settings_available:
+        monkeypatch.setattr(jobs_module, "resolve_model_settings", lambda _root: object())
+    else:
+        def no_settings(_root):
+            raise RuntimeError("mock settings unavailable")
+        monkeypatch.setattr(jobs_module, "resolve_model_settings", no_settings)
+
+    capability = jobs_module.get_annual_analysis_capabilities(tmp_path)["model_investigation"]
+
+    assert capability == {
+        "available": expected_status == "ready",
+        "status": expected_status,
+        "annual_discovery_supported": True,
+    }
 
 
 def test_failed_cli_archive_is_persisted_as_failed_job(tmp_path: Path, monkeypatch) -> None:
@@ -478,6 +521,129 @@ def test_invalid_cli_timeout_configuration_fails_closed(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="60 到 900"):
         jobs_module._configured_cli_timeout_seconds()
+
+
+def test_model_and_deterministic_timeout_defaults_are_distinct(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("FINTRACE_ANNUAL_JOB_TIMEOUT_SECONDS", raising=False)
+
+    assert jobs_module._configured_cli_timeout_seconds("model_investigation") == 3600
+    assert jobs_module._configured_cli_timeout_seconds("integrated_analysis") == 3600
+    assert jobs_module._configured_cli_timeout_seconds("deterministic") == 900
+
+
+def test_discovery_progress_accepts_full_source_counts_and_rejects_unknown_fields(tmp_path: Path) -> None:
+    job_id = f"annual-job-{uuid4().hex}"
+    job_dir = tmp_path / job_id
+    job_dir.mkdir()
+    state = {
+        "request": {
+            "company_id": "603288",
+            "report_year": 2024,
+            "document_id": "doc-progress",
+            "sha256": "a" * 64,
+            "mode": "model_investigation",
+        }
+    }
+    record = {
+        "kind": "fintrace_annual_discovery_progress_v1",
+        "job_id": job_id,
+        "run_id": f"annual-analysis-{uuid4()}",
+        "company_id": "603288",
+        "report_year": 2024,
+        "source_document_id": "doc-progress",
+        "source_sha256": "a" * 64,
+        "event": "planned",
+        "status": "running",
+        "batch_index": 0,
+        "planned_batches": 128,
+        "processed_batches": 0,
+        "successful_batches": 0,
+        "failed_batches": 0,
+        "total_pages": 208,
+        "total_chars": 1_300_000,
+        "updated_at": "2026-10-04T01:02:03+00:00",
+    }
+    progress_path = job_dir / "discovery-progress.json"
+    progress_path.write_text(json.dumps(record), encoding="utf-8")
+
+    progress = jobs_module._read_discovery_progress(job_dir, job_id, state)
+
+    assert progress is not None
+    assert progress["total_chars"] == 1_300_000
+    assert "raw_text" not in progress
+    record["raw_text"] = "must never be accepted or returned"
+    progress_path.write_text(json.dumps(record), encoding="utf-8")
+    assert jobs_module._read_discovery_progress(job_dir, job_id, state) is None
+
+
+def test_running_model_job_exposes_only_its_source_bound_discovery_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _make_source(tmp_path, document_id="progress-job")
+    entered = threading.Event()
+    release = threading.Event()
+
+    monkeypatch.setattr(
+        jobs_module,
+        "get_annual_analysis_capabilities",
+        lambda _root=None: {"model_investigation": {
+            "available": True, "status": "ready", "annual_discovery_supported": True,
+        }},
+    )
+
+    def waiting_runner(project_root: Path, artifacts_root: Path, request: dict[str, object]) -> CliResult:
+        job_id = str(request["_internal_job_id"])
+        job_dir = artifacts_root / "annual-analysis-jobs" / job_id
+        progress_record = {
+            "kind": "fintrace_annual_discovery_progress_v1",
+            "job_id": job_id,
+            "run_id": f"annual-analysis-{uuid4()}",
+            "company_id": request["company_id"],
+            "report_year": request["report_year"],
+            "source_document_id": request["document_id"],
+            "source_sha256": request["sha256"],
+            "event": "batch_finished",
+            "status": "running",
+            "batch_index": 1,
+            "planned_batches": 8,
+            "processed_batches": 1,
+            "successful_batches": 1,
+            "failed_batches": 0,
+            "total_pages": 208,
+            "total_chars": 1_300_000,
+            "updated_at": "2026-10-04T01:02:03+00:00",
+        }
+        (job_dir / "discovery-progress.json").write_text(
+            json.dumps(progress_record), encoding="utf-8"
+        )
+        entered.set()
+        assert release.wait(5)
+        run_id = _write_success_archive(project_root, request)
+        return CliResult(0, f"status=completed run_id={run_id}", "")
+
+    monkeypatch.setattr(jobs_module, "_invoke_cli", waiting_runner)
+    client = TestClient(create_app(tmp_path))
+    created = client.post(
+        "/v1/annual-analysis-jobs",
+        json=_request(source, mode="model_investigation"),
+    )
+    assert created.status_code == 202
+    job_id = str(created.json()["job_id"])
+    assert entered.wait(2)
+    try:
+        state = client.get(f"/v1/annual-analysis-jobs/{job_id}")
+        assert state.status_code == 200
+        progress = state.json()["discovery_progress"]
+        assert progress["event"] == "batch_finished"
+        assert progress["planned_batches"] == 8
+        assert progress["processed_batches"] == 1
+        assert progress["total_chars"] == 1_300_000
+        assert "source_sha256" not in progress
+        assert "raw_text" not in progress
+    finally:
+        release.set()
+    terminal = _wait_terminal(client, job_id)
+    assert terminal["status"] == "completed"
 
 
 def test_queue_is_bounded_and_successful_runs_do_not_overwrite(tmp_path: Path, monkeypatch) -> None:

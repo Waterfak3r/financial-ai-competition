@@ -17,6 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import finagent.agents.annual_investigation as annual_investigation
+import finagent.agents.annual_discovery as annual_discovery
 import finagent.agents.annual_review as annual_review
 import finagent.audit.audited_chat as audited_chat
 import finagent.reports.investigation_append as investigation_append
@@ -53,6 +54,11 @@ class _MockProvider:
                         "limitations": ["仅使用本年报中的有限片段。"],
                         "narrative_evidence_ids": [evidence_id],
                         "request_more_context": False,
+                    }, ensure_ascii=False)
+                elif "fragments" in payload:
+                    answer = json.dumps({
+                        "findings": [],
+                        "limitations": ["本次构造报告仅用于调查流程回归。"],
                     }, ensure_ascii=False)
                 else:
                     signal_id = "profit_up_cash_down"
@@ -300,6 +306,7 @@ def test_model_job_runs_cli_and_final_review_then_returns_archived_report(
     source = _source(tmp_path)
     runs_root = tmp_path / "artifacts" / "runs"
     monkeypatch.setattr(annual_investigation, "repository_runs_root", lambda: runs_root)
+    monkeypatch.setattr(annual_discovery, "repository_runs_root", lambda: runs_root)
     monkeypatch.setattr(annual_review, "repository_runs_root", lambda: runs_root)
     monkeypatch.setattr(audited_chat, "repository_runs_root", lambda: runs_root)
     monkeypatch.setattr(investigation_append, "_repository_root", lambda: tmp_path)
@@ -335,7 +342,7 @@ def test_model_job_runs_cli_and_final_review_then_returns_archived_report(
         assert created.status_code == 202, created.text
         state = _wait_terminal(client, created.json()["job_id"], timeout=10)
         assert state["status"] == "completed", json.dumps({"state": state, "requests": provider.requests}, ensure_ascii=False)
-        assert len(provider.requests) == 3
+        assert len(provider.requests) == 4
 
         response = client.get(state["result_url"])
         assert response.status_code == 200, response.text
@@ -350,17 +357,23 @@ def test_model_job_runs_cli_and_final_review_then_returns_archived_report(
     assert review["call_count"] == 1
     assert review["source_identity"]["run_id"] == state["run_id"]
     assert report["model_called"] is True
-    assert investigation["model_call_count"] == 3
+    discovery = report["model_discovery"]
+    assert discovery["status"] == "completed"
+    assert discovery["findings"] == []
+    assert discovery["model_call_count"] == 1
+    assert investigation["model_call_count"] == 4
     assert investigation["investigation_call_count"] == 2
+    assert investigation["discovery_call_count"] == 1
     assert investigation["model_review_call_count"] == 1
-    assert investigation["model_call_attempt_count"] == 3
+    assert investigation["model_call_attempt_count"] == 4
     assert report["fraud_conclusion"] is None
     manifest_summary = archived["manifest"]
     run_manifest = json.loads(
         (tmp_path / "artifacts" / "runs" / state["run_id"] / "manifest.json").read_text(encoding="utf-8")
     )
     assert run_manifest["model_called"] is True
-    assert run_manifest["model_investigation"]["model_call_count"] == 3
+    assert run_manifest["model_investigation"]["model_call_count"] == 4
+    assert run_manifest["model_discovery"]["model_call_count"] == 1
     assert run_manifest["model_review"]["call_count"] == 1
 
     task_id = f"model-review-job-e2e-{state['run_id']}"

@@ -13,7 +13,7 @@ from finagent.audit.audited_chat import repository_runs_root
 from finagent.core.model_settings import ModelSettings
 from finagent.llm.chat_completion import ChatMessage
 
-PROMPT_VERSION = "annual_review_v1"
+PROMPT_VERSION = "annual_review_v2"
 MAX_REQUEST_CHARS = 16_000
 MAX_RESPONSE_CHARS = 12_000
 MAX_FACTS = 40
@@ -21,8 +21,9 @@ MAX_CALCULATIONS = 40
 MAX_SIGNALS = 30
 MAX_PENDING_ITEMS = 60
 MAX_INVESTIGATION_ITEMS = 30
+MAX_DISCOVERY_ITEMS = 12
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
-_PROMPT_PATH = Path(__file__).resolve().parents[4] / "config" / "prompts" / "annual_review_v1.md"
+_PROMPT_PATH = Path(__file__).resolve().parents[4] / "config" / "prompts" / "annual_review_v2.md"
 
 ASSESSMENTS = frozenset(
     {
@@ -83,13 +84,17 @@ def run_annual_model_review(
         return result
     before = _run_children(run_dir)
     try:
+        prompt = _load_prompt()
         review_input, allowed_ids, evidence_refs, no_priority_allowed = _build_review_input(
-            report, investigation, identity
+            report,
+            investigation,
+            identity,
+            request_model=settings.model,
+            system_prompt=prompt,
         )
         serialized = json.dumps(review_input, ensure_ascii=False, separators=(",", ":"))
-        if len(serialized) > MAX_REQUEST_CHARS:
+        if _actual_request_chars(settings.model, prompt, serialized) > MAX_REQUEST_CHARS:
             return result
-        prompt = _load_prompt()
         audited = audited_complete_chat(
             [
                 ChatMessage(role="system", content=prompt),
@@ -130,7 +135,7 @@ def run_annual_model_review(
         result.update(
             reason=safe_reason or ("model_review_response_invalid" if response_present else "model_review_call_failed"),
             model_called=attempts > 0,
-            call_count=attempts,
+            call_count=1 if response_present else 0,
             call_attempt_count=attempts,
             audit_artifacts=audits,
         )
@@ -217,6 +222,10 @@ def _build_review_input(
     report: Mapping[str, Any],
     investigation: Mapping[str, Any],
     identity: Mapping[str, Any],
+    *,
+    request_model: str | None = None,
+    system_prompt: str | None = None,
+    max_serialized_chars: int = MAX_REQUEST_CHARS,
 ) -> tuple[dict[str, Any], set[str], list[EvidenceRef], bool]:
     confirmed = report.get("confirmed")
     if not isinstance(confirmed, Mapping):
@@ -337,6 +346,106 @@ def _build_review_input(
         })
         allowed.add(review_id)
 
+    raw_discovery = investigation.get("discovery")
+    discovery_identity_matches = (
+        raw_discovery.get("kind") == "fintrace_annual_discovery"
+        and _identity_matches(raw_discovery, identity)
+        if isinstance(raw_discovery, Mapping)
+        else False
+    )
+    discovery_status = (
+        raw_discovery.get("status") if discovery_identity_matches else "identity_mismatch"
+    )
+    discovery_coverage = (
+        raw_discovery.get("coverage")
+        if discovery_identity_matches and isinstance(raw_discovery.get("coverage"), Mapping)
+        else {}
+    )
+    raw_discovery_findings = (
+        list(raw_discovery.get("findings", []))
+        if discovery_identity_matches and isinstance(raw_discovery.get("findings", []), list)
+        else raw_discovery.get("findings", []) if discovery_identity_matches else []
+    )
+    discovery_items: list[dict[str, Any]] = []
+    discovery_evidence_records: dict[str, Mapping[str, Any]] = {}
+    raw_discovery_evidences = (
+        raw_discovery.get("evidences", []) if discovery_identity_matches else []
+    )
+    if isinstance(raw_discovery_evidences, list):
+        for evidence in raw_discovery_evidences:
+            if (
+                isinstance(evidence, Mapping)
+                and evidence.get("source_document_id") == identity["source_document_id"]
+                and evidence.get("source_sha256") == identity["source_sha256"]
+                and isinstance(evidence.get("evidence_id"), str)
+                and type(evidence.get("pdf_page")) is int
+                and evidence["pdf_page"] > 0
+            ):
+                discovery_evidence_records[evidence["evidence_id"]] = evidence
+    discovery_omitted_count = 0
+    if not isinstance(raw_discovery_findings, list):
+        raw_discovery_findings = []
+        discovery_omitted_count = 1
+    discovery_total_count = len(raw_discovery_findings)
+    priority_order = {"high": 0, "medium": 1, "low": 2}
+    raw_discovery_findings.sort(
+        key=lambda item: priority_order.get(item.get("priority"), 3)
+        if isinstance(item, Mapping) and isinstance(item.get("priority"), str)
+        else 4
+    )
+    if len(raw_discovery_findings) > MAX_DISCOVERY_ITEMS:
+        discovery_omitted_count += len(raw_discovery_findings) - MAX_DISCOVERY_ITEMS
+        raw_discovery_findings = raw_discovery_findings[:MAX_DISCOVERY_ITEMS]
+    for finding in raw_discovery_findings:
+        if not isinstance(finding, Mapping):
+            discovery_omitted_count += 1
+            continue
+        finding_id = finding.get("finding_id")
+        evidence_ids = finding.get("evidence_ids", [])
+        if (
+            not isinstance(finding_id, str)
+            or _ID_RE.fullmatch(finding_id) is None
+            or not finding_id.startswith(f"disc:{identity['source_sha256'][:12]}-")
+            or finding.get("classification") != "unverified_model_finding"
+            or finding.get("verification_status") != "unverified"
+            or not isinstance(evidence_ids, list)
+            or any(not isinstance(value, str) or len(value) > 200 for value in evidence_ids)
+        ):
+            discovery_omitted_count += 1
+            continue
+        if not evidence_ids or any(
+            evidence_id not in discovery_evidence_records
+            or (
+                isinstance(discovery_evidence_records[evidence_id].get("finding_ids"), list)
+                and finding_id not in discovery_evidence_records[evidence_id]["finding_ids"]
+            )
+            for evidence_id in evidence_ids
+        ):
+            discovery_omitted_count += 1
+            continue
+        priority = finding.get("priority")
+        if not isinstance(priority, str) or priority not in {"high", "medium", "low"}:
+            priority = "low"
+            discovery_omitted_count += 1
+        citation_pages = sorted({
+            int(discovery_evidence_records[evidence_id]["pdf_page"])
+            for evidence_id in evidence_ids
+            if evidence_id in discovery_evidence_records
+        })[:8]
+        discovery_items.append({
+            "finding_id": finding_id,
+            "classification": "unverified_model_finding",
+            "verification_status": "unverified",
+            "title": _limited_optional_text(finding.get("title"), 100, mark_truncated),
+            "observation": _limited_optional_text(finding.get("observation"), 360, mark_truncated),
+            "why_it_matters": _limited_optional_text(finding.get("why_it_matters"), 240, mark_truncated),
+            "follow_up": _limited_optional_text(finding.get("follow_up"), 240, mark_truncated),
+            "priority": priority,
+            "evidence_ids": list(dict.fromkeys(evidence_ids))[:4],
+            "citation_pages": citation_pages,
+        })
+        allowed.add(finding_id)
+
     initial_candidate_count = sum(item.get("status") == "candidate" for item in candidate_signals)
     initial_signal_abstentions = sum(item.get("status") in {"abstained", "unknown"} for item in candidate_signals)
 
@@ -382,7 +491,7 @@ def _build_review_input(
     )
 
     data = {
-        "schema_version": "annual_model_review_v1",
+        "schema_version": "annual_model_review_v2",
         "source_identity": dict(identity),
         "coverage": {
             "verified_fact_count": len(verified_facts),
@@ -395,26 +504,54 @@ def _build_review_input(
             "investigation_reason": investigation_reason,
             "investigation_abstention_count": abstained_count,
             "investigation_identity_matches": investigation_identity_matches,
+            "discovery_status": discovery_status,
+            "discovery_identity_matches": discovery_identity_matches,
+            "discovery_findings_count": discovery_total_count,
+            "discovery_omitted_count": discovery_omitted_count,
+            "discovery_input_omitted_count": 0,
+            "discovery_sent_finding_ids": [item["finding_id"] for item in discovery_items],
+            "discovery_coverage_complete": discovery_coverage.get("complete") is True,
+            "discovery_truncated": discovery_coverage.get("truncated") is True,
+            "discovery_coverage": {
+                key: discovery_coverage.get(key)
+                for key in (
+                    "total_pages", "text_pages", "total_blocks", "total_chars",
+                    "planned_batches", "processed_batches", "successful_batches",
+                    "failed_batches", "processed_chars", "unread_pages", "failed_pages",
+                    "truncated", "complete", "no_text_pages", "image_pages",
+                    "unread_image_pages", "text_only_scope",
+                )
+            },
             "comparability_status": comparability_status,
             "comparability_identity_matches": comparability_matches,
             "unvalidated_confirmed_record_count": unvalidated_confirmed_count,
             "scope_gaps": safe_gaps,
             "truncated": truncated,
+            # Reserved before the request-size loop so its exact JSON cost is
+            # included even when the value changes from false to true later.
+            "no_priority_eligible": False,
         },
         "verified_facts": verified_facts,
         "verified_calculations": verified_calculations,
         "candidate_signals": candidate_signals,
         "unresolved_review_items": pending_items,
         "investigation_items": investigation_items,
+        "discovery_items": discovery_items,
     }
     # Keep the full message within a small bound. Drop tail records in a fixed
     # order, keep coverage counts as counts of the supplied subset, and block
     # no-priority conclusions whenever a record had to be omitted.
     lists = [
         "investigation_items", "unresolved_review_items", "candidate_signals",
-        "verified_calculations", "verified_facts",
+        "verified_calculations", "verified_facts", "discovery_items",
     ]
-    while len(json.dumps(data, ensure_ascii=False, separators=(",", ":"))) > MAX_REQUEST_CHARS and any(data[key] for key in lists):
+    def request_size() -> int:
+        user_content = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+        if request_model is None or system_prompt is None:
+            return len(user_content)
+        return _actual_request_chars(request_model, system_prompt, user_content)
+
+    while request_size() > max_serialized_chars and any(data[key] for key in lists):
         for key in lists:
             if data[key]:
                 removed = data[key].pop()
@@ -426,6 +563,13 @@ def _build_review_input(
                     allowed.discard(str(removed.get("signal_id")))
                 elif key == "unresolved_review_items":
                     allowed.discard(str(removed.get("review_id")))
+                elif key == "discovery_items":
+                    allowed.discard(str(removed.get("finding_id")))
+                    data["coverage"]["discovery_omitted_count"] += 1
+                    data["coverage"]["discovery_input_omitted_count"] += 1
+                    data["coverage"]["discovery_sent_finding_ids"] = [
+                        item["finding_id"] for item in data["discovery_items"]
+                    ]
                 else:
                     allowed.discard(str(removed.get("review_id")))
                 data["coverage"]["truncated"] = True
@@ -446,6 +590,11 @@ def _build_review_input(
     evidence_pages = {
         page for item in data["verified_facts"] for page in item.get("pdf_pages", [])
     }
+    evidence_pages.update(
+        page
+        for item in data["discovery_items"]
+        for page in item.get("citation_pages", [])
+    )
     pages = [EvidenceRef(str(identity["source_document_id"]), page) for page in sorted(evidence_pages)[:80]]
     if len(evidence_pages) > 80:
         data["coverage"]["truncated"] = True
@@ -457,6 +606,9 @@ def _build_review_input(
     data["coverage"]["candidate_signal_count"] = len(data["candidate_signals"])
     data["coverage"]["candidate_count"] = sum(item.get("status") == "candidate" for item in data["candidate_signals"])
     data["coverage"]["signal_abstention_count"] = sum(item.get("status") in {"abstained", "unknown"} for item in data["candidate_signals"])
+    data["coverage"]["discovery_sent_finding_ids"] = [
+        item["finding_id"] for item in data["discovery_items"]
+    ]
     # Rebuild the citation whitelist from precisely the records that were sent.
     allowed = {
         item["fact_id"] for item in data["verified_facts"]
@@ -468,6 +620,8 @@ def _build_review_input(
         item["review_id"] for item in data["unresolved_review_items"]
     } | {
         item["review_id"] for item in data["investigation_items"]
+    } | {
+        item["finding_id"] for item in data["discovery_items"]
     }
     evidence_pages = {
         page for item in data["verified_facts"] for page in item.get("pdf_pages", [])
@@ -493,6 +647,12 @@ def _build_review_input(
         and data["coverage"]["signal_abstention_count"] == 0
         and initial_signal_abstentions == 0
         and data["coverage"]["investigation_identity_matches"]
+        and data["coverage"]["discovery_identity_matches"]
+        and data["coverage"]["discovery_status"] == "completed"
+        and data["coverage"]["discovery_coverage_complete"]
+        and not data["coverage"]["discovery_truncated"]
+        and data["coverage"]["discovery_findings_count"] == 0
+        and data["coverage"]["discovery_omitted_count"] == 0
         and data["coverage"]["comparability_identity_matches"]
         and (
             (investigation_status == "completed" and abstained_count == 0)
@@ -502,7 +662,23 @@ def _build_review_input(
         and not substantive_scope_gaps
     )
     data["coverage"]["no_priority_eligible"] = no_priority_allowed
+    if request_size() > max_serialized_chars:
+        raise ValueError("annual_review_request_budget_exceeded")
     return data, allowed, pages, no_priority_allowed
+
+
+def _actual_request_chars(model: str, system_prompt: str, user_content: str) -> int:
+    """Measure the exact UTF-8 JSON string shape used by complete_chat."""
+
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+        "stream": False,
+    }
+    return len(json.dumps(payload, ensure_ascii=False))
 
 
 def _verified_fact_input(

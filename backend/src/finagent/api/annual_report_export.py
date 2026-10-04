@@ -20,7 +20,7 @@ _ROOT_FIELDS = (
     "kind", "title", "run_id", "company_id", "report_year", "source_document_id",
     "source_sha256", "fraud_conclusion", "scope", "comparability", "confirmed",
     "verified_claims", "interpretations", "pending_review", "limitations", "model_called",
-    "m3_screening", "model_investigation", "model_review",
+    "m3_screening", "model_investigation", "model_review", "model_discovery",
 )
 _EVIDENCE_FIELDS = (
     "evidence_id", "document_id", "source_sha256", "pdf_page", "printed_page",
@@ -109,8 +109,9 @@ def project_export(archive: AnnualReportArchive) -> dict[str, Any]:
     }
     verified = {item["evidence_id"]: item for item in archive.verification_evidences}
     narrative = {item["evidence_id"]: item for item in archive.narrative_evidences}
-    evidence_ids = set(verified) | set(narrative)
-    report = _project_report(archive.report, identity, verified, narrative, evidence_ids)
+    discovery = {item["evidence_id"]: item for item in archive.discovery_evidences}
+    evidence_ids = set(verified) | set(narrative) | set(discovery)
+    report = _project_report(archive.report, identity, verified, narrative, discovery, evidence_ids)
     manifest = _pick(summary, (
         "run_id", "status", "mode", "company_id", "report_year", "document_id",
         "source_pdf_archive_path", "report_json_path", "source_pdf_sha256", "report_sha256",
@@ -130,6 +131,7 @@ def project_export(archive: AnnualReportArchive) -> dict[str, Any]:
         "evidence_index": {
             "verification_evidences": [_project_verified_index_evidence(item) for item in archive.verification_evidences],
             "narrative_evidences": [_project_narrative_evidence(item) for item in archive.narrative_evidences],
+            "discovery_evidences": [_project_discovery_index_evidence(item) for item in archive.discovery_evidences],
         },
         "export_limitations": [
             "导出保留归档各层状态，不会提升事实、计算或因果核验等级。",
@@ -158,11 +160,16 @@ def render_safe_markdown(payload: Mapping[str, Any]) -> str:
                 1,
             )
     text += "\n\n" + rendered_report
+    discovery_markdown = _render_discovery_markdown(report.get("model_discovery"))
+    if discovery_markdown:
+        text += "\n\n" + discovery_markdown
     investigation = report.get("model_investigation")
     if isinstance(investigation, Mapping):
         from finagent.reports.investigation_append import render_investigation_markdown
 
         text += "\n\n" + render_investigation_markdown(investigation).rstrip()
+    elif isinstance(report.get("model_review"), Mapping):
+        text += "\n\n" + _render_review_markdown(report["model_review"])
     screening = report.get("m3_screening")
     if isinstance(screening, Mapping):
         from finagent.reports.m3_annual_append import render_report_with_m3_screening
@@ -233,6 +240,7 @@ def render_html(payload: Mapping[str, Any]) -> str:
     body.extend(_render_candidates(report.get("pending_review", {}).get("candidate_signals", [])))
     body.extend(_render_m3(report.get("m3_screening")))
     body.extend(_render_model_layer(report.get("model_investigation"), report.get("model_review")))
+    body.extend(_render_discovery(report.get("model_discovery")))
     body.append("<h2>范围、缺口与限制</h2>")
     body.extend(_render_text_list(report.get("scope", {}).get("gaps", []), "范围缺口"))
     body.extend(_render_text_list(report.get("limitations", []), "报告限制"))
@@ -241,10 +249,18 @@ def render_html(payload: Mapping[str, Any]) -> str:
     return "".join(body)
 
 
-def _project_report(source: Mapping[str, Any], identity: Mapping[str, Any], verified: Mapping[str, Mapping[str, Any]], narrative: Mapping[str, Mapping[str, Any]], valid_evidence_ids: set[str]) -> dict[str, Any]:
+def _project_report(
+    source: Mapping[str, Any],
+    identity: Mapping[str, Any],
+    verified: Mapping[str, Mapping[str, Any]],
+    narrative: Mapping[str, Mapping[str, Any]],
+    discovery_evidence: Mapping[str, Mapping[str, Any]],
+    valid_evidence_ids: set[str],
+) -> dict[str, Any]:
     report = _pick(source, _ROOT_FIELDS)
     for optional_layer in ("m3_screening", "model_investigation", "model_review"):
         report.pop(optional_layer, None)
+    report.pop("model_discovery", None)
     report["scope"] = _pick(_mapping(source.get("scope")), ("note", "gaps"))
     report["comparability"] = _project_comparability(source.get("comparability"), identity, valid_evidence_ids)
     confirmed = _mapping(source.get("confirmed"))
@@ -268,15 +284,27 @@ def _project_report(source: Mapping[str, Any], identity: Mapping[str, Any], veri
     }
     if isinstance(source.get("m3_screening"), Mapping):
         report["m3_screening"] = _project_m3(source["m3_screening"], identity)
+    projected_discovery, discovery_finding_ids = _project_discovery(
+        source.get("model_discovery"), identity, discovery_evidence
+    )
+    if projected_discovery is not None:
+        report["model_discovery"] = projected_discovery
+    review_reference_ids = _collect_review_reference_ids(
+        report,
+        valid_evidence_ids=valid_evidence_ids,
+        discovery_finding_ids=discovery_finding_ids,
+        investigation_source=source.get("model_investigation"),
+        identity=identity,
+    )
     top_level_review = source.get("model_review")
     top_level_review_present = isinstance(top_level_review, Mapping)
     projected_review = (
-        _project_review(top_level_review, identity, valid_evidence_ids)
+        _project_review(top_level_review, identity, review_reference_ids)
         if top_level_review_present
         else None
     )
     if isinstance(source.get("model_investigation"), Mapping):
-        investigation = _project_investigation(source["model_investigation"], identity, valid_evidence_ids)
+        investigation = _project_investigation(source["model_investigation"], identity, review_reference_ids)
         if top_level_review_present:
             if projected_review is None:
                 investigation.pop("final_review", None)
@@ -286,6 +314,52 @@ def _project_report(source: Mapping[str, Any], identity: Mapping[str, Any], veri
     if projected_review is not None:
         report["model_review"] = projected_review
     return report
+
+
+def _collect_review_reference_ids(
+    report: Mapping[str, Any],
+    *,
+    valid_evidence_ids: set[str],
+    discovery_finding_ids: set[str],
+    investigation_source: Any,
+    identity: Mapping[str, Any],
+) -> set[str]:
+    """Rebuild review references from records actually retained in the export."""
+
+    allowed = set(valid_evidence_ids) | set(discovery_finding_ids)
+    confirmed = _mapping(report.get("confirmed"))
+    for item in _list_maps(confirmed.get("metrics")):
+        value = item.get("fact_id")
+        if _safe_review_reference(value):
+            allowed.add(value)
+    for item in _list_maps(confirmed.get("analyses")):
+        value = item.get("calculation_id")
+        if _safe_review_reference(value):
+            allowed.add(value)
+    pending = _mapping(report.get("pending_review"))
+    for section, id_field, prefix in (
+        ("facts", "fact_id", "pending_fact:"),
+        ("calculations", "calculation_id", "pending_calculation:"),
+        ("claims", "claim_id", "pending_claim:"),
+    ):
+        for item in _list_maps(pending.get(section)):
+            value = item.get(id_field)
+            if _safe_review_reference(value):
+                allowed.add(prefix + value)
+    for item in _list_maps(pending.get("candidate_signals")):
+        value = item.get("signal_id")
+        if _safe_review_reference(value):
+            allowed.add(value)
+    if isinstance(investigation_source, Mapping) and _layer_binding(investigation_source, identity) == "matched":
+        for item in _list_maps(investigation_source.get("items")):
+            value = item.get("signal_id")
+            if _safe_review_reference(value):
+                allowed.add("investigation:" + value)
+    return allowed
+
+
+def _safe_review_reference(value: Any) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}", value) is not None
 
 
 def _project_comparability(value: Any, identity: Mapping[str, Any], evidence_ids: set[str]) -> Any:
@@ -412,14 +486,15 @@ def _project_investigation(value: Mapping[str, Any], identity: Mapping[str, Any]
         if status == "mismatch":
             result["status"] = "source_mismatch"
         return result
-    for key in ("kind", "run_id", "company_id", "report_year", "source_document_id", "source_sha256", "model_called", "model_call_count", "model_call_attempt_count", "investigation_call_count", "investigation_call_attempt_count", "model_review_call_count", "model_review_call_attempt_count", "supplementary_retrieval_used", "reason", "reason_detail", "fraud_conclusion"):
+    for key in ("kind", "run_id", "company_id", "report_year", "source_document_id", "source_sha256", "model_called", "model_call_count", "model_call_attempt_count", "investigation_call_count", "investigation_call_attempt_count", "discovery_call_count", "discovery_call_attempt_count", "model_review_call_count", "model_review_call_attempt_count", "supplementary_retrieval_used", "reason", "reason_detail", "fraud_conclusion"):
         if key in value:
             safe_value = _pick(value, (key,))
             if key in safe_value:
                 result[key] = safe_value[key]
     for key in (
         "model_call_count", "model_call_attempt_count", "investigation_call_count",
-        "investigation_call_attempt_count", "model_review_call_count",
+        "investigation_call_attempt_count", "discovery_call_count",
+        "discovery_call_attempt_count", "model_review_call_count",
         "model_review_call_attempt_count",
     ):
         if key in result and not _is_nonnegative_int(result[key]):
@@ -467,6 +542,168 @@ def _project_review(value: Mapping[str, Any], identity: Mapping[str, Any], evide
     return result
 
 
+def _project_discovery(
+    value: Any,
+    identity: Mapping[str, Any],
+    evidence_records: Mapping[str, Mapping[str, Any]],
+) -> tuple[dict[str, Any] | None, set[str]]:
+    if value is None:
+        return None, set()
+    if not isinstance(value, Mapping):
+        return {"status": "limited", "source_binding_status": "invalid", "findings": []}, set()
+    expected = {
+        "run_id": identity["run_id"],
+        "company_id": identity["company_id"],
+        "report_year": identity["report_year"],
+        "source_document_id": identity["document_id"],
+        "source_sha256": identity["source_sha256"],
+    }
+    if value.get("kind") != "fintrace_annual_discovery" or any(value.get(key) != item for key, item in expected.items()):
+        return {
+            "kind": "fintrace_annual_discovery",
+            "status": "limited",
+            "source_binding_status": "mismatch",
+            "opinion_label": "模型发现，未独立语义核验",
+            "findings": [],
+            "limitations": ["开放式发现来源身份未能绑定到当前报告，已省略动态发现内容。"],
+        }, set()
+    status = value.get("status")
+    called = value.get("model_called")
+    call_count = value.get("model_call_count")
+    attempt_count = value.get("model_call_attempt_count")
+    coverage = value.get("coverage")
+    findings = value.get("findings")
+    limitations = value.get("limitations")
+    if (
+        not isinstance(status, str) or status not in {"completed", "partial", "failed", "not_called"}
+        or not isinstance(called, bool)
+        or not _is_nonnegative_int(call_count)
+        or not _is_nonnegative_int(attempt_count)
+        or attempt_count < call_count
+        or called != (attempt_count > 0)
+        or not isinstance(coverage, Mapping)
+        or not isinstance(findings, list) or len(findings) > 768
+        or not isinstance(limitations, list) or len(limitations) > 1100
+        or any(not isinstance(item, str) or len(item) > 400 for item in limitations)
+    ):
+        return {"status": "limited", "source_binding_status": "matched_but_invalid", "findings": []}, set()
+
+    projected_findings: list[dict[str, Any]] = []
+    finding_ids: set[str] = set()
+    for finding in findings:
+        if not isinstance(finding, Mapping):
+            return {"status": "limited", "source_binding_status": "matched_but_invalid", "findings": []}, set()
+        finding_id = finding.get("finding_id")
+        priority = finding.get("priority")
+        title = finding.get("title")
+        observation = finding.get("observation")
+        why = finding.get("why_it_matters")
+        follow_up = finding.get("follow_up")
+        evidence_ids = finding.get("evidence_ids")
+        citations = finding.get("citations")
+        if (
+            not isinstance(finding_id, str) or not re.fullmatch(r"disc:[0-9a-f]{12}-[0-9a-f]{20}", finding_id)
+            or not finding_id.startswith(f"disc:{str(identity['source_sha256']).lower()[:12]}-")
+            or finding_id in finding_ids
+            or not isinstance(priority, str) or priority not in {"high", "medium", "low"}
+            or not isinstance(title, str) or len(title) > 100
+            or not isinstance(observation, str) or len(observation) > 600
+            or not isinstance(why, str) or len(why) > 400
+            or not isinstance(follow_up, str) or len(follow_up) > 400
+            or finding.get("classification") != "unverified_model_finding"
+            or finding.get("verification_status") != "unverified"
+            or not isinstance(evidence_ids, list) or any(not isinstance(item, str) for item in evidence_ids)
+            or not isinstance(citations, list) or not 1 <= len(citations) <= 4
+        ):
+            return {"status": "limited", "source_binding_status": "matched_but_invalid", "findings": []}, set()
+        finding_ids.add(finding_id)
+        citation_locations: list[dict[str, Any]] = []
+        citation_ids: list[str] = []
+        for citation in citations:
+            if not isinstance(citation, Mapping):
+                return {"status": "limited", "source_binding_status": "matched_but_invalid", "findings": []}, set()
+            evidence_id = citation.get("evidence_id")
+            evidence = evidence_records.get(evidence_id) if isinstance(evidence_id, str) else None
+            if (
+                evidence is None
+                or not isinstance(citation.get("quote"), str)
+                or finding_id not in evidence.get("finding_ids", [])
+                or evidence.get("source_document_id") != identity["document_id"]
+                or evidence.get("source_sha256") != identity["source_sha256"]
+                or type(evidence.get("pdf_page")) is not int
+            ):
+                return {"status": "limited", "source_binding_status": "matched_but_invalid", "findings": []}, set()
+            citation_ids.append(evidence_id)
+            citation_locations.append({
+                "evidence_id": evidence_id,
+                "source_document_id": identity["document_id"],
+                "source_sha256": identity["source_sha256"],
+                "pdf_page": evidence["pdf_page"],
+                "block_index": evidence.get("block_index"),
+                "start_char": evidence.get("start_char"),
+            })
+        if set(citation_ids) != set(evidence_ids) or len(citation_ids) != len(set(citation_ids)):
+            return {"status": "limited", "source_binding_status": "matched_but_invalid", "findings": []}, set()
+        projected_findings.append({
+            "finding_id": finding_id,
+            "title": title,
+            "observation": observation,
+            "why_it_matters": why,
+            "follow_up": follow_up,
+            "priority": priority,
+            "classification": "unverified_model_finding",
+            "verification_status": "unverified",
+            "evidence_ids": list(evidence_ids),
+            "citations": citation_locations,
+        })
+    projected_coverage = _project_discovery_coverage(coverage)
+    if projected_coverage is None:
+        return {"status": "limited", "source_binding_status": "matched_but_invalid", "findings": []}, set()
+    result: dict[str, Any] = {
+        "kind": "fintrace_annual_discovery",
+        **expected,
+        "status": status,
+        "source_binding_status": "matched",
+        "opinion_label": "模型发现，未经独立语义核验",
+        "prompt_version": "annual_discovery_v1",
+        "model_called": called,
+        "model_call_count": call_count,
+        "model_call_attempt_count": attempt_count,
+        "coverage": projected_coverage,
+        "findings": projected_findings,
+        "limitations": list(limitations),
+        "reason": value.get("reason") if isinstance(value.get("reason"), str) else None,
+        "fraud_conclusion": None,
+    }
+    return result, finding_ids
+
+
+def _project_discovery_coverage(value: Mapping[str, Any]) -> dict[str, Any] | None:
+    fields = (
+        "total_pages", "text_pages", "total_blocks", "total_chars", "planned_batches",
+        "processed_batches", "successful_batches", "failed_batches", "processed_chars",
+        "attempted_chars", "unattempted_batches", "unattempted_chars", "planned_chars",
+        "omitted_chars", "unread_pages", "failed_pages", "no_text_pages", "image_pages",
+        "unread_image_pages", "truncated", "complete", "source_status", "content_status",
+        "time_budget_exhausted", "text_only_scope",
+    )
+    result = _pick(value, fields)
+    if set(result) != set(fields):
+        return None
+    batch_results = value.get("batch_results")
+    if not isinstance(batch_results, list) or len(batch_results) > 128:
+        return None
+    result["batch_results"] = []
+    for item in batch_results:
+        if not isinstance(item, Mapping):
+            return None
+        row = _pick(item, ("batch_index", "status", "reason", "pages", "raw_chars"))
+        if set(row) != {"batch_index", "status", "reason", "pages", "raw_chars"}:
+            return None
+        result["batch_results"].append(row)
+    return result
+
+
 def _layer_binding(value: Mapping[str, Any], identity: Mapping[str, Any]) -> str:
     fields = {"run_id": "run_id", "company_id": "company_id", "report_year": "report_year", "source_document_id": "document_id", "source_sha256": "source_sha256"}
     checks = [(key, field) for key, field in fields.items() if key in value]
@@ -486,6 +723,28 @@ def _project_verified_index_evidence(value: Mapping[str, Any]) -> dict[str, Any]
 
 def _project_narrative_evidence(value: Mapping[str, Any]) -> dict[str, Any]:
     return _pick(value, ("evidence_id", "source_document_id", "source_sha256", "signal_ids", "section_label", "pdf_page", "raw_text", "selection_reason"))
+
+
+def _project_discovery_index_evidence(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Export only source coordinates and finding links, never quoted source text."""
+
+    result = _pick(
+        value,
+        (
+            "evidence_id", "source_document_id", "source_sha256", "pdf_page",
+            "block_index", "start_char", "finding_ids",
+        ),
+    )
+    bbox = value.get("bbox")
+    if isinstance(bbox, Mapping):
+        coordinates = _pick(bbox, _BOX_FIELDS)
+        if set(coordinates) == set(_BOX_FIELDS) and all(
+            isinstance(coordinates[key], (int, float)) and not isinstance(coordinates[key], bool)
+            and math.isfinite(float(coordinates[key]))
+            for key in _BOX_FIELDS
+        ):
+            result["bbox"] = coordinates
+    return result
 
 
 def _markdown_tree(value: Any) -> Any:
@@ -597,6 +856,111 @@ def _render_model_layer(investigation: Any, review: Any) -> list[str]:
             lines.append(f"<p>后续核查：{_h(item.get('object'))}；{_h(item.get('action'))}（证据 ID：{_h(', '.join(item.get('evidence_ids', [])))}）</p>")
         lines.extend(_render_text_list(review.get("limitations", []), "最终评审限制"))
     return lines
+
+
+def _render_discovery(value: Any) -> list[str]:
+    if not isinstance(value, Mapping):
+        return []
+    coverage = _mapping(value.get("coverage"))
+    lines = [
+        "<h2>年报全文开放式发现</h2>",
+        "<p><strong>模型提出的公司线索未经独立语义核验，不参与基础事实/计算核验。引文定位不证明因果。</strong></p>",
+    ]
+    lines.append(_html_table(
+        ("状态", "来源绑定", "模型调用", "覆盖状态", "文字页 / 总页", "已处理 / 计划批次", "成功 / 失败批次", "已处理 / 总文字字符", "截断"),
+        [(
+            value.get("status"), value.get("source_binding_status"), value.get("model_called"),
+            coverage.get("complete"), f"{coverage.get('text_pages')} / {coverage.get('total_pages')}",
+            f"{coverage.get('processed_batches')} / {coverage.get('planned_batches')}",
+            f"{coverage.get('successful_batches')} / {coverage.get('failed_batches')}",
+            f"{coverage.get('processed_chars')} / {coverage.get('total_chars')}", coverage.get("truncated"),
+        )],
+    ))
+    rows = []
+    for finding in value.get("findings", []) if isinstance(value.get("findings"), list) else []:
+        if not isinstance(finding, Mapping):
+            continue
+        locations = finding.get("citations") if isinstance(finding.get("citations"), list) else []
+        page_refs = "; ".join(
+            f"PDF 第{item.get('pdf_page')}页 / {item.get('evidence_id')}"
+            for item in locations if isinstance(item, Mapping)
+        )
+        rows.append((
+            finding.get("priority"), finding.get("title"), finding.get("observation"),
+            finding.get("why_it_matters"), finding.get("follow_up"), page_refs,
+            finding.get("verification_status"),
+        ))
+    lines.append(_html_table(("优先级", "动态标题", "观察", "关注原因", "后续核查", "PDF 页码 / evidence ID", "核验状态"), rows))
+    lines.extend(_render_text_list(value.get("limitations"), "开放式发现限制"))
+    unread = coverage.get("unread_pages")
+    if isinstance(unread, list) and unread:
+        lines.extend(_render_text_list(["、".join(str(page) for page in unread)], "未完整处理页码"))
+    return lines
+
+
+def _render_discovery_markdown(value: Any) -> str:
+    if not isinstance(value, Mapping):
+        return ""
+    coverage = _mapping(value.get("coverage"))
+    lines = [
+        "## 年报全文开放式发现",
+        "",
+        "模型提出的公司线索未经独立语义核验，不参与基础事实、计算和主张核验；引用定位不证明因果。",
+        "",
+        f"- 状态：`{value.get('status')}`；来源绑定：`{value.get('source_binding_status')}`；模型调用：`{value.get('model_called')}`",
+        f"- 覆盖：文字页 {coverage.get('text_pages')} / 总页 {coverage.get('total_pages')}；",
+        f"原始文字块 {coverage.get('total_blocks')}；已处理字符 {coverage.get('processed_chars')} / 全部可提取字符 {coverage.get('total_chars')}；",
+        f"已结束批次 {coverage.get('processed_batches')} / 计划 {coverage.get('planned_batches')}（成功 {coverage.get('successful_batches')}、失败 {coverage.get('failed_batches')}）；",
+        f"完整={coverage.get('complete')}，截断={coverage.get('truncated')}。",
+    ]
+    unread = coverage.get("unread_pages")
+    if isinstance(unread, list) and unread:
+        lines.append("- 未完整处理页码：" + "、".join(str(page) for page in unread))
+    findings = value.get("findings")
+    if not isinstance(findings, list) or not findings:
+        lines.extend(["", "本次没有通过引用校验的开放式发现。"])
+    else:
+        for finding in findings:
+            if not isinstance(finding, Mapping):
+                continue
+            lines.extend([
+                "", f"### {finding.get('title', '未命名发现')}（{finding.get('priority', '未提供')}，未核实）", "",
+                f"**观察：**{finding.get('observation', '')}",
+                f"- 关注原因：{finding.get('why_it_matters', '')}",
+                f"- 后续核查：{finding.get('follow_up', '')}",
+            ])
+            refs = finding.get("citations") if isinstance(finding.get("citations"), list) else []
+            citations = [
+                f"PDF 第{item.get('pdf_page')}页 / {item.get('evidence_id')}"
+                for item in refs if isinstance(item, Mapping)
+            ]
+            lines.append("- 原文定位：" + ("；".join(citations) if citations else "无有效引用定位"))
+    limitations = value.get("limitations")
+    if isinstance(limitations, list):
+        lines.extend("- 开放式发现限制：" + str(item) for item in limitations)
+    return "\n".join(lines)
+
+
+def _render_review_markdown(value: Mapping[str, Any]) -> str:
+    lines = [
+        "## 最终评审（模型观点）",
+        "",
+        "该评审未经独立核验。",
+        "",
+        f"- 状态：`{value.get('status')}`；来源绑定：`{value.get('source_binding_status')}`",
+    ]
+    if value.get("summary"):
+        lines.append(str(value["summary"]))
+    for item in value.get("reasons", []) if isinstance(value.get("reasons"), list) else []:
+        if isinstance(item, Mapping):
+            refs = item.get("evidence_ids") if isinstance(item.get("evidence_ids"), list) else []
+            lines.append(f"- 理由：{item.get('text', '')}（引用：{', '.join(str(ref) for ref in refs)}）")
+    for item in value.get("follow_up_items", []) if isinstance(value.get("follow_up_items"), list) else []:
+        if isinstance(item, Mapping):
+            refs = item.get("evidence_ids") if isinstance(item.get("evidence_ids"), list) else []
+            lines.append(f"- 后续核查：{item.get('object', '')}；{item.get('action', '')}（引用：{', '.join(str(ref) for ref in refs)}）")
+    lines.extend(f"- 评审限制：{item}" for item in value.get("limitations", []) if isinstance(item, str))
+    return "\n".join(lines)
 
 
 def _render_text_list(values: Any, label: str) -> list[str]:
