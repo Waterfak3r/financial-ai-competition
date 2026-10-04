@@ -30,7 +30,18 @@
 
 ## 原创图示
 
-- [`architecture.svg`](architecture.svg)：根据当前架构契约由本项目绘制，SHA256 为 `5bcdef434dc59a1854b87cab4c0c4ae865857263004f079e0b31171ece2c5190`。图中年度走 Web/API、季度同比环比走独立 CLI；确定性基础、M3 与 AI 观点分别写入本机归档后导出，AI 只读基础报告、不接收 M3。PDF 中以 ReportLab 原生矢量重绘相同数据流，不是运行截图。
+- [`architecture.svg`](architecture.svg)：根据当前架构契约由本项目绘制，SHA256 为 `10a6f4a9a505cee22c6cdf9ac5260e2bb5ed538ac84f4d68750733be5253a775`。图中年度走 Web/API、季度同比环比走独立 CLI；PDF 来源进入基础核验、固定候选与全文发现分支，最终评审只读基础报告和有限发现、不重读全文，M3 不输入 AI。PDF 中以 ReportLab 原生矢量重绘相同数据流，不是运行截图。 最终 SVG 的 Edge 1320×650 原尺寸检查截图留在 `artifacts/tmp/annual-discovery-final-20261005/architecture-svg-browser-1320x650.png`，主控已查看并接受最终评审节点行距与小箭头。
+
+## 年报开放式发现 mock 展示与软件检查
+
+当前应用软件基线为 `07cb4e97e7b43327aa35ed7d6db260ec28fb1c59`（10/05）。[`annual-discovery-software-checks.json`](annual-discovery-software-checks.json) 是本轮脱敏软件检查摘要，汇总后端完整套件、两份构造 PDF 的 CLI→本地 mock→归档 GET/页图/三格式导出，以及分开运行的前端 17 场景和旧终态 job 单场景、typecheck/build。后端首轮失败日志及修复后最终日志均保留；`.invalid` dummy connector 的尝试次数无法精确确认，不能概括所有检查均由全局网络哨兵阻断。上述都是构造数据、本地替身和指定机器上的软件检查，不是在线 provider 输出或全文语义准确性验收。
+
+下列普通视口截图逐字节复制自已审阅的前端 mock QA 截图，没有裁切或图像加工；页面中的公司/PDF 文本和动态发现均为构造数据，不能当成真实公司分析。桌面截图为 1366×768，手机截图为 390×844。浏览器 mock 使用 1×1 PNG 仅检查抽屉交互与来源协议；这里的页面截图不证明生产 PDF 页图的视觉定位。mock 下载文件也不验证导出内容，导出字段边界由后端合成 PDF E2E 测试检查。
+
+- [桌面 mock 首屏，1366×768](annual-discovery-mock-desktop-1366x768.png)（SHA256 `95338f6a8f40e215489edbf105f860014bad3f7b4f06c1e0072b6d23d4697b91`）
+- [手机 mock 首屏，390×844](annual-discovery-mock-mobile-390x844.png)（SHA256 `84d1531f077fd29a3b049e57e4493d01581ba6bd63736636a33023973bbefcf7`）
+
+版本代码原字节与 Git LF 规范化字节指纹见 [`annual-discovery-code-fingerprint.json`](annual-discovery-code-fingerprint.json)。PDF 页面输出、检查命令与报告日期记录见[验收历史](../../../docs/verification-history.md#2026-10-05-年报开放式发现软件阶段验收与决赛文档装配)。当前决赛技术报告 PDF SHA256 为 `0971e763370e55cf4253a5e10c6f0b18130aed66affbf28398376090a3dcd302`，共 9 页；逐页 110 dpi PNG 尺寸和 SHA256 见[渲染清单](../../../artifacts/evaluations/annual-discovery-final-20261005/pdf-render-manifest.json)。修正 Markdown 硬换行后重建，新版与此前已接受 PDF（SHA256 `4e0d8ba8459e3ae3ca7b6852a76e75495d819f5a12b242770f43d51fd7e7318b`）的 9 页 PNG 均逐字节一致，主控已复核并接受当前 PDF。真实 provider 长任务耗时/发现质量、跨公司语义人审、OCR/图像文字（当前不支持）尚未验收；其他决赛外部关卡也未因本地 mock 通过而完成。
 
 ## 验收状态
 

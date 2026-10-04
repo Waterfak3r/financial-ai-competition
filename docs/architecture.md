@@ -15,21 +15,25 @@ flowchart TD
     E -->|deterministic| H["报告与运行归档"]
     E -->|m3_screening| F["扩展字段核验与四条试行规则"]
     F --> H
-    E -->|model_investigation| G["同源候选调查与结构化最终评审"]
-    G --> H
+    E -->|model_investigation| G["固定候选调查"]
+    A -->|显式 AI 模式| N["同一 PDF 全部可提取文字分批发现"]
+    G --> I["最终评审：基础报告 + 有界发现项"]
+    N --> I
+    I --> H
     E -->|integrated_analysis| J["保留同一基础报告并分别运行两层"]
     J --> F
     J --> G
-    H --> I["Web 报告与已核验证据页图"]
+    J --> N
+    H --> K["Web 报告、核验证据与原文定位"]
     H --> X["年度白名单导出 API"]
     Q0["季度 / 半年累计 PDF"] --> Q1["季度 CLI：提取与来源核验"]
     Q1 --> Q2["季度派生、期间可比与比较核验"]
     Q2 --> Q3["analysis.json 与 Markdown 归档"]
 ```
 
-四种模式为 deterministic、m3_screening、model_investigation 与 integrated_analysis。集成模式在同一 run/report 中保留基础确定性结果，并分别归档 M3 规则审计和 AI 调查/最终评审；AI 仅接收标准确定性报告，不把 M3 分数或状态作为事实输入。任一附加层失败或有缺口时，另一层和基础报告仍保留，任务状态反映问题。deterministic 与独立 M3 模式不调用模型；model_investigation 与 integrated_analysis 会调用模型。
+四种模式为 deterministic、m3_screening、model_investigation 与 integrated_analysis。两个 AI 模式均包含既有固定候选调查、独立的原 PDF 全文发现和最终评审；全文发现从来源 PDF 的全部可提取文字规划批次，不依赖固定候选、已核验指标或 M3。最终评审读取基础报告与有界发现项，不重新读取全文。集成模式在同一 run/report 中另行归档 M3 规则审计，M3 不进入 AI 输入。任一附加层失败或有缺口时，其他成功层和基础报告仍尽量保留，状态分别记录；操作系统或 job runner 在正式归档前硬中断时不保证存在最终报告。deterministic 与独立 M3 模式不调用模型；两个 AI 模式会调用模型。批次预算、覆盖含义和超时边界见[全文发现契约](annual-discovery.md)。
 
-年度归档读取支持 JSON、Markdown 与离线 HTML 白名单导出：先校验归档 manifest、报告身份和来源 PDF SHA，再输出受控字段；不导出 PDF 正文、整页图、原始模型请求/响应或密钥。PDF 由用户在浏览器打印离线 HTML 产生，服务端没有 PDF 导出端点。导出具体边界见[年度报告下载](annual-report-export.md)。
+年度归档读取支持 JSON、Markdown 与离线 HTML 白名单导出：先校验归档 manifest、报告身份和来源 PDF SHA，再输出受控字段；不导出整份 PDF、整页图、原始模型请求/响应或密钥。新全文发现层不导出自己的 `raw_text` 和 `quote`；既有叙述层仍有受控原文片段投影。PDF 由用户在浏览器打印离线 HTML 产生，服务端没有 PDF 导出端点。导出具体边界见[年度报告下载](annual-report-export.md)。
 
 导出的年度可比性要求其 document_id、source_sha256 与 report_year 完整匹配当前归档；缺少任一来源绑定时结果标为“来源未验证”，任一字段错配则标为“来源错配”，两种情况下都不输出可比性证据。M3、模型调查与最终评审层也校验来源身份；身份缺失或不匹配时只保留受限状态，不投影规则明细或模型意见。归档中若声明顶层 `model_review`，该顶层字段的缺失/错配处理优先于调查层里嵌套的历史评审，避免通过嵌套副本绕过来源检查。该契约的专项与浏览器接受状态见[验收记录](verification-history.md)。
 
@@ -48,12 +52,12 @@ flowchart TD
 | schemas | 旧 FinancialFact、隔离的 v2 事实、TableCellEvidence、计算、核验、Claim 及季度 observation/derived/comparison/proof 类型 |
 | verification | 独立重读原文、检查行列与字段、年度及季度可比性、重算、支持依据；缺证据时弃权 |
 | finance | Decimal 公式、年度差额/增长率、季度累计差分与期间比较、确定性候选与 M3 试行规则 |
-| retrieval | 当前同源年报的 MD&A/财务附注片段检索，绑定来源哈希、页码、坐标、证据 ID，并限制数量与字符数；过滤无关投资/筹资现金流说明与只有标题的片段 |
-| agents | LangGraph 候选调查及有限补充检索；调查后结构化最终评审；不把模型意见升级成独立核验 |
+| retrieval | `annual_context.py` 为固定候选调查检索同源 MD&A/财务附注片段；`annual_discovery_context.py` 规划本次 PDF 所有非空提取文字，逐块切片并按来源 SHA、页码和块内位置绑定 ID，不做章节/主题关键词过滤。叙述 `reading_context` 是 API 对已核验引用构造的页面展示补全，不属于全文发现规划 |
+| agents | LangGraph 执行固定候选调查、独立全文发现及最终结构化评审；最终评审仅接收基础报告和有界发现项，模型观点不升级为独立核验 |
 | tools | 将已有业务能力适配为工具，不复制解析、计算或核验实现 |
 | llm | 同步 Chat Completions 纯文本连接器；请求限共有字段，常规默认超时 60 秒 |
 | audit | 模型请求与结果的脱敏调用记录、时间及状态；记录失败不能伪装为审计成功 |
-| reports | 组装 JSON/Markdown、读取归档并按年度白名单投影 JSON/Markdown/HTML；保留失败/缺口、来源与可选 model_review |
+| reports | 组装 JSON/Markdown、读取归档并按年度白名单投影 JSON/Markdown/HTML；来源错误或新发现层校验失败时 fail closed；保留失败/缺口、来源与可选模型层 |
 | quarterly | `ingestion/quarterly.py`、`finance/quarterly.py`、`verification/quarterly.py` 与 `reports/quarterly_analysis.py` 承载季度层，不改变年度 FinancialFactV2 |
 | core | 公共路径、配置、异常等基础能力 |
 
@@ -69,14 +73,16 @@ flowchart TD
 | POST /v1/annual-prechecks | 创建旧预检 |
 | GET /v1/annual-prechecks/{run_id} | 读取旧预检归档 |
 | POST /v1/annual-analysis-jobs | 以已存来源创建 deterministic / m3_screening / model_investigation / integrated_analysis 任务 |
-| GET /v1/annual-analysis-jobs/{job_id} | 查询阶段、状态、结果 run_id / result_url |
+| GET /v1/annual-analysis-jobs/{job_id} | 查询阶段、状态、结果 run_id / result_url；运行中的年度 CLI 阶段可附带来源绑定的安全批次进度 |
 | GET /v1/annual-analysis-history?limit=20&offset=0 | 只读本机年度任务与报告索引，按创建时间分页并报告总条数 |
-| GET /v1/annual-analyses/{run_id} | 只读已归档的 v2 报告 |
-| GET /v1/annual-analyses/{run_id}/export?format=json\|markdown\|html | 验证既有年度归档及来源绑定后按白名单导出；不重跑分析、不导出原 PDF/页图、密钥或原始模型请求/响应 |
+| GET /v1/annual-analyses/{run_id} | 只读已归档的 v2 报告，并分开返回已核验、narrative 与全文发现来源索引 |
+| GET /v1/annual-analyses/{run_id}/export?format=json\|markdown\|html | 验证既有年度归档及来源绑定后按白名单导出；不重跑分析、不导出整份 PDF/整页图、密钥或原始模型请求/响应 |
 | GET /v1/annual-analyses/{run_id}/evidence/{evidence_id}/preview.png | 已核验证据白名单页图 |
 | GET /v1/annual-analyses/{run_id}/narrative-evidences | 读取归档且被模型解释引用的年报原文片段索引 |
 | GET /v1/annual-analyses/{run_id}/narrative-evidences/{evidence_id}/preview.png | 预览上述原文片段的 PDF 页图 |
-| GET /v1/annual-analysis-capabilities | 仅返回模型模式是否可用与 ready / not_configured / dependency_unavailable |
+| GET /v1/annual-analyses/{run_id}/discovery-evidences | 读取被全文发现引用的原文片段索引 |
+| GET /v1/annual-analyses/{run_id}/discovery-evidences/{evidence_id}/preview.png | 预览已校验引用所在 PDF 页图 |
+| GET /v1/annual-analysis-capabilities | 返回模型模式就绪状态；`model_investigation.annual_discovery_supported` 标记当前后端是否包含全文发现接入 |
 | GET / PUT / DELETE /v1/model-settings | 读取非密钥状态、保存完整本机配置、清除配置 |
 | POST /v1/model-settings/test | 按草稿真实测试连接，不保存草稿、不发送年报 |
 
@@ -84,7 +90,7 @@ flowchart TD
 
 有界队列为单进程最多一个运行任务、三个排队任务。job.json 写入 `artifacts/annual-analysis-jobs/<job_id>/`；服务重启时遗留 queued/running 转为 interrupted。状态为 queued、running、completed、completed_with_issues、failed、interrupted。模型配置或 LangGraph 未就绪时创建模型任务返回 503。
 
-Web 模型任务（model_investigation 与 integrated_analysis）按 README 的本机文件优先/环境回退规则注入配置；deterministic 与独立 M3 子进程移除 MODEL_*。集成模式的 M3 计算不使用模型配置，只有调查/评审调用模型。CLI 仍只读环境。设置读取 API 不回显密钥并禁止缓存；设置路由检查 loopback Host，修改与测试还检查本机 Origin。这些是设置路由的约束，不代表所有 API 有相同防护。应用不全局强制 host，按启动命令绑定 127.0.0.1。
+Web 模型任务（model_investigation 与 integrated_analysis）按 README 的本机文件优先/环境回退规则注入配置；deterministic 与独立 M3 子进程移除 MODEL_*。集成模式的 M3 计算不使用模型配置；固定候选调查、全文发现与最终评审均属于显式 AI 流程。Web job 超时和全文发现内部预算见[全文发现契约](annual-discovery.md)。CLI 仍只读环境。设置读取 API 不回显密钥并禁止缓存；设置路由检查 loopback Host，修改与测试还检查本机 Origin。这些是设置路由的约束，不代表所有 API 有相同防护。应用不全局强制 host，按启动命令绑定 127.0.0.1。
 
 `GET /v1/annual-analysis-history` 的 `limit` 默认 20、允许 1–50；`offset` 默认 0、须为非负整数。HTTP 查询值越界或无法解析返回 422。响应顶层为 `{items, total, limit, offset}`；每项主要包含 `item_id`、公司代码/年报年份/类型、来源文档编号和文件名、总状态、独立的 `job_status` 与 `run_status`、任务 `mode` 与归档 `run_mode`、`created_at`、`job_id`/`run_id`、`replay`、`result_available` 和 `{code, message}` 形式的 `issues`。缺失或无效的创建时间排在有效时间之后；有效时间按新到旧排序，同时间以条目标识稳定排序。
 
@@ -125,27 +131,31 @@ Claim 类型为 fact、calculation、inference、hypothesis；同比属于 calcu
 
 ## 5. 模型、报告与展示
 
-调查只用本次来源清单中的年报片段，补充检索最多一次，不开放任意互联网检索或读取评测标签。候选解释和最终评审通过同一审计连接器调用；最终评审额外进行一次结构化调用。
+固定候选调查仍使用受限同源检索与单次补充检索，不开放任意互联网检索或读取评测标签。独立全文发现会把原 PDF 全部可提取文字按预算分批发送，不以候选、财务指标或 M3 作为触发条件；新发现观点均未核验。最终评审额外进行一次结构化调用，只接收基础报告与最多 12 条优先发现，并受实际请求字符上限约束。详细预算和覆盖状态见[全文发现契约](annual-discovery.md)。
 
-`config/prompts/annual_investigation_v1.md` 与 `annual_review_v1.md` 是运行时提示词，分别由对应 agents 模块读取。输入文本按待分析数据处理。最终评审提示词禁止复述数字事实，解析器还拒绝含数字的评审文本；页面需要展示数值时应从已核验结构化记录取值。改变此限制须同时修改并验证输出契约，不能仅改 Markdown 措辞。
+`config/prompts/annual_investigation_v1.md`、`annual_discovery_v1.md` 与 `annual_review_v2.md` 是当前运行时提示词，分别对应候选调查、全文发现和最终评审。输入 PDF 文本按不可信待分析数据处理。全文发现观点不得冒充核实结果；最终评审解析器拒绝模型观点字段中的阿拉伯数字，并只允许引用实际输入的 ID。页面需要展示数值时应从已核验结构化记录取值。改变这些限制须同时修改并验证输出契约，不能仅改 Markdown 措辞。
 
 审计目录为 `artifacts/runs/<run_id>/` 的 UUID 子目录，联网前写 request.json/started，成功写 response.json，失败写安全类别；凭据须脱敏，不记录请求头、base_url 或异常原文。响应审计写入失败抛 AuditPersistError，不返回审计成功；输出归档仍需独立检查是否可能夹带敏感信息，不能据一个脱敏环节推定整条链路安全。
 
-model_review 为可选报告字段，含 completed/failed/not_called 状态、assessment、理由、依据 ID、后续核查、限制及调用审计。assessment 可为 prioritize_review、no_priority_issue_identified_within_scope、insufficient_evidence。`annual_review_v1` 与解析器保持同一输出约束：理由最多六项、后续核查最多八项、限制最多八项；每项 `evidence_ids` 最多八个互不重复的白名单 ID。`summary` 最多 800 字符、理由文本最多 500、后续动作最多 400、每条限制最多 400；这些文本不得包含阿拉伯数字，跟进对象必须同时出现在该项依据中。解析器拒绝越界、重复、无来源或不匹配的引用。提示词约束的行为调整须同时核对该解析契约及回归。
+model_review 为可选报告字段，含 completed/failed/not_called 状态、assessment、理由、依据 ID、后续核查、限制及调用审计。assessment 可为 prioritize_review、no_priority_issue_identified_within_scope、insufficient_evidence。当前 `annual_review_v2` 与解析器保持同一输出约束：理由最多六项、后续核查最多八项、限制最多八项；每项 `evidence_ids` 最多八个互不重复的白名单 ID。`summary` 最多 800 字符、理由文本最多 500、后续动作最多 400、每条限制最多 400；模型观点字段不得包含阿拉伯数字，跟进对象必须同时出现在该项依据中。解析器拒绝越界、重复、无来源或不匹配的引用。提示词约束的行为调整须同时核对该解析契约及回归。
 
-观点校验不等同独立事实/语义核验；评审失败仍保留确定性报告并暴露问题，旧报告无此字段仍可读。
+观点校验不等同独立事实/语义核验；发现、评审失败仍尽量保留基础报告及成功层并暴露问题，旧报告无新全文发现层时仍按旧归档兼容读取。新全文发现层若来源 SHA、证据片段、引文或字段结构不符，报告读取、索引、页图及导出均 fail closed，不以旧字段绕过校验。
 
 ### 叙述片段索引与页图
 
-`GET /v1/annual-analyses/{run_id}` 在兼容旧报告的同时返回两个分离的列表：`verification_evidences` 是已核验金额白名单，`narrative_evidences` 是带 `interpretation_label` 与 `items` 的叙述片段索引。独立索引路由返回 `{run_id, source_document_id, source_sha256, interpretation_label, items}`；每项含 `evidence_id`、来源文档与哈希、关联 signal IDs、section label、物理 PDF 页码、未旋转页面坐标 bbox、原始文本、选择原因、引用该片段的 signal IDs 和预览路由。`interpretation_label` 固定为“原文片段定位/模型观点引用，非独立因果核验”。
+`GET /v1/annual-analyses/{run_id}` 在兼容旧报告的同时，将已核验金额 `verification_evidences`、叙述 `narrative_evidences` 与全文发现 `discovery_evidences` 分开返回。narrative 独立索引路由返回 `{run_id, source_document_id, source_sha256, interpretation_label, items}`；每项含 `evidence_id`、来源文档与哈希、关联 signal IDs、section label、物理 PDF 页码、未旋转页面坐标 bbox、原始文本、选择原因、引用该片段的 signal IDs 和预览路由。其 `interpretation_label` 固定为“原文片段定位/模型观点引用，非独立因果核验”。
 
 叙述索引只收录已写入运行归档、且被相应模型解释引用的片段。读取归档时后端按归档来源 ID 与 PDF SHA256 重开原 PDF，逐条核对完整原文（仅忽略文本首尾空白）和 bbox；不匹配则拒绝归档读取。叙述 ID 不进入金额 `verification_evidences` 白名单，也不把原文引用升级为独立因果核验。检索只读取本次同一 PDF 的 MD&A/财务附注文本块，不访问网络；默认最多 4 块、每块 900 字符、总计 2600 字符，另有 8 块、每块 1200 字符、总计 4000 字符的硬上限。选择器优先保留解释性正文/附注，并排除只有标题或投资、筹资现金流的片段；没有足够上下文时保留缺口，不硬编码公司原因。
 
 叙述索引可附带 `reading_context` 供页面连续阅读。它标记为 `purpose=display_only`，由后端在原始叙述引用通过来源 PDF 的文本与 bbox 校验后，从同页 PDF 文本块重新构造；不接受归档 JSON 自带上下文，不进入分析报告、模型请求或 JSON/Markdown/HTML 导出白名单。它是受限的启发式阅读补全，不承诺通用 PDF 段落解析：只有同列、相邻正文特征可识别且边界明确时扩展，最多 5 块、阅读文本不超过 1800 字符、来源块原文总计也不超过 1800 字符、单个邻块 700 字符；遇到识别出的标题、表格/数字行、跨列、明显新段落、句末或边界不明确时保守停止。每项返回 PDF 页码、阅读文本、覆盖 bbox、扩展/受限状态、引用块编号及逐块原文和 bbox，便于审计。无法可靠扩展时保留原始引用，并通过 `limited`/边界原因说明范围受限。该字段是附加展示数据；旧后端缺少它时客户端仍显示经过校验的 `raw_text`，不将短引用冒充为完整段落。
 
-金额和叙述页图都支持可选 `focus=true`，默认仍返回整页。聚焦图围绕已白名单核验坐标裁剪并受像素上限约束；`X-PDF-Page`、`X-Evidence-Kind`、`X-Preview-Mode` 与 `X-Preview-Region` 描述返回图像，叙述图另带 `X-Evidence-Interpretation-Code`。`X-Report-SHA256` 响应头是归档报告 JSON 的哈希；PDF 原文哈希通过报告/叙述索引中的 `source_sha256` 单独绑定。聚焦坐标以 `unrotated_pdf_points` 返回，前端不得以猜测纸张尺寸推算坐标。
+### 全文发现引用索引与页图
 
-同源、独立核验通过且命中白名单的金额证据可预览 PDF 页图；被归档模型解释引用的叙述片段通过独立索引读取，只证明原文定位，不提升为独立因果核验。未核实提取位置标“待核实定位”，没有可靠页码则标“原文位置待定位”；不能用页码改变对象核验状态。
+发现索引仅收录 findings 实际引用的文本片段，并提供 `finding_ids`、`pdf_page`、过滤后的 `block_index`、`start_char`、bbox、`raw_text` 与页图路由。API 读取时重新解析归档原 PDF，逐项绑定源 SHA、页/块/字符范围、原文与模型 quote；发现 ID 同样须含本次源哈希摘要。索引和页图独立于已核验金额与 narrative 引用。页图 `X-Evidence-Kind` 标记为 `annual_discovery`，bbox 只覆盖引用块，不能解释为精确字符高亮或完整自然段；任何来源或引用不匹配均拒绝新层读取。
+
+已核验金额、叙述和全文发现页图都支持可选 `focus=true`，默认仍返回整页。聚焦图围绕各自白名单坐标裁剪并受像素上限约束；`X-PDF-Page`、`X-Evidence-Kind`、`X-Preview-Mode` 与 `X-Preview-Region` 描述返回图像，叙述图另带 `X-Evidence-Interpretation-Code`。`X-Report-SHA256` 响应头是归档报告 JSON 的哈希；PDF 原文哈希通过对应索引中的 `source_sha256` 单独绑定。聚焦坐标以 `unrotated_pdf_points` 返回，前端不得以猜测纸张尺寸推算坐标。
+
+同源、独立核验通过且命中白名单的金额证据可预览 PDF 页图；被归档模型解释或全文发现引用的片段通过各自独立索引读取，只证明原文定位，不提升为独立因果核验。未核实提取位置标“待核实定位”，没有可靠页码则标“原文位置待定位”；不能用页码改变对象核验状态。
 
 Web 已接入本机历史列表分页，并用查询参数 `run_id` 或 `job_id` 定位所选归档/任务；打开链接、刷新和浏览器前进/后退会重新按本机归档读取。URL 只适用于可访问同一份本机资料与服务的环境，不是云端分享链接。活动任务的 job_id 仍可由浏览器存储恢复。历史 API 和最终浏览器矩阵均已验收，覆盖刷新、前进/后退、选择隔离、异步切换和分页错误恢复；具体证据见[验收记录](verification-history.md)。
 

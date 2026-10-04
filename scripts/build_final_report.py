@@ -381,7 +381,7 @@ def architecture_drawing() -> Drawing:
     box(8, 35, 552, 318, "#ffffff", "#c9d3dd")
     label(25, 332, "本机工作区", size=12, bold=True)
     label(22, 392, "FINTRACE｜本机财报分析与证据链", size=18, bold=True)
-    label(24, 374, "本地计算与归档为主；显式模型流程才发送必要文本片段", size=9, color=muted)
+    label(24, 374, "本地计算与归档为主；显式 AI 在预算内分批尝试发送本份 PDF 可提取文字", size=9, color=muted)
 
     # Local modules.
     box(27, 235, 130, 91, "#eaf2f8", "#8eabc2")
@@ -404,7 +404,7 @@ def architecture_drawing() -> Drawing:
     label(41, 164, "本机证据与归档", size=10.5, bold=True)
     label(41, 142, "PDF 哈希、页码、行列", size=8.3)
     label(41, 122, "基础 / M3 / AI 分层报告", size=8.3)
-    label(41, 98, "真实原文仅本地保存", size=8, color=muted)
+    label(41, 98, "原文与审计留本机归档", size=8, color=muted)
 
     box(194, 75, 150, 115, "#f7f2e8", "#c0a46d")
     label(207, 164, "M3 规则层", size=10.5, bold=True)
@@ -414,15 +414,22 @@ def architecture_drawing() -> Drawing:
 
     box(361, 75, 174, 115, "#f1eef8", "#9d8ac4")
     label(375, 164, "AI 调查与评审层", size=10.2, bold=True)
-    label(375, 142, "LangGraph 唯一编排", size=8.3)
-    label(375, 122, "只读基础确定性报告", size=8.3)
-    label(375, 98, "模型观点，不升级核验", size=8, color=muted)
+    label(375, 151, "LangGraph 唯一编排 · 观点未核验", size=6.8, color=muted)
+    box(367, 114, 78, 32, "#ffffff", "#9d8ac4")
+    label(372, 134, "基础报告", size=6.1)
+    label(372, 122, "固定候选调查", size=5.8)
+    box(451, 114, 80, 32, "#ffffff", "#9d8ac4")
+    label(455, 134, "同源 PDF 原文", size=5.7)
+    label(455, 122, "全文分批发现", size=5.7)
+    box(391, 78, 118, 27, "#ffffff", "#9d8ac4")
+    label(421, 95, "最终评审", size=6.5)
+    label(399, 84, "基础 + 有限发现", size=6.3)
 
     # Optional cloud and deliverables.
     box(586, 237, 202, 104, "#eef4fb", "#7b9ec2")
     label(600, 315, "操作者配置的云端 API", size=10.2, bold=True)
     label(600, 292, "显式请求 / 返回模型观点", size=8.2)
-    label(600, 273, "必要片段 / 纯文本接口", size=8.4)
+    label(600, 273, "可提取全文批次 / 有界评审", size=7.4)
     label(600, 251, "供应方与型号不内置", size=8, color=muted)
 
     box(586, 82, 202, 112, "#ffffff", "#c9d3dd")
@@ -438,7 +445,14 @@ def architecture_drawing() -> Drawing:
     drawing.add(Line(390, 235, 390, 213, strokeColor=line_color, strokeWidth=1.5))
     drawing.add(Line(390, 213, 329, 213, strokeColor=line_color, strokeWidth=1.5))
     arrow(329, 213, 329, 190)
-    arrow(450, 235, 450, 190)
+    drawing.add(Line(400, 235, 354, 216, strokeColor=line_color, strokeWidth=1.5))
+    drawing.add(Line(354, 216, 354, 130, strokeColor=line_color, strokeWidth=1.5))
+    arrow(354, 130, 367, 130)
+    drawing.add(Line(505, 235, 545, 216, strokeColor=line_color, strokeWidth=1.5))
+    drawing.add(Line(545, 216, 545, 130, strokeColor=line_color, strokeWidth=1.5))
+    arrow(545, 130, 531, 130)
+    arrow(406, 114, 426, 105)
+    arrow(491, 114, 474, 105)
     arrow(194, 132, 177, 132)
     drawing.add(Line(400, 235, 400, 225, strokeColor=line_color, strokeWidth=1.5))
     drawing.add(Line(400, 225, 150, 225, strokeColor=line_color, strokeWidth=1.5))
@@ -454,7 +468,7 @@ def architecture_drawing() -> Drawing:
     arrow(535, 178, 579, 263, blue)
     arrow(579, 245, 535, 157, blue)
 
-    label(25, 17, "年度走 Web/API；季度同比环比由独立 CLI 运行，不经 Web/API。基础、M3、AI 观点分别归档；AI 只读基础报告，不接收 M3。", size=7.4, color=muted)
+    label(25, 17, "年度走 Web/API，季度走独立 CLI。全文发现以来源 PDF 可提取文字为目标并受预算约束；评审只读基础报告与有限发现，不重读全文；观点未核验，M3 不输入 AI。", size=7.4, color=muted)
     return drawing
 
 
@@ -675,7 +689,7 @@ class FinalReportDocument(BaseDocTemplate):
         canvas.line(19 * mm, 12 * mm, page_width - 19 * mm, 12 * mm)
         canvas.setFont("YaHei", 7.2)
         canvas.setFillColor(MUTED)
-        canvas.drawString(19 * mm, 7.5 * mm, "2026 年 10 月 3 日  ·  FINTRACE 决赛技术报告")
+        canvas.drawString(19 * mm, 7.5 * mm, "2026 年 10 月 5 日  ·  FINTRACE 决赛技术报告")
         canvas.drawRightString(page_width - 19 * mm, 7.5 * mm, str(doc.page))
         canvas.restoreState()
 

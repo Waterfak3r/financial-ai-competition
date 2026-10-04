@@ -1,0 +1,279 @@
+{
+  "schema_version": 1,
+  "kind": "annual_discovery_code_fingerprint",
+  "date": "2026-10-05",
+  "head": "07cb4e97e7b43327aa35ed7d6db260ec28fb1c59",
+  "worktree_dirty": true,
+  "file_count": 33,
+  "fingerprint_method": {
+    "worktree_raw": "SHA-256 of exact current working-tree bytes",
+    "worktree_lf_normalized": "SHA-256 after replacing CRLF and lone CR with LF; no other byte normalization",
+    "head_blob": "SHA-256 of exact bytes from git show HEAD:path"
+  },
+  "files": [
+    {
+      "path": "backend/src/finagent/agents/annual_discovery.py",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "c1deafe012adcdf8454336d30d84466222fd9cc41b54caba70b47e0909d0c2b6",
+      "worktree_lf_normalized_sha256": "c1deafe012adcdf8454336d30d84466222fd9cc41b54caba70b47e0909d0c2b6",
+      "head_blob_sha256": "c1deafe012adcdf8454336d30d84466222fd9cc41b54caba70b47e0909d0c2b6",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "backend/src/finagent/agents/annual_review.py",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "b6ee7bff61cdd10cf009c3fb8a7e02c46762c4186c7e3b674cb102638b1df744",
+      "worktree_lf_normalized_sha256": "b6ee7bff61cdd10cf009c3fb8a7e02c46762c4186c7e3b674cb102638b1df744",
+      "head_blob_sha256": "b6ee7bff61cdd10cf009c3fb8a7e02c46762c4186c7e3b674cb102638b1df744",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "backend/src/finagent/retrieval/annual_discovery_context.py",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "c29715ac7552826ed9689faa3d114a3422f41be64b7d4a057da1982066c88ea9",
+      "worktree_lf_normalized_sha256": "c29715ac7552826ed9689faa3d114a3422f41be64b7d4a057da1982066c88ea9",
+      "head_blob_sha256": "c29715ac7552826ed9689faa3d114a3422f41be64b7d4a057da1982066c88ea9",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "backend/src/finagent/api/annual_analysis_jobs.py",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "804c966b4ed6ba3e3fae1fe01b2b9b6ef4b61141bb1ceadd584318488d2ae6e2",
+      "worktree_lf_normalized_sha256": "804c966b4ed6ba3e3fae1fe01b2b9b6ef4b61141bb1ceadd584318488d2ae6e2",
+      "head_blob_sha256": "804c966b4ed6ba3e3fae1fe01b2b9b6ef4b61141bb1ceadd584318488d2ae6e2",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "backend/src/finagent/api/annual_report_export.py",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "8316244b25265b7f7a5b55f0e209b29d93b297a687977405e9632f91dd3b3454",
+      "worktree_lf_normalized_sha256": "8316244b25265b7f7a5b55f0e209b29d93b297a687977405e9632f91dd3b3454",
+      "head_blob_sha256": "8316244b25265b7f7a5b55f0e209b29d93b297a687977405e9632f91dd3b3454",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "backend/src/finagent/api/annual_report_read.py",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "6d595d2f81c3da56e69c4413bf882162770e90b47de2fadf0c3ef1c3b1fc0caa",
+      "worktree_lf_normalized_sha256": "6d595d2f81c3da56e69c4413bf882162770e90b47de2fadf0c3ef1c3b1fc0caa",
+      "head_blob_sha256": "6d595d2f81c3da56e69c4413bf882162770e90b47de2fadf0c3ef1c3b1fc0caa",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "backend/src/finagent/api/app.py",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "9566a23ab0341766e28cd362a8beb05981613939f22d698161b6e2e9aa39658c",
+      "worktree_lf_normalized_sha256": "9566a23ab0341766e28cd362a8beb05981613939f22d698161b6e2e9aa39658c",
+      "head_blob_sha256": "9566a23ab0341766e28cd362a8beb05981613939f22d698161b6e2e9aa39658c",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "backend/src/finagent/reports/investigation_append.py",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "66a3df9b87a18569a493abedb6889d745f3fd7b3c9a78b91d34f8d7d0ff206fb",
+      "worktree_lf_normalized_sha256": "66a3df9b87a18569a493abedb6889d745f3fd7b3c9a78b91d34f8d7d0ff206fb",
+      "head_blob_sha256": "66a3df9b87a18569a493abedb6889d745f3fd7b3c9a78b91d34f8d7d0ff206fb",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "scripts/analyze_annual.py",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "899e91d88b1d4970aac914afff28e1f0e6b0c0265ba62974855d895a2fda2b96",
+      "worktree_lf_normalized_sha256": "899e91d88b1d4970aac914afff28e1f0e6b0c0265ba62974855d895a2fda2b96",
+      "head_blob_sha256": "899e91d88b1d4970aac914afff28e1f0e6b0c0265ba62974855d895a2fda2b96",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "config/prompts/annual_discovery_v1.md",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "a1a5e0013f5acec4aaff48d453efa3c9ffcddba5079983944090e7186f4d698d",
+      "worktree_lf_normalized_sha256": "a1a5e0013f5acec4aaff48d453efa3c9ffcddba5079983944090e7186f4d698d",
+      "head_blob_sha256": "a1a5e0013f5acec4aaff48d453efa3c9ffcddba5079983944090e7186f4d698d",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "config/prompts/annual_review_v2.md",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "80238478e3cf5156c423fff456858640b3de8eb47d1f340605235e6a5003cca5",
+      "worktree_lf_normalized_sha256": "80238478e3cf5156c423fff456858640b3de8eb47d1f340605235e6a5003cca5",
+      "head_blob_sha256": "80238478e3cf5156c423fff456858640b3de8eb47d1f340605235e6a5003cca5",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "docs/annual-discovery.md",
+      "worktree_status": "M docs/annual-discovery.md",
+      "worktree_raw_sha256": "4f0d9c1e17db18e604a4714988850a2cb0466672296dd318c5f8a1295b73befb",
+      "worktree_lf_normalized_sha256": "4f0d9c1e17db18e604a4714988850a2cb0466672296dd318c5f8a1295b73befb",
+      "head_blob_sha256": "9a8e7e30ca4c55a8c4bd2642c0d8c25c7045b178599e454bee41bf61106f8356",
+      "lf_normalized_matches_head_blob": false
+    },
+    {
+      "path": "tests/integration/test_annual_analysis_cli.py",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "6c076a4c2829fe914266a1d18aa83a3b28949a3e43d01f0538d470141fc3c6a4",
+      "worktree_lf_normalized_sha256": "6c076a4c2829fe914266a1d18aa83a3b28949a3e43d01f0538d470141fc3c6a4",
+      "head_blob_sha256": "6c076a4c2829fe914266a1d18aa83a3b28949a3e43d01f0538d470141fc3c6a4",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "tests/integration/test_annual_analysis_jobs_api.py",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "bd250fe3576c41bc559f7a3a574da3363abb30c334bd84c4b70d14dbb4f78e2e",
+      "worktree_lf_normalized_sha256": "bd250fe3576c41bc559f7a3a574da3363abb30c334bd84c4b70d14dbb4f78e2e",
+      "head_blob_sha256": "bd250fe3576c41bc559f7a3a574da3363abb30c334bd84c4b70d14dbb4f78e2e",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "tests/integration/test_annual_model_review_job_e2e.py",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "7fcbf93af012cbb67adc3691a9f5e67ad7f812cb2ecb9a2af62bf08a09ff0613",
+      "worktree_lf_normalized_sha256": "7fcbf93af012cbb67adc3691a9f5e67ad7f812cb2ecb9a2af62bf08a09ff0613",
+      "head_blob_sha256": "7fcbf93af012cbb67adc3691a9f5e67ad7f812cb2ecb9a2af62bf08a09ff0613",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "tests/integration/test_annual_discovery_integration.py",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "af3d52dc75292008a8287ead53f49d47258198a4f9052a076dd45094f17cb309",
+      "worktree_lf_normalized_sha256": "af3d52dc75292008a8287ead53f49d47258198a4f9052a076dd45094f17cb309",
+      "head_blob_sha256": "af3d52dc75292008a8287ead53f49d47258198a4f9052a076dd45094f17cb309",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "tests/unit/test_annual_discovery.py",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "aab0eff72e9c6a7329697977f54f98ad77caf50b5dae18e04382872b88170272",
+      "worktree_lf_normalized_sha256": "aab0eff72e9c6a7329697977f54f98ad77caf50b5dae18e04382872b88170272",
+      "head_blob_sha256": "aab0eff72e9c6a7329697977f54f98ad77caf50b5dae18e04382872b88170272",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "tests/unit/test_annual_discovery_context.py",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "d2fe25cd4f06ad3149bef3ab2a952aebb660f8f6e24bdbb1910bf207f54d464e",
+      "worktree_lf_normalized_sha256": "d2fe25cd4f06ad3149bef3ab2a952aebb660f8f6e24bdbb1910bf207f54d464e",
+      "head_blob_sha256": "d2fe25cd4f06ad3149bef3ab2a952aebb660f8f6e24bdbb1910bf207f54d464e",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "tests/unit/test_annual_discovery_contract.py",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "d357df54a795534fe549b36891d48f67b006f8d044e4d8c6d4aee18a96fe927a",
+      "worktree_lf_normalized_sha256": "d357df54a795534fe549b36891d48f67b006f8d044e4d8c6d4aee18a96fe927a",
+      "head_blob_sha256": "d357df54a795534fe549b36891d48f67b006f8d044e4d8c6d4aee18a96fe927a",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "tests/unit/test_annual_model_review.py",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "4d0c638a07bb33e7daa502b19e287e68923f0a384e8472fb9b53d98229b19ee0",
+      "worktree_lf_normalized_sha256": "4d0c638a07bb33e7daa502b19e287e68923f0a384e8472fb9b53d98229b19ee0",
+      "head_blob_sha256": "4d0c638a07bb33e7daa502b19e287e68923f0a384e8472fb9b53d98229b19ee0",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "tests/unit/test_annual_report_export.py",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "5c0e146bf03d44970c92f716143ea9f3cb0959c543ca31e55843d053feef0065",
+      "worktree_lf_normalized_sha256": "5c0e146bf03d44970c92f716143ea9f3cb0959c543ca31e55843d053feef0065",
+      "head_blob_sha256": "5c0e146bf03d44970c92f716143ea9f3cb0959c543ca31e55843d053feef0065",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "tests/unit/test_annual_report_read_api.py",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "304cae48941e3cfa43a07a17836da73092ef4459fa4d0854de63b3f46742e357",
+      "worktree_lf_normalized_sha256": "304cae48941e3cfa43a07a17836da73092ef4459fa4d0854de63b3f46742e357",
+      "head_blob_sha256": "304cae48941e3cfa43a07a17836da73092ef4459fa4d0854de63b3f46742e357",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "tests/unit/test_investigation_append.py",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "a3ae46537351aaadf92033b1efd19577f9ada18457ca9cfe4875e9347833f59e",
+      "worktree_lf_normalized_sha256": "a3ae46537351aaadf92033b1efd19577f9ada18457ca9cfe4875e9347833f59e",
+      "head_blob_sha256": "a3ae46537351aaadf92033b1efd19577f9ada18457ca9cfe4875e9347833f59e",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "frontend/src/api/annualAnalysisCapabilities.ts",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "551a4ba285c8ebf027e10d639fe625fc802e5001bc80f2e42f956ed24cd6ffc1",
+      "worktree_lf_normalized_sha256": "551a4ba285c8ebf027e10d639fe625fc802e5001bc80f2e42f956ed24cd6ffc1",
+      "head_blob_sha256": "551a4ba285c8ebf027e10d639fe625fc802e5001bc80f2e42f956ed24cd6ffc1",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "frontend/src/api/annualAnalysisJobs.ts",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "12a7976a50144a7cf766b429873e0686e96ab21da4b1c08a09495b53e2a66594",
+      "worktree_lf_normalized_sha256": "12a7976a50144a7cf766b429873e0686e96ab21da4b1c08a09495b53e2a66594",
+      "head_blob_sha256": "12a7976a50144a7cf766b429873e0686e96ab21da4b1c08a09495b53e2a66594",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "frontend/src/api/annualReports.ts",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "00dbe1e56eac68c180b54a7e172f6cbe37195824c51f96c35b5d7094cc8bf796",
+      "worktree_lf_normalized_sha256": "00dbe1e56eac68c180b54a7e172f6cbe37195824c51f96c35b5d7094cc8bf796",
+      "head_blob_sha256": "00dbe1e56eac68c180b54a7e172f6cbe37195824c51f96c35b5d7094cc8bf796",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "frontend/src/api/discoveryEvidences.ts",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "88f15b437bec23415ea0c2bca360a39cf29ddf562149fb77aeca5a9ac1b85ad9",
+      "worktree_lf_normalized_sha256": "88f15b437bec23415ea0c2bca360a39cf29ddf562149fb77aeca5a9ac1b85ad9",
+      "head_blob_sha256": "88f15b437bec23415ea0c2bca360a39cf29ddf562149fb77aeca5a9ac1b85ad9",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "frontend/src/pages/AnnualAnalysisPage.tsx",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "dfd1c8a030040a9cbbdfe49d4c00836b68a81851c6ef5f230c0b8241376a14e2",
+      "worktree_lf_normalized_sha256": "dfd1c8a030040a9cbbdfe49d4c00836b68a81851c6ef5f230c0b8241376a14e2",
+      "head_blob_sha256": "dfd1c8a030040a9cbbdfe49d4c00836b68a81851c6ef5f230c0b8241376a14e2",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "frontend/src/styles/app.css",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "e7e8343284b69acf41da319e0ed104a96d1ec0b50153f49647542845123b3c1c",
+      "worktree_lf_normalized_sha256": "e7e8343284b69acf41da319e0ed104a96d1ec0b50153f49647542845123b3c1c",
+      "head_blob_sha256": "e7e8343284b69acf41da319e0ed104a96d1ec0b50153f49647542845123b3c1c",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "frontend/src/types/annualAnalysisJob.ts",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "5898f76a83363effe505e7777a49b58ab3f68ed7e659adc62f42e98a7cbc3c06",
+      "worktree_lf_normalized_sha256": "5898f76a83363effe505e7777a49b58ab3f68ed7e659adc62f42e98a7cbc3c06",
+      "head_blob_sha256": "5898f76a83363effe505e7777a49b58ab3f68ed7e659adc62f42e98a7cbc3c06",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "frontend/src/types/annualReport.ts",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "2bb32e86ef3248007594c2d7db5095e2a994ae37b8e623563244ff568450ee7c",
+      "worktree_lf_normalized_sha256": "2bb32e86ef3248007594c2d7db5095e2a994ae37b8e623563244ff568450ee7c",
+      "head_blob_sha256": "2bb32e86ef3248007594c2d7db5095e2a994ae37b8e623563244ff568450ee7c",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "frontend/src/types/discoveryEvidence.ts",
+      "worktree_status": "clean",
+      "worktree_raw_sha256": "e43512ca3dfc1630584c0ca4ecb936629285111f4827ef0b861ad1dbc0bba39c",
+      "worktree_lf_normalized_sha256": "e43512ca3dfc1630584c0ca4ecb936629285111f4827ef0b861ad1dbc0bba39c",
+      "head_blob_sha256": "e43512ca3dfc1630584c0ca4ecb936629285111f4827ef0b861ad1dbc0bba39c",
+      "lf_normalized_matches_head_blob": true
+    },
+    {
+      "path": "scripts/build_final_report.py",
+      "worktree_status": "M scripts/build_final_report.py",
+      "worktree_raw_sha256": "d74a758a54781cb2bfda34ac0116c71954f9c745af929af9c6f4dcd45c5ec193",
+      "worktree_lf_normalized_sha256": "d74a758a54781cb2bfda34ac0116c71954f9c745af929af9c6f4dcd45c5ec193",
+      "head_blob_sha256": "4adb74f788bd116569fb2d693cb2f08f337c1872310ce3a184683873b8d153c1",
+      "lf_normalized_matches_head_blob": false
+    }
+  ]
+}

@@ -1,0 +1,153 @@
+{
+  "schema_version": 1,
+  "kind": "fintrace_annual_discovery_software_checks",
+  "date": "2026-10-05",
+  "scope": "本地软件验收与决赛文档装配摘要；不代表全文发现功能或决赛整体完成",
+  "software_baseline": {
+    "head": "07cb4e97e7b43327aa35ed7d6db260ec28fb1c59",
+    "worktree_dirty": true,
+    "backend_commit": "eacd4301c5d8f76c2ba144530fa9ed98b87c9a52",
+    "frontend_commit": "07cb4e97e7b43327aa35ed7d6db260ec28fb1c59"
+  },
+  "backend": {
+    "command": "python -m pytest tests -q",
+    "final": "535 passed, 3 skipped, 135.91s",
+    "final_log": "artifacts/evaluations/annual-discovery-integration-20261004/pytest-full-backend-final.log",
+    "first_run": "1 failed, 530 passed, 3 skipped, 138.64s",
+    "first_run_log": "artifacts/evaluations/annual-discovery-integration-20261004/pytest-full-backend.log",
+    "first_failure_disposition": "保留首轮日志；按正确 job mock run root 和 discovery response 修复，没有降低 completed 断言。",
+    "synthetic_e2e": {
+      "test": "tests/integration/test_annual_discovery_integration.py::test_synthetic_pdf_cli_mock_get_preview_and_three_exports",
+      "cases": [
+        {
+          "topic": "related_party",
+          "title": "关联采购安排披露"
+        },
+        {
+          "topic": "customer_concentration",
+          "title": "客户集中与回款安排"
+        }
+      ],
+      "both_confirmed_metrics_empty": true,
+      "old_fixed_candidate_investigation": "abstained; no items",
+      "flow": "annual CLI → memory-mocked audited connector → archived report GET and discovery evidence index → source-bound PDF page preview → JSON/Markdown/HTML export",
+      "exports_omit_discovery_raw_text_and_quote": true,
+      "provider_or_real_company_material_used": false
+    }
+  },
+  "frontend": {
+    "typecheck": {
+      "command": "npm run typecheck",
+      "result": "exit 0",
+      "log": "artifacts/evaluations/annual-discovery-frontend-20261005/typecheck-legacy-compat.log"
+    },
+    "build": {
+      "command": "npm run build",
+      "result": "exit 0",
+      "log": "artifacts/evaluations/annual-discovery-frontend-20261005/build-legacy-compat.log"
+    },
+    "browser_runs": [
+      {
+        "record": "artifacts/evaluations/annual-discovery-frontend-20261005/browser-qa.json",
+        "scenarios": 17,
+        "browser_requests": 510,
+        "api_requests": 102,
+        "external_requests": 0,
+        "post_requests": 0,
+        "console_errors": 0,
+        "page_errors": 0,
+        "status": "passed"
+      },
+      {
+        "record": "artifacts/evaluations/annual-discovery-frontend-20261005/legacy-terminal-job-qa.json",
+        "scenarios": 1,
+        "browser_requests": 31,
+        "api_requests": 7,
+        "external_requests": 0,
+        "post_requests": 0,
+        "console_errors": 0,
+        "page_errors": 0,
+        "status": "passed"
+      }
+    ],
+    "mock_limit": "浏览器 preview 是 1×1 PNG、下载体为极简 mock；只验证交互/协议。后端 synthetic E2E 验证实际导出白名单。"
+  },
+  "pdf_and_svg": {
+    "pdf": {
+      "path": "submission/final/FINTRACE-决赛技术报告.pdf",
+      "sha256": "0971e763370e55cf4253a5e10c6f0b18130aed66affbf28398376090a3dcd302",
+      "pages": 9,
+      "render_dpi": 110,
+      "render_manifest": "artifacts/evaluations/annual-discovery-final-20261005/pdf-render-manifest.json",
+      "render_manifest_sha256": "418ffe08db74dec4f6bdd7ca3088f2ba653b8052124510eb371b66f75330fc4f",
+      "previous_pdf_sha256": "4e0d8ba8459e3ae3ca7b6852a76e75495d819f5a12b242770f43d51fd7e7318b",
+      "all_nine_page_pngs_byte_identical_to_previous_reviewed_render": true,
+      "parent_review": "主控核对最终 PDF SHA、9页和每页渲染 SHA 后接受。"
+    },
+    "architecture_svg": {
+      "sha256": "10a6f4a9a505cee22c6cdf9ac5260e2bb5ed538ac84f4d68750733be5253a775",
+      "browser_screenshot": "artifacts/tmp/annual-discovery-final-20261005/architecture-svg-browser-1320x650.png",
+      "browser_screenshot_sha256": "cee1dfd0a31b61fd90b30d84a7f2950b9a356e3700987efe6bac5cf186e3314f",
+      "browser_log": "artifacts/evaluations/annual-discovery-final-20261005/architecture-svg-browser-final.log",
+      "viewport": [
+        1320,
+        650
+      ],
+      "console_or_page_errors": 0,
+      "parent_review": "主控接受最终评审两行与小型合流箭头布局。"
+    }
+  },
+  "mock_screenshots": [
+    {
+      "path": "submission/final/evidence/annual-discovery-mock-desktop-1366x768.png",
+      "sha256": "95338f6a8f40e215489edbf105f860014bad3f7b4f06c1e0072b6d23d4697b91",
+      "dimensions": [
+        1366,
+        768
+      ],
+      "byte_copied_from_reviewed_mock": true
+    },
+    {
+      "path": "submission/final/evidence/annual-discovery-mock-mobile-390x844.png",
+      "sha256": "84d1531f077fd29a3b049e57e4493d01581ba6bd63736636a33023973bbefcf7",
+      "dimensions": [
+        390,
+        844
+      ],
+      "byte_copied_from_reviewed_mock": true
+    }
+  ],
+  "code_fingerprint": {
+    "path": "submission/final/evidence/annual-discovery-code-fingerprint.json",
+    "sha256": "296c42924602f5f17f28f92f68e926f6cbd60689ae09590da36b4f135a6a9dbc",
+    "files": 33,
+    "records": "exact worktree bytes, LF-normalized worktree bytes, and current HEAD Git blob bytes"
+  },
+  "network_boundary": {
+    "synthetic_e2e": "explicit in-memory model connector mock; no provider call or real credential",
+    "frontend": "both records show zero external requests; this applies to those recorded browser runs",
+    "existing_job_e2e": "uses loopback HTTP mock; direct-test network sentinels must not be generalized to the full backend suite",
+    "early_invalid_dummy": "at least one attempt; exact count unknown"
+  },
+  "protected_parent_read_only_sha256": {
+    "maotai_2025_pdf": "474905deeaf0f875fc0a1b097a626c0c7852c427faadc5d7fc7816cbf45ea288",
+    "run_manifest": "93a254d13848a0af50b7d0dab28f68eb7d843f22ec8a42763630ef0fcd5d58e9",
+    "report": "8a3683ce28aee1126429fa801602599db64ac02212f3cb19f7106670f32076f6",
+    "job": "d1579ded388596f6fd1ab04dfafd6a5e9c433a216b1628e5ece05680e83aa1d5",
+    "synthetic_pdf": "f193e7a497fe483d3ab70b7bde2880f715ff1127b1d8b14cc3f4fda678ba0bf7"
+  },
+  "remaining_unverified": [
+    "真实 provider 长任务耗时/成本与发现质量",
+    "跨公司语义泛化和人工复核",
+    "OCR 与图像文字（当前不支持）",
+    "另一台干净电脑、现场网络/API",
+    "C-01/C-02 真人复核与非金融用户理解测试"
+  ],
+  "document_checks": {
+    "markdown_local_file_links": 189,
+    "missing_local_file_links": 0,
+    "record": "artifacts/evaluations/annual-discovery-final-20261005/markdown-link-check.json",
+    "git_diff_check_head": "exit 0 for tracked modified files in the authorized 19-file set; new JSON evidence parsed separately and copied PNG bytes/dimensions/SHA verified"
+  },
+  "source_package_evidence": "本摘要不声明源码 ZIP/package 的构建或校验状态；后续状态由包外 manifest、SHA sidecar 与独立验收记录绑定。"
+}
