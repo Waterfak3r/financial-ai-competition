@@ -5,7 +5,12 @@ import {
   NARRATIVE_EVIDENCE_INTERPRETATION_CODE,
   NARRATIVE_EVIDENCE_INTERPRETATION_LABEL,
 } from "../types/narrativeEvidence";
-import type { NarrativeEvidence, NarrativeEvidenceResponse } from "../types/narrativeEvidence";
+import type {
+  NarrativeEvidence,
+  NarrativeEvidenceResponse,
+  NarrativeReadingContext,
+  NarrativeReadingSourceBlock,
+} from "../types/narrativeEvidence";
 
 const ANNUAL_ANALYSIS_PATH = "/api/v1/annual-analyses";
 const RUN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
@@ -141,6 +146,9 @@ function parseNarrativeEvidence(
     sourceSha256.toLowerCase() !== expectedSourceSha256.toLowerCase() ||
     page < 1 || rawText.trim() === ""
   ) throw invalidResponse(`${path} 的来源绑定或正文格式无效。`);
+  const readingContext = record.reading_context === undefined
+    ? undefined
+    : parseReadingContext(record.reading_context, `${path}.reading_context`, page, sourceSha256, rawText, record.bbox);
   return {
     evidence_id: evidenceId,
     source_document_id: documentId,
@@ -153,7 +161,64 @@ function parseNarrativeEvidence(
     selection_reason: requireString(record.selection_reason, `${path}.selection_reason`),
     cited_by_signal_ids: readStringArray(record.cited_by_signal_ids, `${path}.cited_by_signal_ids`),
     preview_url: requireString(record.preview_url, `${path}.preview_url`),
+    ...(readingContext === undefined ? {} : { reading_context: readingContext }),
   };
+}
+
+function parseReadingContext(
+  value: unknown,
+  path: string,
+  expectedPage: number,
+  expectedSourceSha256: string,
+  citationText: string,
+  citationBoxValue: unknown,
+): NarrativeReadingContext {
+  const record = requireRecord(value, path);
+  if (
+    record.purpose !== "display_only" ||
+    requireInteger(record.pdf_page, `${path}.pdf_page`) !== expectedPage ||
+    requireString(record.source_pdf_sha256, `${path}.source_pdf_sha256`).toLowerCase() !== expectedSourceSha256.toLowerCase()
+  ) throw invalidResponse(`${path} 的来源或展示用途无效。`);
+  const text = requireString(record.text, `${path}.text`);
+  const bbox = readBox(record.bbox, `${path}.bbox`);
+  const citationBox = readBox(citationBoxValue, `${path}.citation bbox`);
+  const sourceBlocks = requireArray(record.source_blocks, `${path}.source_blocks`).map((block, index) =>
+    parseReadingSourceBlock(block, `${path}.source_blocks[${index}]`));
+  const citationBlockIndex = requireInteger(record.citation_block_index, `${path}.citation_block_index`);
+  if (
+    text.trim() === "" || text.length > 1800 || citationBlockIndex < 0 ||
+    sourceBlocks.length < 1 || sourceBlocks.length > 5 ||
+    sourceBlocks.reduce((total, block) => total + block.raw_text.length, 0) > 1800 ||
+    !boxContains(bbox, citationBox, 0.1) || sourceBlocks.some((block) => !boxContains(bbox, block.bbox))
+  ) throw invalidResponse(`${path} 的文本范围或坐标覆盖无效。`);
+  const citationBlock = sourceBlocks.find((block) => block.block_index === citationBlockIndex);
+  if (
+    citationBlock === undefined || citationBlock.raw_text.trim() !== citationText.trim() ||
+    !boxesMatch(citationBlock.bbox, citationBox, 0.1)
+  ) throw invalidResponse(`${path} 未保留与原始引用相同的 PDF 文本块定位。`);
+  return {
+    purpose: "display_only",
+    source_pdf_sha256: expectedSourceSha256.toLowerCase(),
+    pdf_page: expectedPage,
+    text,
+    bbox,
+    expanded: requireBoolean(record.expanded, `${path}.expanded`),
+    limited: requireBoolean(record.limited, `${path}.limited`),
+    limit_reason: readNullableString(record.limit_reason, `${path}.limit_reason`),
+    boundary_reason: readNullableString(record.boundary_reason, `${path}.boundary_reason`),
+    citation_block_index: citationBlockIndex,
+    source_blocks: sourceBlocks,
+  };
+}
+
+function parseReadingSourceBlock(value: unknown, path: string): NarrativeReadingSourceBlock {
+  const record = requireRecord(value, path);
+  const blockIndex = requireInteger(record.block_index, `${path}.block_index`);
+  const rawText = requireString(record.raw_text, `${path}.raw_text`);
+  if (blockIndex < 0 || rawText.trim() === "" || rawText.length > 1200) {
+    throw invalidResponse(`${path} 的 PDF 文本块记录无效。`);
+  }
+  return { block_index: blockIndex, bbox: readBox(record.bbox, `${path}.bbox`), raw_text: rawText };
 }
 
 function parseRegion(header: string | null, expected: PdfBox, status: number) {
@@ -168,8 +233,13 @@ function parseRegion(header: string | null, expected: PdfBox, status: number) {
   }
 }
 
-function boxesMatch(left: PdfBox, right: PdfBox): boolean {
-  return (["x0", "y0", "x1", "y1"] as const).every((key) => Math.abs(left[key] - right[key]) <= 0.01);
+function boxesMatch(left: PdfBox, right: PdfBox, tolerance = 0.01): boolean {
+  return (["x0", "y0", "x1", "y1"] as const).every((key) => Math.abs(left[key] - right[key]) <= tolerance);
+}
+
+function boxContains(outer: PdfBox, inner: PdfBox, tolerance = 0.02): boolean {
+  return inner.x0 >= outer.x0 - tolerance && inner.y0 >= outer.y0 - tolerance &&
+    inner.x1 <= outer.x1 + tolerance && inner.y1 <= outer.y1 + tolerance;
 }
 
 function readBox(value: unknown, path: string): PdfBox {
@@ -231,6 +301,16 @@ function readStringArray(value: unknown, path: string): string[] {
 function requireInteger(value: unknown, path: string): number {
   if (typeof value !== "number" || !Number.isInteger(value)) throw invalidResponse(`${path}格式无效。`);
   return value;
+}
+
+function requireBoolean(value: unknown, path: string): boolean {
+  if (typeof value !== "boolean") throw invalidResponse(`${path}格式无效。`);
+  return value;
+}
+
+function readNullableString(value: unknown, path: string): string | null {
+  if (value === null) return null;
+  return requireString(value, path);
 }
 
 function requireFiniteNumber(value: unknown, path: string): number {

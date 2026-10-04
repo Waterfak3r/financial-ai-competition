@@ -1398,10 +1398,10 @@ function NarrativeEvidenceSection({ state, previewBusyId, onPreview }: {
       <div className="annual-section-heading">
         <div>
           <p className="eyebrow">年报原文线索</p>
-          <h3 id="annual-narrative-title">解释文本与原文位置</h3>
+          <h3 id="annual-narrative-title">原文内容与出处</h3>
         </div>
       </div>
-      <p className="annual-narrative-disclaimer">原文片段定位/模型观点引用，非独立因果核验。片段出处可核对，但不能单独证明经营变化原因。</p>
+      <p className="annual-narrative-disclaimer">原文可回到年报核对；引用本身不证明经营变化原因。</p>
       {state === null || (value === null && state.error === null) ? <p className="status-line" role="status">正在读取原文片段定位…</p> : null}
       {state?.error !== null && state?.error !== undefined ? <p className="alert" role="alert">原文片段定位暂不可用：{state.error}</p> : null}
       {value !== null && value.items.length === 0 ? <p className="empty">这份报告没有经过来源校验的叙述片段定位记录。</p> : null}
@@ -1413,8 +1413,38 @@ function NarrativeEvidenceSection({ state, previewBusyId, onPreview }: {
                 <strong>{narrativeSectionLabel(item.section_label)}</strong>
                 <span>PDF 第 {item.pdf_page} 页</span>
               </div>
-              <blockquote>{item.raw_text}</blockquote>
-              <p><strong>定位说明：</strong>{item.selection_reason.trim() || "报告未记录定位说明。"}</p>
+              <blockquote className="annual-narrative-reading-text">
+                {item.reading_context?.text ?? item.raw_text}
+              </blockquote>
+              <p className="annual-narrative-context-note">{narrativeContextNote(item)}</p>
+              <p className="annual-narrative-why"><strong>为什么显示这段：</strong>{narrativeWhyShown(item)}</p>
+              <details className="annual-narrative-raw-details">
+                <summary>原始引用与定位详情</summary>
+                <blockquote>{item.raw_text}</blockquote>
+                <dl>
+                  <dt>原始定位原因</dt><dd>{item.selection_reason.trim() || "报告未记录"}</dd>
+                  <dt>关联线索</dt><dd>{item.cited_by_signal_ids.length ? item.cited_by_signal_ids.map(signalTitle).join("、") : "报告未记录"}</dd>
+                  <dt>原始引用区域</dt><dd><code>{JSON.stringify(item.bbox)}</code></dd>
+                  {item.reading_context !== undefined ? (
+                    <>
+                      <dt>阅读范围状态</dt><dd>{narrativeContextStatus(item)}</dd>
+                      <dt>上下文覆盖区域</dt><dd><code>{JSON.stringify(item.reading_context.bbox)}</code></dd>
+                      <dt>来源文本块编号</dt><dd>{item.reading_context.source_blocks.map((block) => block.block_index).join("、")}</dd>
+                    </>
+                  ) : null}
+                </dl>
+                {item.reading_context !== undefined ? (
+                  <details className="annual-narrative-source-blocks">
+                    <summary>展开 PDF 原始文本块与坐标</summary>
+                    {item.reading_context.source_blocks.map((block) => (
+                      <div className="annual-narrative-source-block" key={block.block_index}>
+                        <p>文本块 {block.block_index} · <code>{JSON.stringify(block.bbox)}</code></p>
+                        <pre>{block.raw_text}</pre>
+                      </div>
+                    ))}
+                  </details>
+                ) : null}
+              </details>
               <button type="button" className="secondary" onClick={() => onPreview(item.evidence_id)} disabled={previewBusyId === item.evidence_id}>
                 {previewBusyId === item.evidence_id ? "正在读取页图…" : "查看原文页图"}
               </button>
@@ -1483,7 +1513,7 @@ function EvidenceDrawer({
         </header>
 
         {isNarrative ? (
-          <p className="annual-evidence-interpretation">{NARRATIVE_EVIDENCE_INTERPRETATION_LABEL}。核对页图只能确认原文定位，不确认模型观点与事实之间的因果关系。</p>
+          <p className="annual-evidence-interpretation">{NARRATIVE_EVIDENCE_INTERPRETATION_LABEL}。</p>
         ) : (
           <p className="annual-evidence-interpretation">页图只对应已独立核验的财务事实。来源页本身不构成异常或舞弊结论。</p>
         )}
@@ -1516,6 +1546,9 @@ function EvidenceDrawer({
           <h3 id="annual-evidence-source-title">来源与定位详情</h3>
           {isNarrative && narrative !== null ? (
             <>
+              <p className="annual-evidence-pending">高亮位置对应报告引用的文字；可切换到整页查看前后文。</p>
+              <details className="annual-narrative-raw-details">
+                <summary>原始引用与定位详情</summary>
               <blockquote className="annual-evidence-raw-text">{narrative.raw_text}</blockquote>
               <dl className="annual-evidence-details">
                 <dt>章节</dt><dd>{narrativeSectionLabel(narrative.section_label)}</dd>
@@ -1532,7 +1565,10 @@ function EvidenceDrawer({
                   <dt>原始章节标识</dt><dd><code>{narrative.section_label || "未记录"}</code></dd>
                   <dt>引用线索编号</dt><dd><code>{narrative.cited_by_signal_ids.join("、") || "未记录"}</code></dd>
                   <dt>PDF 区域</dt><dd><code>{JSON.stringify(narrative.bbox)}</code></dd>
+                  <dt>阅读上下文区域</dt><dd><code>{JSON.stringify(narrative.reading_context?.bbox ?? narrative.bbox)}</code></dd>
+                  <dt>阅读上下文块编号</dt><dd><code>{narrative.reading_context?.source_blocks.map((block) => block.block_index).join("、") ?? "旧接口仅提供原始引用"}</code></dd>
                 </dl>
+              </details>
               </details>
             </>
           ) : isNarrative ? <p className="annual-evidence-pending">原文片段不在已核对的定位清单中，详情待定位。</p> : (
@@ -4338,6 +4374,43 @@ function narrativeSectionLabel(value: string): string {
     risk_factors: "风险因素",
   };
   return labels[value] ?? "年报原文片段";
+}
+
+function narrativeContextNote(item: NarrativeEvidence): string {
+  const context = item.reading_context;
+  if (context === undefined) return "当前后端只提供引用文字；可以打开原文页图查看周边内容。";
+  if (context.limited && context.expanded) return "已补入同页部分前后文；其余内容可打开页图查看，原始引用见下方详情。";
+  if (context.limited) return "没有补入前后文；可以打开原文页图查看周边内容。";
+  if (context.expanded) return "已补入同页前后文，方便连续阅读。最初引用的文字可在下方详情查看。";
+  return "当前只显示报告引用的文字；可以打开原文页图查看周边内容。";
+}
+
+function narrativeContextStatus(item: NarrativeEvidence): string {
+  const context = item.reading_context;
+  if (context === undefined) return "后端未提供扩展上下文，页面回退显示原始引用";
+  if (context.expanded && context.limited) return `已扩展但受限：${context.limit_reason ?? "相邻内容无法安全确认"}`;
+  if (context.expanded) return "同页相邻正文已扩展";
+  if (context.limited) return `未扩展：${context.limit_reason ?? "相邻内容无法安全确认"}`;
+  return `仅原始引用：${context.boundary_reason ?? "未发现安全相邻正文"}`;
+}
+
+function narrativeWhyShown(item: NarrativeEvidence): string {
+  const selectionReason = item.selection_reason;
+  const text = item.raw_text;
+  const termGroups: Array<[string, string[]]> = [
+    ["利润或营业收入词项", ["营业收入", "销售收入", "收入确认", "收入合同", "合同收入", "确认为收入", "合同负债", "合同負債", "净利润", "净利率", "归属于上市公司股东的净利润"]],
+    ["经营现金流词项", ["经营活动产生的现金流量净额", "经营活动现金流", "现金流量表", "现金流量", "经营现金流"]],
+    ["披露说明词项", ["原因说明", "主要是", "主要由于", "由于", "因收到", "因本期", "变动原因", "变动说明", "所致", "增加", "减少", "上升", "下降", "后确认", "所确认"]],
+  ];
+  const matchedTerms = termGroups
+    .filter(([category]) => selectionReason.includes(category))
+    .flatMap(([, terms]) => terms.filter((term) => text.includes(term)))
+    .filter((term, index, terms) => terms.indexOf(term) === index)
+    .slice(0, 3);
+  if (matchedTerms.length === 0) {
+    return "这段被报告中的线索引用，系统将它列为相关披露供你核对；指标变化原因仍待查证。";
+  }
+  return `原文提到${matchedTerms.map((term) => `“${term}”`).join("、")}，系统据此将它列为相关披露供你核对；指标变化原因仍待查证。`;
 }
 
 function readStoredJobId(): string | null {

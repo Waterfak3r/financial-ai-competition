@@ -321,6 +321,53 @@ def test_narrative_source_mismatch_and_invalid_section_label_are_safe_errors(tmp
     assert malformed.json()["detail"]["code"] == "report_invalid"
 
 
+def test_reading_context_is_rebuilt_from_pdf_and_ignores_archived_context(tmp_path: Path) -> None:
+    run_id = "synthetic-narrative-context-source-bound-001"
+    _make_archive(tmp_path, run_id, include_narrative=True)
+    report_path = tmp_path / "artifacts" / "reports" / run_id / "report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["model_investigation"]["narrative_evidences"][0]["reading_context"] = {
+        "text": "forged text from report JSON",
+        "bbox": {"x0": 0, "y0": 0, "x1": 9999, "y1": 9999},
+    }
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    client = TestClient(create_app(tmp_path))
+
+    response = client.get(f"/v1/annual-analyses/{run_id}/narrative-evidences")
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["raw_text"] == "Contract income follows performance."
+    assert item["reading_context"]["text"] == "Contract income follows performance."
+    assert item["reading_context"]["bbox"] == item["bbox"]
+    assert item["reading_context"]["source_blocks"][0]["raw_text"].strip() == item["raw_text"]
+
+    exported = client.get(f"/v1/annual-analyses/{run_id}/export?format=json")
+    assert exported.status_code == 200
+    assert "reading_context" not in exported.text
+    assert "forged text from report JSON" not in exported.text
+
+
+def test_reading_context_accepts_existing_point_tolerance_but_rejects_real_bbox_mismatch(tmp_path: Path) -> None:
+    run_id = "synthetic-narrative-context-bbox-tolerance-001"
+    _make_archive(tmp_path, run_id, include_narrative=True)
+    report_path = tmp_path / "artifacts" / "reports" / run_id / "report.json"
+    original = json.loads(report_path.read_text(encoding="utf-8"))
+    bbox = original["model_investigation"]["narrative_evidences"][0]["bbox"]
+    bbox["x0"] += 0.05
+    report_path.write_text(json.dumps(original), encoding="utf-8")
+    client = TestClient(create_app(tmp_path))
+
+    compatible = client.get(f"/v1/annual-analyses/{run_id}/narrative-evidences")
+    assert compatible.status_code == 200
+
+    bbox["x0"] += 0.06
+    report_path.write_text(json.dumps(original), encoding="utf-8")
+    mismatch = client.get(f"/v1/annual-analyses/{run_id}/narrative-evidences")
+    assert mismatch.status_code == 409
+    assert mismatch.json()["detail"]["code"] == "narrative_evidence_source_mismatch"
+
+
 def test_focus_preview_handles_rotated_pdf_coordinates(tmp_path: Path) -> None:
     run_id = "synthetic-rotated-focus-001"
     _make_archive(tmp_path, run_id, rotate_value_page=True)

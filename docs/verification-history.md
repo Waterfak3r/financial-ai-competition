@@ -208,3 +208,15 @@ C-02 独立季度 CLI 已以 `af13785d9ba9d635ea79e670c42beb54415d9bbd` 提交�
 为避免 `core.autocrlf=true` 规范化实际带哈希的 JSON 副本，新增 `submission/final/.gitattributes` 的 `evidence/*.json -text` 属性。季度原创 analysis JSON 的工作文件 SHA256 仍为 `25fc2fe1e5941ea44a3bbc475742b736e8c2f0653d3f3f549d6ea396325e8190`；主控在暂存与最终包生成时仍应分别按 Git blob 原字节和包内字节复核该哈希，不得改写历史运行归档。
 
 最终源码 ZIP 从正式文档交付 commit/tree 构建；确切 package ID、source commit/tree、ZIP SHA256 和包校验结果以包外 manifest、`.sha256` sidecar 与独立验收记录为准。另一台 Windows 电脑干净安装、组委会网络/API 规则、C-01/C-02 真人复核以及非金融用户 30 秒理解试验仍 pending。初赛计划书、MP4 和平台上传仍由各自材料负责人负责。
+
+## 2026-10-04 冻结后年报原文阅读修正
+
+本次只调整叙述片段的页面阅读和定位说明，不重新分析年报、不调用模型，也不改变财务核验、模型输入、提示词、检索选择或排序、原归档及导出白名单。使用既有 run `annual-analysis-8036d75c-6a13-432a-b602-5f869f9396ce` 的片段 `nctx-5a97b1353443-p9-aaf639bcc7e460cd4dd4`。真实 PDF 第 9 页的阅读上下文由已校验来源 PDF 的文本块 27–30 组成，恢复自然段首、段尾及跨行断词；块 31 的下一段不并入。API 中 `raw_text` 和原 `bbox` 仍逐字、逐坐标匹配块 30。页面可展开查看原始引用、来源文本块与坐标。
+
+独立端口 `8001` 的真实 HTTP 读取返回 `purpose=display_only`、`expanded=true`、`limited=false`；同一片段的聚焦页图和整页图均为 HTTP 200、PDF 第 9 页。PDF 原件与归档副本 SHA256 均为 `5a97b13534438f5e85249752ef492fbd9e23af73e67845e47bad1ab7d92e20ee`；本次前后核对的运行 `manifest.json` 与报告 `report.json` 哈希也记在本轮[来源完整性记录](../artifacts/evaluations/narrative-readability-20261004-8036d75c/source-integrity.json)，未改写 PDF、归档或历史最终 ZIP/PDF。
+
+本轮聚焦后端回归命令 `D:\Programming\Python\python.exe -m pytest -c backend/pyproject.toml tests/unit/test_narrative_reading_context.py tests/unit/test_annual_report_read_api.py tests/integration/test_annual_report_read_real.py tests/unit/test_annual_report_export.py -q` 为 **60 passed**，覆盖段落方向/边界、跨列与表格排除、原始字符限额、伪造归档 context 忽略、真实来源匹配、旧引用 0.05 point 舍入兼容及 context 不进入年度导出白名单。前端 `npm run typecheck` 与 `npm run build` 均 exit 0。原始日志和命令见[本轮证据索引](../artifacts/evaluations/narrative-readability-20261004-8036d75c/evidence.json)。
+
+只读浏览器检查使用 Microsoft Edge 154.0.4258.53，通过 Playwright 和本机项目页面 `5174`，数据由本机 API `8001` 提供。1366×900 与 390×844 两种视口均准确显示完整段落与易懂的“为什么显示这段”；键盘 Enter 可展开原始引用和逐块来源详情；聚焦/整页 PDF 图可切换，Escape 将焦点返回来源入口；打开详情及页图时文档宽度均无横向溢出。旧 API 缺少 `reading_context`、引用 bbox 增加 0.05 point 两项是对真实本机 HTTP 响应副本的前端拦截变换，明确属于合成兼容检查，不是服务端归档写入。浏览器仅发本机 GET，无 POST、非本机请求或页面脚本错误。截图保存在任务 `artifacts/tmp/narrative-readability-20261004-8036d75c/`；真实年报页图只保留在该本机临时目录，不进入 Git。
+
+冻结后的修改尚未加载到原默认 API 服务：操作前确认 8000 属于本项目 Uvicorn（PID 18168）、5173 属于项目 Vite（PID 26324），16 个 `job.json` 中无 `queued`/`running` 且无解析错误。尝试为 8000 执行精确重载时，工具在启动 PowerShell 前以 `blocked by policy` 拒绝了命令；命令与工具返回说明留在任务 tmp。没有重试停止进程、没有改变默认端口服务；本段的通过证据仅适用于 8001/5174。默认 API 尚未应用本修正，原 5173 Vite 未停止。

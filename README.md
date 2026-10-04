@@ -20,6 +20,8 @@
 
 当前主产品流程为年度 Web/API；季度能力是独立 CLI 切片，尚无 Web/API 接入。年度报告导出专项与浏览器验收已接受。决赛软件冻结于 `a0b5b3bc26b3004afcd359df48544adb9cba4a13`；完整后端套件、前端 typecheck/build 已通过，平台相关跳过项和逐项结果见[验收记录](docs/verification-history.md)。项目无用户账户、模型训练或云部署。前端暂无独立自动化测试套件；typecheck/build 和指定浏览器演练不能写成持续自动化回归已建立。CI 尚未建立。
 
+2026-10-04 在冻结快照之后，开发工作区追加了年报叙述片段的只读阅读上下文和更清楚的定位说明。该补充从已校验来源 PDF 重建同页相邻正文，仅用于页面阅读；归档原引用、核验逻辑、模型输入和导出字段不变。它是独立于 2026-10-03 已交付快照的后续修改，不代表重建或替换既有 ZIP/PDF；本次测试、浏览器视口和原文来源证据单独记在[验收记录](docs/verification-history.md)。
+
 ## 决赛交付入口
 
 - 可编辑技术报告：[Markdown](submission/final/FINTRACE-决赛技术报告.md)；排版版：[PDF](submission/final/FINTRACE-决赛技术报告.pdf)。

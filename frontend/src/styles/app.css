@@ -4519,12 +4519,109 @@ summary:focus-visible {
   line-height: 1.58;
 }
 
+.annual-narrative-item .annual-narrative-reading-text {
+  width: 100%;
+  max-width: 84ch;
+  overflow-wrap: break-word;
+  word-break: normal;
+  line-break: strict;
+  white-space: normal;
+}
+
 .annual-narrative-item > p {
   max-width: 84ch;
   margin: 0;
   color: #56687c;
   font-size: 0.96rem;
   line-height: 1.5;
+}
+
+.annual-narrative-item > .annual-narrative-context-note {
+  color: #667386;
+  font-size: 0.9rem;
+}
+
+.annual-narrative-item > .annual-narrative-why {
+  color: #31465d;
+}
+
+.annual-narrative-raw-details {
+  width: 100%;
+  max-width: 84ch;
+  min-width: 0;
+  color: #42566d;
+  font-size: 0.93rem;
+}
+
+.annual-narrative-raw-details > summary,
+.annual-narrative-source-blocks > summary {
+  min-height: 2rem;
+  padding: 0.32rem 0;
+  color: #25527b;
+  cursor: pointer;
+  font-weight: 650;
+  text-underline-offset: 0.14em;
+}
+
+.annual-narrative-raw-details > summary:focus-visible,
+.annual-narrative-source-blocks > summary:focus-visible {
+  outline: 2px solid #2868a0;
+  outline-offset: 2px;
+}
+
+.annual-narrative-raw-details > blockquote {
+  margin: 0.35rem 0;
+  padding: 0.4rem 0.65rem;
+  border-left: 2px solid #aab9c9;
+  background: #f7f9fb;
+  overflow-wrap: break-word;
+  word-break: normal;
+  line-break: strict;
+}
+
+.annual-narrative-raw-details > dl {
+  display: grid;
+  grid-template-columns: minmax(8.5rem, auto) minmax(0, 1fr);
+  gap: 0.28rem 0.7rem;
+  margin: 0.45rem 0;
+}
+
+.annual-narrative-raw-details > dl dt {
+  color: #607287;
+}
+
+.annual-narrative-raw-details > dl dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.annual-narrative-source-blocks {
+  min-width: 0;
+  margin-top: 0.45rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid #e3e9ef;
+}
+
+.annual-narrative-source-block {
+  min-width: 0;
+  margin: 0.45rem 0;
+  padding: 0.5rem 0.6rem;
+  background: #f7f9fb;
+}
+
+.annual-narrative-source-block > p {
+  margin: 0 0 0.25rem;
+  color: #607287;
+  font-size: 0.83rem;
+}
+
+.annual-narrative-source-block > pre {
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  font: inherit;
 }
 
 .annual-narrative-item > button {
@@ -5109,6 +5206,15 @@ summary:focus-visible {
 
   .annual-narrative-evidence {
     padding: 0.75rem 0.72rem;
+  }
+
+  .annual-narrative-raw-details > dl {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.12rem;
+  }
+
+  .annual-narrative-raw-details > dl dd:not(:last-child) {
+    margin-bottom: 0.35rem;
   }
 
   .annual-narrative-item > button {

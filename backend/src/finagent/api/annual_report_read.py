@@ -14,6 +14,7 @@ from typing import Any, Mapping
 
 from finagent.core.sample_provenance import resolve_sample_provenance
 from finagent.core.safe_paths import PathBoundaryError, validate_run_id
+from finagent.api.narrative_reading_context import build_reading_context
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$", re.IGNORECASE)
 _MAX_MANIFEST_BYTES = 2 * 1024 * 1024
@@ -589,17 +590,28 @@ def _collect_narrative_evidences(
                 raise AnnualReportReadError(422, "narrative_evidence_region_invalid", "叙述证据坐标超出页面范围。")
             page = document[page_number - 1]
             source_block_matches = False
-            for block in page.get_text("blocks"):
+            citation_block_index: int | None = None
+            source_blocks = page.get_text("blocks", sort=True)
+            for block_index, block in enumerate(source_blocks):
                 if len(block) < 5 or str(block[4]).strip() != raw_text.strip():
                     continue
                 if all(abs(float(actual) - expected) <= 0.1 for actual, expected in zip(block[:4], coordinates)):
                     source_block_matches = True
+                    citation_block_index = block_index
                     break
             if not source_block_matches:
                 raise AnnualReportReadError(409, "narrative_evidence_source_mismatch", "叙述文本或坐标与归档 PDF 不一致。")
+            assert citation_block_index is not None
             total_chars += len(raw_text)
             if total_chars > _MAX_NARRATIVE_EVIDENCE_CHARS:
                 raise AnnualReportReadError(422, "report_invalid", "模型调查的叙述证据超过文本上限。")
+            reading_context = build_reading_context(
+                source_blocks,
+                citation_block_index,
+                pdf_page=page_number,
+                page_width=float(page.mediabox.width),
+                source_sha256=expected_sha256,
+            )
             normalized = {
                 "evidence_id": evidence_id,
                 "source_document_id": expected_document_id,
@@ -611,6 +623,9 @@ def _collect_narrative_evidences(
                 "raw_text": raw_text,
                 "selection_reason": selection_reason,
                 "cited_by_signal_ids": sorted(cited_by[evidence_id]),
+                # This is rebuilt from the hash-checked PDF on every read. Any
+                # similarly named field inside report.json is ignored.
+                "reading_context": reading_context,
             }
             existing = evidence_by_id.get(evidence_id)
             if existing is not None and existing != normalized:
