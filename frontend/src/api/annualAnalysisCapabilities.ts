@@ -4,6 +4,7 @@ export interface AnnualAnalysisCapabilities {
   model_investigation: {
     available: boolean;
     status: ModelInvestigationCapabilityStatus;
+    annual_discovery_supported?: boolean;
   };
 }
 
@@ -33,14 +34,22 @@ export async function loadAnnualAnalysisCapabilities(): Promise<AnnualAnalysisCa
   const rawCapability = outer === null ? null : asRecord(outer.model_investigation);
   const available = rawCapability?.available;
   const status = rawCapability?.status;
+  const annualDiscoverySupported = rawCapability?.annual_discovery_supported;
   if (
     typeof available !== "boolean" ||
     (status !== "ready" && status !== "not_configured" && status !== "dependency_unavailable") ||
-    available !== (status === "ready")
+    available !== (status === "ready") ||
+    (annualDiscoverySupported !== undefined && typeof annualDiscoverySupported !== "boolean")
   ) {
     throw new AnnualAnalysisCapabilitiesApiError("暂时无法确认 AI 服务状态。确定性分析仍可使用。");
   }
-  return { model_investigation: { available, status } };
+  return {
+    model_investigation: {
+      available,
+      status,
+      ...(annualDiscoverySupported === undefined ? {} : { annual_discovery_supported: annualDiscoverySupported }),
+    },
+  };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

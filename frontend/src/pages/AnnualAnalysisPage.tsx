@@ -4,6 +4,7 @@ import { loadAnnualAnalysisCapabilities } from "../api/annualAnalysisCapabilitie
 import { AnnualReportApiError, downloadAnnualAnalysisExport, loadAnnualAnalysis, loadVerificationEvidencePreview } from "../api/annualReports";
 import { loadAnnualAnalysisHistory } from "../api/annualAnalysisHistory";
 import { createAnnualAnalysisJob, loadAnnualAnalysisJob } from "../api/annualAnalysisJobs";
+import { loadDiscoveryEvidencePreview } from "../api/discoveryEvidences";
 import { loadNarrativeEvidences, loadNarrativeEvidencePreview } from "../api/narrativeEvidences";
 import { textPdfUploadIssues, uploadTextPdf } from "../api/prechecks";
 import type {
@@ -18,6 +19,7 @@ import type {
   VerificationEvidence,
   VerifiedClaim,
 } from "../types/annualReport";
+import type { AnnualDiscoveryEvidenceIndexItem, AnnualModelDiscovery } from "../types/discoveryEvidence";
 import type { AnnualAnalysisHistoryItem } from "../types/annualAnalysisHistory";
 import { NARRATIVE_EVIDENCE_INTERPRETATION_LABEL } from "../types/narrativeEvidence";
 import type { NarrativeEvidence, NarrativeEvidenceResponse } from "../types/narrativeEvidence";
@@ -57,7 +59,7 @@ interface UploadedFileContext {
 }
 
 interface Preview {
-  kind: "verified_financial_value" | "narrative_context";
+  kind: "verified_financial_value" | "narrative_context" | "annual_discovery";
   evidenceId: string;
   pageNumber: number;
   objectUrl: string;
@@ -68,7 +70,10 @@ interface Preview {
 type AnnualSourceChoice = "sample" | "upload";
 type UrlSelection = { kind: "run"; id: string } | { kind: "job"; id: string } | null;
 type NarrativeLoadState = { runId: string; value: NarrativeEvidenceResponse | null; error: string | null } | null;
-type PreviewTarget = { kind: "verified_financial_value"; evidenceId: string } | { kind: "narrative_context"; evidenceId: string };
+type PreviewTarget =
+  | { kind: "verified_financial_value"; evidenceId: string }
+  | { kind: "narrative_context"; evidenceId: string }
+  | { kind: "annual_discovery"; evidenceId: string; findingId: string };
 
 interface SourcePage {
   pageNumber: number;
@@ -97,6 +102,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [mode, setMode] = useState<AnnualAnalysisJobMode>("deterministic");
   const [modelCapability, setModelCapability] = useState<"ready" | "not_configured" | "dependency_unavailable" | null>(null);
+  const [modelDiscoverySupported, setModelDiscoverySupported] = useState<boolean | null>(null);
   const [modelCapabilityLoading, setModelCapabilityLoading] = useState(false);
   const [modelCapabilityError, setModelCapabilityError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<JobFormErrors>({});
@@ -178,8 +184,10 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
     try {
       const capabilities = await loadAnnualAnalysisCapabilities();
       setModelCapability(capabilities.model_investigation.status);
+      setModelDiscoverySupported(capabilities.model_investigation.annual_discovery_supported === true);
     } catch {
       setModelCapability(null);
+      setModelDiscoverySupported(null);
       setModelCapabilityError("暂时无法确认 AI 服务状态。确定性分析仍可使用。");
     } finally {
       setModelCapabilityLoading(false);
@@ -211,7 +219,9 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
       setResponse(loaded);
       setRunId(loaded.report.run_id);
       setResultOrigin(createdJobIds.current.has(completedJob.job_id) ? "new" : "history");
-      const missingLayers = missingRequestedReportLayers(completedJob.request.mode, loaded.report);
+      const requiresDiscoveryLayer =
+        createdJobIds.current.has(completedJob.job_id) || completedJob.discovery_progress !== undefined;
+      const missingLayers = missingRequestedReportLayers(completedJob.request.mode, loaded.report, requiresDiscoveryLayer);
       if (missingLayers.length > 0) {
         setJobError(`任务已完成，但报告缺少所选的${missingLayers.join("、")}；请核对归档后再重试。`);
       }
@@ -422,6 +432,10 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
     action: Exclude<JobAction, null>,
   ) {
     if (jobSubmitLock.current || jobRefreshLock.current) {
+      return;
+    }
+    if (modeUsesModel(mode) && modelDiscoverySupported !== true) {
+      setJobError("AI 全文分析不可用：当前后端尚未加载全文分析版本，请重启后端。标准分析和本地试行筛查仍可使用。");
       return;
     }
     if (modeUsesModel(mode) && modelCapability !== "ready") {
@@ -732,6 +746,19 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
     void loadEvidencePreview({ kind: "narrative_context", evidenceId }, true);
   }
 
+  function onDiscoveryPreview(evidenceId: string, findingId: string) {
+    if (response === null || requestLock.current) return;
+    evidenceReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const evidence = response.discovery_evidences?.items.find((item) => item.evidence_id === evidenceId);
+    if (evidence === undefined) {
+      setPreviewTarget({ kind: "annual_discovery", evidenceId, findingId });
+      setPreviewError("该待核查引用不在当前报告重新核对的原文索引中，未请求页图。");
+      return;
+    }
+    setPreviewTarget({ kind: "annual_discovery", evidenceId, findingId });
+    void loadEvidencePreview({ kind: "annual_discovery", evidenceId, findingId }, true);
+  }
+
   async function loadEvidencePreview(target: PreviewTarget, focus: boolean) {
     if (response === null) return;
     const requestId = previewRequest.current + 1;
@@ -747,11 +774,17 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
             if (evidence === undefined) throw new AnnualReportApiError("该证据不在独立核验证据索引中。");
             return await loadVerificationEvidencePreview(response.report.run_id, evidence, response.manifest.report_sha256, focus);
           })()
-        : await (async () => {
+        : target.kind === "narrative_context"
+          ? await (async () => {
             const evidence = narrativeState?.value?.items.find((item) => item.evidence_id === target.evidenceId);
             if (evidence === undefined) throw new AnnualReportApiError("该片段不在本次报告绑定的原文定位清单中。");
             return await loadNarrativeEvidencePreview(response.report.run_id, evidence, response.manifest.report_sha256, focus);
-          })();
+          })()
+          : await (async () => {
+              const evidence = response.discovery_evidences?.items.find((item) => item.evidence_id === target.evidenceId);
+              if (evidence === undefined) throw new AnnualReportApiError("该发现引用不在当前报告绑定的原文定位清单中。");
+              return await loadDiscoveryEvidencePreview(response.report.run_id, evidence, response.manifest.report_sha256, focus);
+            })();
       if (previewRequest.current !== requestId) return;
       setPreview({
         kind: target.kind,
@@ -906,6 +939,9 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
 
           <fieldset className="annual-job-mode">
             <legend>分析方式</legend>
+            <p className="annual-ai-consent-note">
+              AI 全文发现与评审会把所选 PDF 的全部可提取文字分批发送给已配置服务；年报越长，等待时间和服务费用可能越高。图像内容不做 OCR。默认使用本地标准分析。
+            </p>
             <div className="annual-job-mode-options">
               <label className={`annual-job-mode-option${mode === "deterministic" ? " selected" : ""}`}>
                 <input
@@ -927,39 +963,41 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
                 />
                 <span><strong>标准分析 + 四规则试行</strong><small>不调用模型；规则阈值未校准，分数不是风险概率。</small></span>
               </label>
-              <label className={`annual-job-mode-option annual-job-mode-ai${mode === "model_investigation" ? " selected" : ""}${modelCapability !== "ready" ? " is-unavailable" : ""}`}>
+              <label className={`annual-job-mode-option annual-job-mode-ai${mode === "model_investigation" ? " selected" : ""}${modelCapability !== "ready" || modelDiscoverySupported !== true ? " is-unavailable" : ""}`}>
                 <input
                   type="radio"
                   name="annual-analysis-mode"
                   value="model_investigation"
                   checked={mode === "model_investigation"}
-                  disabled={modelCapability !== "ready"}
+                  disabled={modelCapability !== "ready" || modelDiscoverySupported !== true}
                   onChange={() => setMode("model_investigation")}
                 />
-                <span><strong>AI 调查与最终评审</strong><small>实际调用云端模型，仅发送本次所需年报片段；服务 ready 后可选。</small></span>
+                <span><strong>AI 全文发现与评审</strong><small>扫描所选 PDF 全部可提取文字并分批调用配置服务；AI 观点未经独立语义核验。</small></span>
               </label>
-              <label className={`annual-job-mode-option annual-job-mode-ai${mode === "integrated_analysis" ? " selected" : ""}${modelCapability !== "ready" ? " is-unavailable" : ""}`}>
+              <label className={`annual-job-mode-option annual-job-mode-ai${mode === "integrated_analysis" ? " selected" : ""}${modelCapability !== "ready" || modelDiscoverySupported !== true ? " is-unavailable" : ""}`}>
                 <input
                   type="radio"
                   name="annual-analysis-mode"
                   value="integrated_analysis"
                   checked={mode === "integrated_analysis"}
-                  disabled={modelCapability !== "ready"}
+                  disabled={modelCapability !== "ready" || modelDiscoverySupported !== true}
                   onChange={() => setMode("integrated_analysis")}
                 />
-                <span><strong>四规则试行 + AI 调查与最终评审</strong><small>同一报告分别归档两层结果；AI 只读取标准核验报告并会调用已配置模型。</small></span>
+                <span><strong>四规则试行 + AI 全文发现与评审</strong><small>M3 与全文模型发现分别归档；模型发现不参与基础事实核验。</small></span>
               </label>
             </div>
             <p className={`annual-job-capability${modelCapability === "ready" ? " is-ready" : ""}`} role="status">
               {modelCapabilityLoading
                 ? "正在检查 AI 服务状态…"
-                : modelCapability === "ready"
-                  ? "模型已就绪。选择 AI 或集成模式后会实际调用已配置服务，并发送必要的年报片段。"
+                : modelDiscoverySupported === false
+                  ? "当前后端尚未加载全文分析版本，请重启后端；本地标准分析和四规则试行仍可使用。"
+                : modelCapability === "ready" && modelDiscoverySupported === true
+                  ? "全文分析版本已加载。选择 AI 模式后会把全部可提取文字分批发送给已配置服务。"
                   : modelCapability === "not_configured"
                     ? "当前不可用：后端尚未配置云端模型。标准分析和试行筛查仍可使用。"
                     : modelCapability === "dependency_unavailable"
                       ? "当前不可用：后端缺少 AI 分析所需依赖。标准分析和试行筛查仍可使用。"
-                      : modelCapabilityError ?? "正在确认 AI 服务状态；确认前不能启动 AI 分析。"}
+                    : modelCapabilityError ?? "正在确认 AI 服务与全文分析版本；确认前不能启动 AI 全文分析。"}
               {modelCapabilityError !== null ? (
                 <button type="button" className="text-button annual-capability-retry" onClick={() => void refreshModelCapability()} disabled={modelCapabilityLoading}>
                   {modelCapabilityLoading ? "检测中…" : "重新检测"}
@@ -1123,8 +1161,16 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
 
       {response !== null ? (
         <>
-          {job !== null && job.run_id === response.report.run_id && missingRequestedReportLayers(job.request.mode, response.report).length > 0 ? (
-            <p className="alert" role="alert">本次任务选择的{missingRequestedReportLayers(job.request.mode, response.report).join("、")}没有完整归档。当前报告仍可查看；请核对任务归档后再重试。</p>
+          {job !== null && job.run_id === response.report.run_id && missingRequestedReportLayers(
+            job.request.mode,
+            response.report,
+            createdJobIds.current.has(job.job_id) || job.discovery_progress !== undefined,
+          ).length > 0 ? (
+            <p className="alert" role="alert">本次任务选择的{missingRequestedReportLayers(
+              job.request.mode,
+              response.report,
+              createdJobIds.current.has(job.job_id) || job.discovery_progress !== undefined,
+            ).join("、")}没有完整归档。当前报告仍可查看；请核对任务归档后再重试。</p>
           ) : null}
           <AnnualReportView
             response={response}
@@ -1132,6 +1178,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
             onPreview={onPreview}
             narrativeState={narrativeState?.runId === response.report.run_id ? narrativeState : null}
             onNarrativePreview={onNarrativePreview}
+            onDiscoveryPreview={onDiscoveryPreview}
             resultOrigin={resultOrigin}
             selectedHistoryItem={selectedHistoryItem}
             activeMode={job?.run_id === response.report.run_id ? job.request.mode : null}
@@ -1150,6 +1197,9 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
             : null}
           narrative={previewTarget.kind === "narrative_context"
             ? narrativeState?.value?.items.find((item) => item.evidence_id === previewTarget.evidenceId) ?? null
+            : null}
+          discoveryEvidence={previewTarget.kind === "annual_discovery"
+            ? response.discovery_evidences?.items.find((item) => item.evidence_id === previewTarget.evidenceId) ?? null
             : null}
           preview={preview}
           busy={previewBusyId !== null}
@@ -1461,6 +1511,7 @@ function EvidenceDrawer({
   evidence,
   metric,
   narrative,
+  discoveryEvidence,
   report,
   preview,
   busy,
@@ -1476,6 +1527,7 @@ function EvidenceDrawer({
   evidence: VerificationEvidence | null;
   metric: ConfirmedMetric | null;
   narrative: NarrativeEvidence | null;
+  discoveryEvidence: AnnualDiscoveryEvidenceIndexItem | null;
   report: AnnualReport;
   preview: Preview | null;
   busy: boolean;
@@ -1488,8 +1540,9 @@ function EvidenceDrawer({
   onZoom: (zoom: number) => void;
 }) {
   const isNarrative = target.kind === "narrative_context";
-  const pageNumber = evidence?.pdf_page ?? narrative?.pdf_page ?? preview?.pageNumber ?? null;
-  const title = isNarrative ? "原文片段定位" : "独立核验金额证据";
+  const isDiscovery = target.kind === "annual_discovery";
+  const pageNumber = evidence?.pdf_page ?? narrative?.pdf_page ?? discoveryEvidence?.pdf_page ?? preview?.pageNumber ?? null;
+  const title = isDiscovery ? "待核查线索原文定位" : isNarrative ? "原文片段定位" : "独立核验金额证据";
   const displayRow = evidence?.row_label?.trim() || "待定位";
   return (
     <div
@@ -1497,7 +1550,7 @@ function EvidenceDrawer({
       onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}
     >
       <section
-        className={`annual-evidence-drawer${isNarrative ? " is-narrative" : " is-financial-value"}`}
+        className={`annual-evidence-drawer${isDiscovery ? " is-discovery" : isNarrative ? " is-narrative" : " is-financial-value"}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="annual-evidence-drawer-title"
@@ -1506,13 +1559,15 @@ function EvidenceDrawer({
       >
         <header className="annual-evidence-drawer-heading">
           <div>
-            <p className="eyebrow">{isNarrative ? "叙述片段" : "独立核验白名单"} · {pageNumber === null ? "页码待定位" : `PDF 第 ${pageNumber} 页`}</p>
+            <p className="eyebrow">{isDiscovery ? "未核验模型观点的原文片段" : isNarrative ? "叙述片段" : "独立核验白名单"} · {pageNumber === null ? "页码待定位" : `PDF 第 ${pageNumber} 页`}</p>
             <h2 id="annual-evidence-drawer-title">{title}</h2>
           </div>
           <button ref={closeRef} type="button" className="secondary" onClick={onClose}>关闭</button>
         </header>
 
-        {isNarrative ? (
+        {isDiscovery ? (
+          <p className="annual-evidence-interpretation">年报原文定位，模型发现未经独立语义核验。高亮仅覆盖文字块范围，不表示逐字定位或核验结论。</p>
+        ) : isNarrative ? (
           <p className="annual-evidence-interpretation">{NARRATIVE_EVIDENCE_INTERPRETATION_LABEL}。</p>
         ) : (
           <p className="annual-evidence-interpretation">页图只对应已独立核验的财务事实。来源页本身不构成异常或舞弊结论。</p>
@@ -1535,7 +1590,7 @@ function EvidenceDrawer({
           <div className="annual-evidence-image-viewport">
             <img
               src={preview.objectUrl}
-              alt={`${isNarrative ? "原文片段定位" : "独立核验金额证据"}，PDF 第 ${preview.pageNumber} 页，${preview.mode === "focus" ? "证据区域" : "整页"}`}
+              alt={`${isDiscovery ? "待核查线索原文定位" : isNarrative ? "原文片段定位" : "独立核验金额证据"}，PDF 第 ${preview.pageNumber} 页，${preview.mode === "focus" ? "文字块区域" : "整页"}`}
               className="annual-evidence-image"
               style={{ width: `${zoom}%` }}
             />
@@ -1544,7 +1599,31 @@ function EvidenceDrawer({
 
         <section className="annual-evidence-source-detail" aria-labelledby="annual-evidence-source-title">
           <h3 id="annual-evidence-source-title">来源与定位详情</h3>
-          {isNarrative && narrative !== null ? (
+          {isDiscovery && discoveryEvidence !== null ? (
+            <>
+              <p className="annual-evidence-pending">引用原文及相邻内容只用于定位阅读；页图高亮原始文字块 bbox，不表示引用中的字符位置，也不验证模型观点。</p>
+              <blockquote className="annual-evidence-raw-text annual-discovery-drawer-quote">
+                {discoveryEvidence.citations.find((citation) => citation.finding_id === (target.kind === "annual_discovery" ? target.findingId : ""))?.quote ?? "引用文字未记录。"}
+              </blockquote>
+              <p className="annual-discovery-fragment-label">被引用文本片段（完整片段，不代表完整段落）</p>
+              <pre className="annual-evidence-raw-text annual-discovery-fragment">{discoveryEvidence.raw_text}</pre>
+              <dl className="annual-evidence-details">
+                <dt>PDF 页码</dt><dd>{discoveryEvidence.pdf_page}</dd>
+                <dt>来源文字块</dt><dd>{discoveryEvidence.block_index}</dd>
+                <dt>字符起点</dt><dd>{discoveryEvidence.start_char}</dd>
+                <dt>来源文档</dt><dd><code>{discoveryEvidence.source_document_id}</code></dd>
+              </dl>
+              <details className="annual-technical-record annual-evidence-technical">
+                <summary>归档引用与来源校验</summary>
+                <dl>
+                  <dt>证据编号</dt><dd><code>{discoveryEvidence.evidence_id}</code></dd>
+                  <dt>关联发现编号</dt><dd><code>{target.kind === "annual_discovery" ? target.findingId : ""}</code></dd>
+                  <dt>来源 SHA256</dt><dd><code>{discoveryEvidence.source_sha256}</code></dd>
+                  <dt>PDF 区域</dt><dd><code>{JSON.stringify(discoveryEvidence.bbox)}</code></dd>
+                </dl>
+              </details>
+            </>
+          ) : isNarrative && narrative !== null ? (
             <>
               <p className="annual-evidence-pending">高亮位置对应报告引用的文字；可切换到整页查看前后文。</p>
               <details className="annual-narrative-raw-details">
@@ -1632,13 +1711,25 @@ function JobStatusPanel({
         {job.request.mode === "m3_screening"
           ? "本次运行标准分析和四项试行筛查；规则只提示可继续核对的数据组合。"
           : job.request.mode === "integrated_analysis"
-            ? "本次分别运行四项试行筛查和 AI 调查/最终评审；AI 读取标准核验报告，M3 分数不作为模型结论或风险概率。"
+            ? "本次选择四项基础筛查与 AI 分析模式；实际执行的是候选调查还是全文发现，以及调用和可提取文字覆盖情况，以对应报告归档为准。开放式发现不参与基础事实核验，M3 分数也不是模型结论或风险概率。"
           : job.request.mode === "model_investigation"
-            ? "本次由本机完成数据核对，并使用云端模型分析年报相关片段、给出评审意见。"
+            ? "本次选择 AI 分析模式；实际执行的是候选调查还是全文发现，以及调用和可提取文字覆盖情况，以对应报告归档为准。模型观点未经独立语义核验。"
             : "本次使用标准分析，在本机核对年报数据、计算和引用。"}
         {` 公司代码 ${job.request.company_id}，报告年份 ${job.request.report_year}。`}
         {terminal ? " 处理状态已稳定。" : " 页面会自动更新处理状态。"}
       </p>
+      {job.discovery_progress === undefined ? null : (
+        <div className="annual-discovery-progress" role="status" aria-live="polite">
+          <strong>全文发现扫描进度</strong>
+          <p>
+            已结束 {job.discovery_progress.processed_batches}/{job.discovery_progress.planned_batches} 批；
+            成功 {job.discovery_progress.successful_batches} 批，失败 {job.discovery_progress.failed_batches} 批。
+            {job.discovery_progress.total_chars > 0 ? ` 原文共 ${formatInteger(job.discovery_progress.total_chars)} 个字符。` : ""}
+          </p>
+          <p>{discoveryProgressStatusText(job.discovery_progress.status, job.discovery_progress.event, job.status)}</p>
+          <small>批次进度只表示全文扫描阶段；最终评审与报告归档以本任务终态为准。</small>
+        </div>
+      )}
       {job.error !== null ? (
         <div className="annual-job-error" role="alert">
           <strong>{job.error.message}</strong>
@@ -1681,12 +1772,192 @@ function JobStatusPanel({
   );
 }
 
+function AnnualDiscoverySection({
+  discovery,
+  evidenceIndex,
+  activeMode,
+  modelCalled,
+  legacyInvestigationRecorded,
+  modelReview,
+  previewBusyId,
+  visibleCount,
+  onShowMore,
+  onCollapse,
+  onPreview,
+}: {
+  discovery: AnnualModelDiscovery | null;
+  evidenceIndex: AnnualDiscoveryEvidenceIndexItem[];
+  activeMode: string | null;
+  modelCalled: boolean;
+  legacyInvestigationRecorded: boolean;
+  modelReview: AnnualAnalysisModelReview | null;
+  previewBusyId: string | null;
+  visibleCount: number;
+  onShowMore: () => void;
+  onCollapse: () => void;
+  onPreview: (evidenceId: string, findingId: string) => void;
+}) {
+  const findings = discovery?.findings ?? [];
+  const evidenceById = new Map(evidenceIndex.map((item) => [item.evidence_id, item]));
+  const legacyAiMode = activeMode === "model_investigation" || activeMode === "integrated_analysis";
+  const hasLegacyAiRecord = modelCalled || legacyInvestigationRecorded;
+  const isLegacyAiArchive = discovery === null && legacyAiMode;
+  const hasDiscoveryFindings = findings.length > 0;
+  const coverage = discovery?.coverage ?? null;
+  const pendingReviewFailed = modelReview?.status === "failed" || modelReview?.status === "not_called";
+  return (
+    <section id="annual-discovery" className="panel annual-section annual-discovery" aria-labelledby="annual-discovery-title" tabIndex={-1}>
+      <div className="annual-section-heading">
+        <div>
+          <p className="eyebrow">独立全文文字扫描 · 模型观点未经独立语义核验</p>
+          <h3 id="annual-discovery-title">AI 待核查线索</h3>
+        </div>
+        {discovery === null ? <span className="review-chip">{hasLegacyAiRecord ? "旧版候选 AI 调查已归档" : isLegacyAiArchive ? "旧版 AI 模式归档" : "未运行"}</span> : <span className={"annual-discovery-status is-" + discovery.status}>{discoveryStatusLabel(discovery.status)}</span>}
+      </div>
+      <p className="annual-discovery-summary">{discoverySummary(discovery, activeMode, isLegacyAiArchive && hasLegacyAiRecord)}</p>
+      {discovery === null ? (
+        isLegacyAiArchive ? (
+          <p className="annual-discovery-coverage-note" role="note">
+            {hasLegacyAiRecord
+              ? "此归档包含旧版候选触发后的模型调查记录，但没有全文发现层，不能视为已扫描整份年报。"
+              : "此归档记录了旧版 AI 分析模式，但没有全文发现层或明确的旧候选模型调用记录；不能据此判断模型已运行或整份年报已扫描。"}
+          </p>
+        ) : (
+          <p className="annual-discovery-coverage-note" role="note">本报告没有全文发现层。标准分析仍可单独核对已识别指标；基础年度比较与全文年报扫描是不同范围。</p>
+        )
+      ) : (
+        <>
+          <div className="annual-discovery-coverage" aria-label="全文扫描覆盖">
+            {coverage?.source_status === "unavailable" ? (
+              <p>年报文本解析不可用，未规划可核查批次。模型尝试 {discovery.model_call_attempt_count} 次，收到响应 {discovery.model_call_count} 次；这些计数不表示文字已处理。</p>
+            ) : (
+              <>
+                <p>
+                  可提取文字 {formatInteger(coverage?.total_chars ?? 0)} 字符，来自 {coverage?.text_pages ?? 0}/{coverage?.total_pages ?? 0} 页；
+                  已结束 {coverage?.processed_batches ?? 0}/{coverage?.planned_batches ?? 0} 批，成功 {coverage?.successful_batches ?? 0} 批，失败 {coverage?.failed_batches ?? 0} 批。
+                </p>
+                <p>
+                  {coverage?.complete ? "已处理全部可提取文字。" : coverage?.successful_batches === 0 ? "没有成功处理的全文批次。" : "全文扫描有未完成或失败部分。"}
+                  {coverage?.unattempted_batches ? " 尚未尝试 " + coverage.unattempted_batches + " 批。" : ""}
+                  {coverage?.truncated ? " 文字覆盖因批次数或字符预算存在截断。" : ""}
+                </p>
+                <p>
+                  年报图片内容未做 OCR；含图页 {coverage?.image_pages.length ?? 0} 页。
+                  {coverage?.unread_image_pages.length ? " 无可提取文字的图片页：" + coverage.unread_image_pages.join("、") + "。" : ""}
+                  {coverage?.no_text_pages.length && !coverage?.unread_image_pages.length ? " 无可提取文字页：" + coverage.no_text_pages.join("、") + "。" : ""}
+                </p>
+                {coverage?.unread_pages.length ? <p>未完整处理页码：{coverage.unread_pages.join("、")}。</p> : null}
+                {coverage?.failed_pages.length ? <p>失败批次涉及页码：{coverage.failed_pages.join("、")}。</p> : null}
+              </>
+            )}
+          </div>
+          {hasDiscoveryFindings && pendingReviewFailed ? (
+            <p className="annual-discovery-review-gap" role="note">
+              全文扫描已保留 {findings.length} 条待核查线索，但最终评审未完成；线索和原文出处仍可在本区查看。
+            </p>
+          ) : null}
+          {findings.length === 0 ? (
+            <p className="annual-discovery-empty">
+              {coverage?.successful_batches
+                ? "本次没有提出带有效原文引用的具体待核查线索；这不代表整份年报没有风险。"
+                : "没有成功扫描的全文批次，因此没有可展示的动态线索；这不代表整份年报没有风险。"}
+            </p>
+          ) : (
+            <>
+              <p className="annual-discovery-priority-note">核查优先级只表示建议的阅读顺序，不是风险概率或已核验结论。每条引用可打开对应 PDF 页图；原文卡片显示的是被引文本片段，不保证构成完整段落。</p>
+              <div className="annual-discovery-findings">
+                {findings.slice(0, visibleCount).map((finding) => (
+                  <article className="annual-discovery-finding" id={"annual-discovery-" + finding.finding_id} key={finding.finding_id} tabIndex={-1}>
+                    <header className="annual-discovery-finding-heading">
+                      <div>
+                        <h4>{finding.title}</h4>
+                        <span className="annual-discovery-unverified">待核查 · 模型观点</span>
+                      </div>
+                      <span className={"annual-discovery-priority priority-" + finding.priority}>核查顺序：{priorityText(finding.priority)}</span>
+                    </header>
+                    <p className="annual-discovery-observation">{finding.observation}</p>
+                    <dl className="annual-discovery-opinions">
+                      <dt>关注理由</dt><dd>{finding.why_it_matters}</dd>
+                      <dt>后续核查</dt><dd>{finding.follow_up}</dd>
+                    </dl>
+                    <div className="annual-discovery-citations">
+                      <h5>年报原文引用</h5>
+                      {finding.citations.map((citation, index) => {
+                        const evidence = evidenceById.get(citation.evidence_id);
+                        return (
+                          <section className="annual-discovery-citation" key={citation.evidence_id + "-" + index}>
+                            <blockquote className="annual-discovery-quote">{citation.quote}</blockquote>
+                            {evidence === undefined ? (
+                              <p className="annual-discovery-invalid-reference">原文出处未通过当前报告来源校验，未请求页图。</p>
+                            ) : (
+                              <>
+                                <button type="button" className="secondary annual-discovery-page-link" onClick={() => onPreview(evidence.evidence_id, finding.finding_id)} disabled={previewBusyId === evidence.evidence_id}>
+                                  {previewBusyId === evidence.evidence_id ? "正在打开…" : "查看 PDF 第 " + evidence.pdf_page + " 页原文定位"}
+                                </button>
+                                <p className="annual-discovery-fragment-label">被引用文本片段（完整片段，不代表完整段落）</p>
+                                <pre className="annual-discovery-fragment">{evidence.raw_text}</pre>
+                                <small className="annual-discovery-source-meta">页码 {evidence.pdf_page} · 来源块 {evidence.block_index}</small>
+                              </>
+                            )}
+                          </section>
+                        );
+                      })}
+                    </div>
+                  </article>
+                ))}
+              </div>
+              {visibleCount < findings.length ? (
+                <button type="button" className="secondary annual-discovery-more" onClick={onShowMore}>
+                  再显示 8 条（剩余 {findings.length - visibleCount} 条）
+                </button>
+              ) : findings.length > 8 ? (
+                <button type="button" className="secondary annual-discovery-more" onClick={onCollapse}>收起到前 8 条</button>
+              ) : null}
+            </>
+          )}
+          {discovery.limitations.length > 0 ? (
+            <details className="annual-discovery-limitations">
+              <summary>本层限制与未完成事项（{discovery.limitations.length}）</summary>
+              <ul>{discovery.limitations.map((item, index) => <li key={index + "-" + item}>{item}</li>)}</ul>
+            </details>
+          ) : null}
+        </>
+      )}
+    </section>
+  );
+}
+
+function discoverySummary(discovery: AnnualModelDiscovery | null, mode: string | null, legacyAi: boolean): string {
+  if (discovery === null) {
+    if (legacyAi) return "此报告保存了旧版候选 AI 调查；没有按来源 PDF 全文扫描生成的动态发现条目。";
+    if (mode === "deterministic" || mode === "m3_screening" || mode === "integrated_analysis") return "本次未运行 AI 全文发现。下面的基础年度比较仅覆盖固定财务指标。";
+    return "本次归档没有全文发现层；不得据此推断年报已经扫描。";
+  }
+  const coverage = discovery.coverage;
+  const result = discovery.status === "completed"
+    ? coverage.complete ? "全文批次已完成" : "调用状态完成，但文字覆盖不完整"
+    : discovery.status === "partial" ? "扫描部分完成" : discovery.status === "failed" ? "扫描失败" : "未调用扫描";
+  const findingText = discovery.findings.length === 0
+    ? "没有带有效引用的具体模型线索"
+    : "模型提出 " + discovery.findings.length + " 条待核查线索：" + discovery.findings.slice(0, 3).map((item) => item.title).join("、") + (discovery.findings.length > 3 ? "等" : "");
+  return result + "；" + findingText + "。这些模型观点仍待人工或独立证据核对。";
+}
+
+function discoveryStatusLabel(status: AnnualModelDiscovery["status"]): string {
+  return status === "completed" ? "扫描已结束" : status === "partial" ? "部分完成" : status === "failed" ? "扫描失败" : "未调用";
+}
+
+function priorityText(priority: "high" | "medium" | "low"): string {
+  return priority === "high" ? "优先" : priority === "medium" ? "随后" : "一般";
+}
+
 function AnnualReportView({
   response,
   previewBusyId,
   onPreview,
   narrativeState,
   onNarrativePreview,
+  onDiscoveryPreview,
   resultOrigin,
   selectedHistoryItem,
   activeMode,
@@ -1696,6 +1967,7 @@ function AnnualReportView({
   onPreview: (evidenceId: string) => void;
   narrativeState: NarrativeLoadState;
   onNarrativePreview: (evidenceId: string) => void;
+  onDiscoveryPreview: (evidenceId: string, findingId: string) => void;
   resultOrigin: "new" | "history";
   selectedHistoryItem: AnnualAnalysisHistoryItem | null;
   activeMode: AnnualAnalysisJobMode | null;
@@ -1703,13 +1975,19 @@ function AnnualReportView({
   const [exporting, setExporting] = useState<"json" | "markdown" | "html" | null>(null);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [discoveryVisibleCount, setDiscoveryVisibleCount] = useState(8);
+  const [pendingDiscoveryTarget, setPendingDiscoveryTarget] = useState<string | null>(null);
   const { report, manifest, verification_evidences: evidenceIndex } = response;
   const evidenceById = new Map(evidenceIndex.map((evidence) => [evidence.evidence_id, evidence]));
   const verifiedMetricCount = report.confirmed.metrics.filter(isIndependentlyVerifiedMetric).length;
   const verifiedCalculationCount = report.confirmed.analyses.filter(isIndependentlyVerifiedCalculation).length;
   const coreMetrics = CORE_METRICS.map((spec) => buildCoreMetricRow(spec, report, evidenceById));
   const reportModelInvestigation = report.model_investigation;
+  const discovery = report.model_discovery ?? null;
   const reportModelReview = report.model_review ?? null;
+  const historicInvestigationRecord = record(reportModelInvestigation);
+  const historicInvestigationRecorded = reportModelInvestigation !== undefined && reportModelInvestigation !== null;
+  const historicModelCalled = report.model_called || historicInvestigationRecord?.model_called === true;
   const candidateCount = report.pending_review.candidate_signals.filter((item) => item.status === "candidate").length;
   const abstainedSignalCount = report.pending_review.candidate_signals.filter((item) => item.status === "abstained").length;
   const sourceMatches = report.source_sha256 === manifest.source_pdf_sha256;
@@ -1719,8 +1997,10 @@ function AnnualReportView({
   const companyName = registeredSyntheticCompanyName ?? trustedCompanyName(report.company_id, report.source_document_id, report.source_sha256);
   const mode = activeMode ?? selectedHistoryItem?.run_mode ?? selectedHistoryItem?.mode ??
     response.manifest.mode ?? (report.m3_screening !== null && report.m3_screening !== undefined ? "m3_screening" : null);
+  const legacyAiLabel = historicModelCalled || historicInvestigationRecorded ? "旧版候选 AI 调查与评审" : "旧版 AI 模式归档（全文发现未记录）";
   const modeText = mode === "deterministic" ? "标准分析" : mode === "m3_screening" ? "四规则试行" :
-    mode === "model_investigation" ? "AI 调查与评审" : mode === "integrated_analysis" ? "四规则试行 + AI 调查与评审" :
+    mode === "model_investigation" ? discovery === null ? legacyAiLabel : "AI 全文发现与评审" :
+      mode === "integrated_analysis" ? discovery === null ? "四规则试行 + " + legacyAiLabel : "四规则试行 + AI 全文发现与评审" :
       mode === "unknown" ? "模式未记录" : report.model_called ? "模型调用记录" : "模式未记录";
   const headlineRates = coreMetrics
     .filter((item) => item.yoy !== null)
@@ -1738,6 +2018,28 @@ function AnnualReportView({
     : hasUnverifiedExplanation
       ? "报告包含模型解释，但解释尚未独立核实；变化原因仍待确认。"
       : "原因尚未说明。";
+
+  useEffect(() => {
+    setDiscoveryVisibleCount(8);
+    setPendingDiscoveryTarget(null);
+  }, [discovery?.run_id]);
+
+  useEffect(() => {
+    if (pendingDiscoveryTarget === null) return;
+    const target = document.getElementById("annual-discovery-" + pendingDiscoveryTarget);
+    if (target === null) return;
+    target.scrollIntoView({ block: "start", behavior: "smooth" });
+    target.focus({ preventScroll: true });
+    setPendingDiscoveryTarget(null);
+  }, [pendingDiscoveryTarget, discoveryVisibleCount]);
+
+  const locateDiscoveryFinding = (findingId: string) => {
+    if (discovery === null) return;
+    const index = discovery.findings.findIndex((item) => item.finding_id === findingId);
+    if (index < 0) return;
+    setDiscoveryVisibleCount((count) => Math.max(count, index + 1));
+    setPendingDiscoveryTarget(findingId);
+  };
 
   const downloadExport = async (format: "json" | "markdown" | "html") => {
     if (exporting !== null) return;
@@ -1809,14 +2111,29 @@ function AnnualReportView({
               ? "评审状态与摘要"
               : "本次筛查摘要"}
         </a>
+        <a href="#annual-discovery" onClick={expandReportDetails}>AI 待核查线索</a>
         <a href="#annual-financial-overview" onClick={expandReportDetails}>财务概览</a>
-        <a href="#annual-candidate-overview" onClick={expandReportDetails}>建议核查事项</a>
+        <a href="#annual-candidate-overview" onClick={expandReportDetails}>基础年度比较</a>
         <a href="#annual-confirmed-metrics" onClick={expandReportDetails}>核实数据</a>
         <a href="#annual-analysis-details" onClick={expandReportDetails}>计算过程</a>
         <a href="#annual-verified-claims" onClick={expandReportDetails}>核验主张</a>
         {report.m3_screening == null ? null : <a href="#annual-m3-screening" onClick={expandReportDetails}>试行筛查</a>}
         <a href="#annual-scope" onClick={expandReportDetails}>分析范围</a>
       </nav>
+
+      <AnnualDiscoverySection
+        discovery={discovery}
+        evidenceIndex={response.discovery_evidences?.items ?? []}
+        activeMode={mode}
+        modelCalled={report.model_called}
+        legacyInvestigationRecorded={historicInvestigationRecorded}
+        modelReview={reportModelReview}
+        previewBusyId={previewBusyId}
+        visibleCount={discoveryVisibleCount}
+        onShowMore={() => setDiscoveryVisibleCount((count) => Math.min(discovery?.findings.length ?? count, count + 8))}
+        onCollapse={() => setDiscoveryVisibleCount(8)}
+        onPreview={onDiscoveryPreview}
+      />
 
       <section id="annual-financial-overview" className="annual-financial-overview" aria-labelledby="annual-indicators-title" tabIndex={-1}>
         <div className="annual-overview-heading">
@@ -1908,19 +2225,23 @@ function AnnualReportView({
       <section id="annual-candidate-overview" className="panel annual-section annual-candidate-overview" tabIndex={-1}>
         <div className="annual-section-heading">
           <div>
-            <p className="eyebrow">核查清单</p>
-            <h3>建议核查的具体事项</h3>
+            <p className="eyebrow">基础年度比较 · 固定候选</p>
+            <h3>基础年度比较</h3>
           </div>
         </div>
         {candidateCount > 0 ? (
           <p className="annual-candidate-context">
-            以下事项来自本地规则筛查。卡片只展示满足独立核验条件的年度差额；其余变化方向暂不作判断，请按建议项目继续查证。
+            以下固定候选来自基础年度指标比较，不构成整份年报的问题目录。卡片只展示满足独立核验条件的年度差额；其他变化方向暂不判断。
           </p>
         ) : abstainedSignalCount > 0 ? (
           <p className="annual-candidate-context">
-            下列年度比较因关键数据尚未确认而弃权；页面会说明缺少的前提，不能据此判断变化方向。
+            下列基础年度比较因关键数据尚未确认而弃权；页面会说明缺少的前提，不能据此判断变化方向。
           </p>
-        ) : null}
+        ) : (
+          <p className="annual-candidate-context">
+            当前没有满足展示条件的基础年度比较候选。此区域不是整份年报的问题目录；全文可提取文字扫描范围见上方“AI 待核查线索”。
+          </p>
+        )}
         {candidateCount > 0 ? (
           <div className="annual-record-grid">
             {report.pending_review.candidate_signals.filter((candidate) => candidate.status === "candidate").map((candidate) => (
@@ -1970,8 +2291,11 @@ function AnnualReportView({
         review={reportModelReview}
         report={report}
         evidenceById={evidenceById}
+        discoveryEvidenceIndex={response.discovery_evidences?.items ?? []}
         previewBusyId={previewBusyId}
         onPreview={onPreview}
+        onDiscoveryPreview={onDiscoveryPreview}
+        onLocateDiscoveryFinding={locateDiscoveryFinding}
       />
 
       {report.m3_screening == null ? null : <M3ScreeningBlock screening={report.m3_screening} />}
@@ -1984,7 +2308,7 @@ function AnnualReportView({
           </div>
         </div>
         <p className="annual-scope-summary">
-          本次只核对年报中选取的 {report.confirmed.metrics.length} 项财务数据及相关年度变化、原文出处，不代表核查整份年报。
+          基础财务核验层核对了 {report.confirmed.metrics.length} 项已识别财务数据及相关年度变化、原文出处；这不代表整份报告的全部分析范围。全文可提取文字扫描范围与待核查模型线索见上方“AI 待核查线索”，其状态与基础财务核验彼此独立。
         </p>
         <details className="annual-scope-original">
           <summary>查看本次分析范围说明</summary>
@@ -2007,7 +2331,7 @@ function AnnualReportView({
       ) : null}
       <details className="panel annual-technical-record annual-source-panel">
         <summary>技术记录：运行编号、来源文件与归档校验</summary>
-        <p className="annual-source-note">报告和证据页图来自本次分析的本机归档；页图只对应已返回的独立核验证据。</p>
+        <p className="annual-source-note">报告与来源页图来自本次分析的本机归档；各页图分别用于已核验金额或仅作原文定位的模型引用，层级状态彼此独立，页图不提升模型观点的核验状态。</p>
         <dl className="annual-meta-grid">
           <dt>分析编号</dt><dd><code>{report.run_id}</code></dd>
           <dt>是否调用模型</dt><dd>{report.model_called ? "是" : "否"}</dd>
@@ -2098,14 +2422,20 @@ function ModelReviewSection({
   review,
   report,
   evidenceById,
+  discoveryEvidenceIndex,
   previewBusyId,
   onPreview,
+  onDiscoveryPreview,
+  onLocateDiscoveryFinding,
 }: {
   review: AnnualAnalysisModelReview | null;
   report: AnnualAnalysisResponse["report"];
   evidenceById: Map<string, VerificationEvidence>;
+  discoveryEvidenceIndex: AnnualDiscoveryEvidenceIndexItem[];
   previewBusyId: string | null;
   onPreview: (evidenceId: string) => void;
+  onDiscoveryPreview: (evidenceId: string, findingId: string) => void;
+  onLocateDiscoveryFinding: (findingId: string) => void;
 }) {
   const completed = review?.status === "completed" && review.assessment !== null && review.summary !== null;
   const historicInvestigation = record(report.model_investigation);
@@ -2139,8 +2469,11 @@ function ModelReviewSection({
                       evidenceIds={item.evidence_ids}
                       report={report}
                       evidenceById={evidenceById}
+                      discoveryEvidenceIndex={discoveryEvidenceIndex}
                       previewBusyId={previewBusyId}
                       onPreview={onPreview}
+                      onDiscoveryPreview={onDiscoveryPreview}
+                      onLocateDiscoveryFinding={onLocateDiscoveryFinding}
                     />
                   </li>
                 ))}
@@ -2159,8 +2492,11 @@ function ModelReviewSection({
                       evidenceIds={item.evidence_ids}
                       report={report}
                       evidenceById={evidenceById}
+                      discoveryEvidenceIndex={discoveryEvidenceIndex}
                       previewBusyId={previewBusyId}
                       onPreview={onPreview}
+                      onDiscoveryPreview={onDiscoveryPreview}
+                      onLocateDiscoveryFinding={onLocateDiscoveryFinding}
                     />
                     {isInternalReviewObject(item.object, report) ? (
                       <details className="annual-technical-record annual-review-object-reference">
@@ -2197,10 +2533,16 @@ function ModelReviewSection({
       ) : (
         <>
           {review !== null ? (
-            <p className="annual-model-review-failure" role="status">{modelReviewReasonText(review.reason, review.status)}</p>
+            <p className="annual-model-review-failure" role="status">
+              {report.model_discovery?.findings.length
+                ? "全文扫描已保留 " + report.model_discovery.findings.length + " 条待核查线索；" + modelReviewReasonText(review.reason, review.status)
+                : modelReviewReasonText(review.reason, review.status)}
+            </p>
           ) : historicModelCalled ? (
             <p className="annual-model-review-history-note" role="status">
-              这份历史归档包含逐条模型调查，未保存最终评审意见。
+              {report.model_discovery?.findings.length
+                ? "全文扫描已形成 " + report.model_discovery.findings.length + " 条待核查线索，但没有保存最终评审意见；线索仍可在上方查看。"
+                : "这份历史归档包含旧版候选模型调查，未保存最终评审意见。"}
             </p>
           ) : report.model_investigation !== undefined && report.model_investigation !== null ? (
             <p className="annual-model-review-history-note" role="status">
@@ -2270,28 +2612,71 @@ function ModelReviewReferences({
   evidenceIds,
   report,
   evidenceById,
+  discoveryEvidenceIndex,
   previewBusyId,
   onPreview,
+  onDiscoveryPreview,
+  onLocateDiscoveryFinding,
 }: {
   evidenceIds: string[];
   report: AnnualAnalysisResponse["report"];
   evidenceById: Map<string, VerificationEvidence>;
+  discoveryEvidenceIndex: AnnualDiscoveryEvidenceIndexItem[];
   previewBusyId: string | null;
   onPreview: (evidenceId: string) => void;
+  onDiscoveryPreview: (evidenceId: string, findingId: string) => void;
+  onLocateDiscoveryFinding: (findingId: string) => void;
 }) {
   if (evidenceIds.length === 0) {
     return <p className="annual-review-reference-empty">本条意见没有关联可打开的年报出处。</p>;
   }
-  const result = locationsForReviewEvidenceIds(evidenceIds, report, evidenceById);
+  const discoveryFindings = (report.model_discovery?.findings ?? []).filter((finding) => evidenceIds.includes(finding.finding_id));
+  const discoveryIds = new Set(discoveryFindings.map((finding) => finding.finding_id));
+  const otherEvidenceIds = evidenceIds.filter((id) => !discoveryIds.has(id));
+  const result = locationsForReviewEvidenceIds(otherEvidenceIds, report, evidenceById);
+  const discoveryEvidenceById = new Map(discoveryEvidenceIndex.map((item) => [item.evidence_id, item]));
   return (
     <details className="annual-review-references">
       <summary>查看本条关联出处</summary>
-      <SourceLocationList
-        heading="对应年报页"
-        result={result}
-        previewBusyId={previewBusyId}
-        onPreview={onPreview}
-      />
+      {discoveryFindings.length > 0 ? (
+        <div className="annual-review-discovery-references">
+          <strong>关联的待核查模型观点</strong>
+          <ul>
+            {discoveryFindings.map((finding) => (
+              <li key={finding.finding_id}>
+                <button type="button" className="secondary annual-review-discovery-action" onClick={() => onLocateDiscoveryFinding(finding.finding_id)}>
+                  {finding.title} · 定位待核查线索
+                </button>
+                <ul className="annual-review-discovery-pages">
+                  {finding.citations.slice(0, 2).map((citation) => {
+                    const evidence = discoveryEvidenceById.get(citation.evidence_id);
+                    return evidence === undefined ? null : (
+                      <li key={citation.evidence_id}>
+                        <button
+                          type="button"
+                          className="secondary annual-review-discovery-action"
+                          onClick={() => onDiscoveryPreview(evidence.evidence_id, finding.finding_id)}
+                          disabled={previewBusyId === evidence.evidence_id}
+                        >
+                          {previewBusyId === evidence.evidence_id ? "正在打开…" : `打开 PDF 第 ${evidence.pdf_page} 页引用`}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {otherEvidenceIds.length > 0 ? (
+        <SourceLocationList
+          heading="对应年报页"
+          result={result}
+          previewBusyId={previewBusyId}
+          onPreview={onPreview}
+        />
+      ) : null}
     </details>
   );
 }
@@ -2307,21 +2692,21 @@ function modelReviewAssessmentText(assessment: AnnualAnalysisModelReview["assess
 
 function modelReviewReasonText(reason: string | null, status: string): string {
   const messages: Record<string, string> = {
-    model_configuration_unavailable: "后端尚未配置云端模型，本次未能生成 AI 评审意见。下方保留本地确定性筛查摘要。",
-    model_dependency_unavailable: "后端缺少 AI 分析所需依赖，本次未能生成 AI 评审意见。下方保留本地确定性筛查摘要。",
-    model_review_call_failed: "云端模型请求未完成，本次未能生成 AI 评审意见。下方保留本地确定性筛查摘要。",
-    model_review_numeric_claim_rejected: "模型意见包含未获准的数值表述，本次未生成可展示的 AI 评审意见。下方保留本地确定性筛查摘要。",
-    model_review_response_invalid: "模型返回内容无法按评审格式读取，本次未生成可展示的 AI 评审意见。下方保留本地确定性筛查摘要。",
-    model_review_no_priority_not_supported: "当前核查范围不支持“无需优先核查”的结论，因此未生成该评审意见。下方保留本地确定性筛查摘要。",
-    model_review_priority_without_reason: "模型没有提供足够的评审依据，本次未生成可展示的 AI 评审意见。下方保留本地确定性筛查摘要。",
-    model_review_no_priority_without_reason: "模型没有提供足够的评审依据，本次未生成可展示的 AI 评审意见。下方保留本地确定性筛查摘要。",
+    model_configuration_unavailable: "后端尚未配置云端模型，最终评审阶段未能生成评审意见。",
+    model_dependency_unavailable: "后端缺少 AI 分析所需依赖，最终评审阶段未能生成评审意见。",
+    model_review_call_failed: "最终评审阶段的云端模型请求未完成。",
+    model_review_numeric_claim_rejected: "最终评审阶段的模型意见包含未获准的数值表述，未生成可展示的评审意见。",
+    model_review_response_invalid: "最终评审阶段的模型返回内容无法按评审格式读取。",
+    model_review_no_priority_not_supported: "当前核查范围不支持“无需优先核查”的结论，最终评审阶段未生成该意见。",
+    model_review_priority_without_reason: "最终评审阶段的模型没有提供足够的评审依据，未生成可展示的评审意见。",
+    model_review_no_priority_without_reason: "最终评审阶段的模型没有提供足够的评审依据，未生成可展示的评审意见。",
   };
   if (reason !== null && messages[reason] !== undefined) {
     return messages[reason];
   }
   return status === "not_called"
-    ? "本次没有调用云端模型，因此未生成 AI 评审意见。下方保留本地确定性筛查摘要。"
-    : "本次 AI 评审未能完成。下方保留本地确定性筛查摘要。";
+    ? "最终评审阶段没有调用模型，因此未生成评审意见。"
+    : "最终评审阶段未能完成。";
 }
 
 function modelReviewObjectLabel(object: string, report: AnnualAnalysisResponse["report"]): string {
@@ -2375,6 +2760,8 @@ function modelReviewObjectLabel(object: string, report: AnnualAnalysisResponse["
   if (candidate !== undefined) {
     return `${signalTitle(candidate.signal_id)}（${report.report_year - 1}—${report.report_year} 年）`;
   }
+  const discoveryFinding = report.model_discovery?.findings.find((item) => item.finding_id === object);
+  if (discoveryFinding !== undefined) return `${discoveryFinding.title}（待核查模型观点）`;
   return isInternalReviewObject(object, report) ? "相关财务项目" : object;
 }
 
@@ -3080,7 +3467,7 @@ function ModelInvestigationBlock({ investigation }: { investigation: AnnualRepor
     "status", "model_called", "reason", "reason_detail", "items",
     "model_call_count", "model_call_attempt_count",
     "investigation_call_count", "investigation_call_attempt_count",
-    "model_review_call_count", "model_review_call_attempt_count", "final_review",
+    "model_review_call_count", "model_review_call_attempt_count", "final_review", "discovery",
   ]);
   const otherEntries = entries.filter(([key]) => !knownFields.has(key));
   const status = stringValue(investigation.status);
@@ -4199,6 +4586,7 @@ function modeUsesModel(mode: AnnualAnalysisJobMode): boolean {
 function missingRequestedReportLayers(
   mode: AnnualAnalysisJobMode,
   report: AnnualAnalysisResponse["report"],
+  requireDiscovery = false,
 ): string[] {
   const missing: string[] = [];
   if ((mode === "m3_screening" || mode === "integrated_analysis") && report.m3_screening == null) {
@@ -4207,7 +4595,11 @@ function missingRequestedReportLayers(
   if (modeUsesModel(mode)) {
     if (report.model_investigation == null) {
       missing.push("AI 调查记录");
-    } else if (report.model_review == null) {
+    }
+    if (requireDiscovery && report.model_discovery == null) {
+      missing.push("AI 全文发现层");
+    }
+    if (report.model_review == null) {
       missing.push("AI 最终评审");
     }
   }
@@ -4257,6 +4649,28 @@ function jobStageText(stage: string, status: AnnualAnalysisJob["status"]): strin
     return "正在处理年报";
   }
   return "等待查看处理状态";
+}
+
+function discoveryProgressStatusText(
+  status: NonNullable<AnnualAnalysisJob["discovery_progress"]>["status"],
+  event: NonNullable<AnnualAnalysisJob["discovery_progress"]>["event"],
+  jobStatus: AnnualAnalysisJob["status"],
+): string {
+  if (status === "completed") {
+    return jobStatus === "queued" || jobStatus === "running"
+      ? "全文扫描批次已结束，等待最终评审与报告归档。"
+      : "全文扫描阶段已结束；整个任务状态以最终报告与任务记录为准。";
+  }
+  if (status === "partial" || status === "budget_exhausted" || event === "budget_exhausted") return "扫描因缺口或时间预算提前结束；未尝试批次和失败页面会在最终报告中列出。";
+  if (status === "failed") return "全文扫描失败；任务可能仍在进行其他归档步骤。";
+  if (status === "not_called") return "全文扫描尚未发出模型请求。";
+  if (event === "planned") return "已规划全文扫描批次，准备开始处理。";
+  if (event === "batch_started") return "正在处理当前批次；页面状态不是整个任务的完成标志。";
+  return "扫描批次已更新；仍需等待最终评审和报告归档。";
+}
+
+function formatInteger(value: number): string {
+  return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 0 }).format(value);
 }
 
 function m3StatusText(status: string, screeningStatus: string): string {
@@ -4367,8 +4781,8 @@ function historyModeText(mode: AnnualAnalysisHistoryItem["mode"]): string {
   const labels: Record<AnnualAnalysisHistoryItem["mode"], string> = {
     deterministic: "标准分析",
     m3_screening: "标准分析 + 四规则试行",
-    model_investigation: "AI 调查与最终评审",
-    integrated_analysis: "四规则试行 + AI 调查与最终评审",
+    model_investigation: "AI 调查与评审（范围以归档为准）",
+    integrated_analysis: "四规则试行 + AI 调查与评审（范围以归档为准）",
     unknown: "未记录模式",
   };
   return labels[mode];

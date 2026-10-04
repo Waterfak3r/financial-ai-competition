@@ -1,3 +1,5 @@
+import type { AnnualDiscoveryEvidenceIndex, AnnualModelDiscovery } from "./discoveryEvidence";
+
 export type AnnualReportRecord = Record<string, unknown>;
 
 export interface AnnualAnalysisManifest {
@@ -232,6 +234,7 @@ export interface AnnualAnalysisReport {
   model_called: boolean;
   m3_screening?: M3AnnualScreening | null;
   model_investigation?: AnnualReportRecord | null;
+  model_discovery?: AnnualModelDiscovery | null;
   model_review?: AnnualAnalysisModelReview | null;
 }
 
@@ -240,6 +243,7 @@ export interface AnnualAnalysisResponse {
   manifest: AnnualAnalysisManifest;
   source_provenance: AnnualSourceProvenance;
   verification_evidences: VerificationEvidence[];
+  discovery_evidences?: AnnualDiscoveryEvidenceIndex;
 }
 
 export interface AnnualSourceProvenance {

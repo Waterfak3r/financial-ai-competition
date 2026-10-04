@@ -1,4 +1,5 @@
 import type {
+  AnnualAnalysisDiscoveryProgress,
   AnnualAnalysisJob,
   AnnualAnalysisJobMode,
   AnnualAnalysisJobRequest,
@@ -187,6 +188,9 @@ function readJob(value: unknown, expectedJobId?: string, expectedRequest?: Annua
   if (expectedRequest !== undefined && !sameRequest(jobRequest, expectedRequest)) {
     throw invalidResponse("任务来源或模式与提交请求不一致");
   }
+  const discoveryProgress = record.discovery_progress === undefined
+    ? undefined
+    : readDiscoveryProgress(record.discovery_progress);
   return {
     job_id: jobId,
     status,
@@ -197,6 +201,50 @@ function readJob(value: unknown, expectedJobId?: string, expectedRequest?: Annua
     run_id: runId,
     result_url: resultUrl,
     error,
+    ...(discoveryProgress === undefined ? {} : { discovery_progress: discoveryProgress }),
+  };
+}
+
+function readDiscoveryProgress(value: unknown): AnnualAnalysisDiscoveryProgress {
+  const record = asRecord(value);
+  const fields = [
+    "event", "status", "batch_index", "planned_batches", "processed_batches",
+    "successful_batches", "failed_batches", "total_pages", "total_chars", "updated_at",
+  ];
+  if (record === null || Object.keys(record).length !== fields.length || fields.some((key) => !(key in record))) {
+    throw invalidResponse("discovery_progress 字段集合无效");
+  }
+  const event = record.event;
+  const status = record.status;
+  if (
+    typeof event !== "string" || !["planned", "batch_started", "batch_finished", "budget_exhausted"].includes(event) ||
+    typeof status !== "string" || !["not_called", "running", "completed", "partial", "failed", "budget_exhausted"].includes(status)
+  ) throw invalidResponse("discovery_progress 状态无效");
+  const counts = Object.fromEntries([
+    "batch_index", "planned_batches", "processed_batches", "successful_batches",
+    "failed_batches", "total_pages", "total_chars",
+  ].map((key) => [key, integerField(record, key)])) as Record<string, number>;
+  const updatedAt = stringField(record, "updated_at");
+  if (
+    Object.values(counts).some((count) => !Number.isSafeInteger(count) || count < 0) ||
+    counts.planned_batches > 128 || counts.processed_batches > counts.planned_batches ||
+    counts.failed_batches > counts.processed_batches ||
+    counts.successful_batches !== counts.processed_batches - counts.failed_batches ||
+    counts.batch_index > counts.planned_batches || counts.total_pages > 100_000 ||
+    counts.total_chars > Number.MAX_SAFE_INTEGER || updatedAt.length > 40 ||
+    !/(?:Z|[+-]\d{2}:\d{2})$/.test(updatedAt) || !Number.isFinite(Date.parse(updatedAt))
+  ) throw invalidResponse("discovery_progress 计数或更新时间不一致");
+  return {
+    event: event as AnnualAnalysisDiscoveryProgress["event"],
+    status: status as AnnualAnalysisDiscoveryProgress["status"],
+    batch_index: counts.batch_index,
+    planned_batches: counts.planned_batches,
+    processed_batches: counts.processed_batches,
+    successful_batches: counts.successful_batches,
+    failed_batches: counts.failed_batches,
+    total_pages: counts.total_pages,
+    total_chars: counts.total_chars,
+    updated_at: updatedAt,
   };
 }
 

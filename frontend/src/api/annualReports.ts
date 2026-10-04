@@ -17,12 +17,23 @@ import type {
   VerificationEvidence,
   VerifiedClaim,
 } from "../types/annualReport";
+import type {
+  AnnualDiscoveryAuditArtifact,
+  AnnualDiscoveryBatchResult,
+  AnnualDiscoveryCoverage,
+  AnnualDiscoveryEvidence,
+  AnnualDiscoveryEvidenceIndex,
+  AnnualDiscoveryFinding,
+  AnnualModelDiscovery,
+} from "../types/discoveryEvidence";
 
 const ANNUAL_ANALYSIS_PATH = "/api/v1/annual-analyses";
 const RUN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
 const EVIDENCE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:._-]{0,255}$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/i;
 const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
+const DISCOVERY_INTERPRETATION_LABEL = "年报原文定位，模型发现未经独立语义核验";
+const DISCOVERY_MAX_CHARS = 1_200_000;
 
 export interface EvidencePreviewRegion {
   bbox: PdfBox;
@@ -292,7 +303,497 @@ function readAnnualAnalysisResponse(value: unknown, expectedRunId: string): Annu
     ids.add(evidence.evidence_id);
   }
   const sourceProvenance = readSourceProvenance(payload.source_provenance, manifest.source_pdf_sha256);
-  return { report, manifest, source_provenance: sourceProvenance, verification_evidences: verificationEvidences };
+  const rawInvestigation = optionalRecord(rawReport.model_investigation);
+  const nestedDiscoveryPresent = rawInvestigation !== null && Object.prototype.hasOwnProperty.call(rawInvestigation, "discovery");
+  const topDiscoveryPresent = Object.prototype.hasOwnProperty.call(rawReport, "model_discovery");
+  if (nestedDiscoveryPresent && !topDiscoveryPresent) {
+    throw new AnnualReportApiError("模型调查附录含开放式发现，但报告缺少顶层来源绑定记录，未显示该报告。");
+  }
+  if (topDiscoveryPresent && nestedDiscoveryPresent && !sameJsonValue(rawReport.model_discovery, rawInvestigation?.discovery)) {
+    throw new AnnualReportApiError("顶层开放式发现与模型调查附录不一致，未显示该报告。");
+  }
+  const discoveryEvidenceIndex = payload.discovery_evidences === undefined
+    ? undefined
+    : readDiscoveryEvidenceIndex(
+        payload.discovery_evidences,
+        report.model_discovery ?? null,
+        report.run_id,
+        report.source_document_id,
+        report.source_sha256,
+      );
+  if (report.model_discovery !== undefined && report.model_discovery !== null && discoveryEvidenceIndex === undefined) {
+    throw new AnnualReportApiError("开放式发现缺少对应的原文定位索引，未显示该报告。");
+  }
+  return {
+    report,
+    manifest,
+    source_provenance: sourceProvenance,
+    verification_evidences: verificationEvidences,
+    ...(discoveryEvidenceIndex === undefined ? {} : { discovery_evidences: discoveryEvidenceIndex }),
+  };
+}
+
+function readModelDiscovery(
+  value: Record<string, unknown>,
+  path: string,
+  expected: { runId: string; companyId: string; reportYear: number; sourceDocumentId: string; sourceSha256: string },
+): AnnualModelDiscovery {
+  exactKeys(value, [
+    "kind", "run_id", "company_id", "report_year", "source_document_id", "source_sha256",
+    "status", "prompt_version", "model_called", "model_call_count", "model_call_attempt_count",
+    "coverage", "findings", "evidences", "audit_artifacts", "limitations", "reason", "fraud_conclusion",
+  ], path);
+  const sourceSha256 = requireString(value.source_sha256, `${path}.source_sha256`).toLowerCase();
+  const status = requireString(value.status, `${path}.status`);
+  if (
+    value.kind !== "fintrace_annual_discovery" || value.prompt_version !== "annual_discovery_v1" ||
+    status !== "completed" && status !== "partial" && status !== "failed" && status !== "not_called" ||
+    requireString(value.run_id, `${path}.run_id`) !== expected.runId ||
+    requireString(value.company_id, `${path}.company_id`) !== expected.companyId ||
+    requireInteger(value.report_year, `${path}.report_year`) !== expected.reportYear ||
+    requireString(value.source_document_id, `${path}.source_document_id`) !== expected.sourceDocumentId ||
+    sourceSha256 !== expected.sourceSha256.toLowerCase() || !SHA256_PATTERN.test(sourceSha256) ||
+    value.fraud_conclusion !== null
+  ) throw invalidResponse(`${path} 的来源身份或状态无效`);
+  const modelCallCount = safeNonNegativeInteger(value.model_call_count, `${path}.model_call_count`);
+  const modelCallAttemptCount = safeNonNegativeInteger(value.model_call_attempt_count, `${path}.model_call_attempt_count`);
+  const modelCalled = requireBoolean(value.model_called, `${path}.model_called`);
+  if (modelCallAttemptCount < modelCallCount || modelCalled !== (modelCallAttemptCount > 0)) {
+    throw invalidResponse(`${path} 的模型调用计数不一致`);
+  }
+  const reason = nullableString(value.reason, `${path}.reason`);
+  if (reason !== null && !/^[a-z][a-z0-9_]{0,99}$/.test(reason)) throw invalidResponse(`${path}.reason`);
+  const coverage = readDiscoveryCoverage(value.coverage, `${path}.coverage`, status);
+  if (
+    status === "not_called" && (modelCallAttemptCount !== 0 || modelCallCount !== 0) ||
+    coverage.source_status === "parsed" && (
+      modelCallAttemptCount !== coverage.processed_batches ||
+      coverage.successful_batches > modelCallCount || modelCallCount > modelCallAttemptCount
+    ) ||
+    status === "completed" && (
+      modelCallCount !== coverage.planned_batches || modelCallAttemptCount !== coverage.planned_batches
+    )
+  ) throw invalidResponse(`${path} 的状态与调用/批次计数不一致`);
+  const evidences = requireArray(value.evidences, `${path}.evidences`).map((item, index) =>
+    readDiscoveryEvidence(item, `${path}.evidences[${index}]`, expected.sourceDocumentId, sourceSha256, coverage.total_pages),
+  );
+  const evidenceById = new Map<string, AnnualDiscoveryEvidence>();
+  for (const evidence of evidences) {
+    if (evidenceById.has(evidence.evidence_id)) throw invalidResponse(`${path}.evidences 包含重复 ID`);
+    evidenceById.set(evidence.evidence_id, evidence);
+  }
+  const findings = requireArray(value.findings, `${path}.findings`).map((item, index) =>
+    readDiscoveryFinding(item, `${path}.findings[${index}]`, sourceSha256, evidenceById),
+  );
+  const findingIds = new Set<string>();
+  const citedEvidenceIds = new Set<string>();
+  let totalOpinionChars = 0;
+  let totalQuoteChars = 0;
+  for (const finding of findings) {
+    if (findingIds.has(finding.finding_id)) throw invalidResponse(`${path}.findings 包含重复 finding_id`);
+    findingIds.add(finding.finding_id);
+    totalOpinionChars += finding.title.length + finding.observation.length + finding.why_it_matters.length + finding.follow_up.length;
+    for (const citation of finding.citations) {
+      totalQuoteChars += citation.quote.length;
+      citedEvidenceIds.add(citation.evidence_id);
+    }
+  }
+  if (
+    findings.length > 768 || evidences.length > 3072 || totalOpinionChars > 1_200_000 ||
+    totalQuoteChars > 768 * 4 * 300 || [...evidenceById.keys()].some((id) => !citedEvidenceIds.has(id)) ||
+    citedEvidenceIds.size !== evidenceById.size ||
+    coverage.successful_batches === 0 && (findings.length > 0 || evidences.length > 0)
+  ) throw invalidResponse(`${path} 的发现数量、意见、引用或证据不一致`);
+  const auditArtifacts = requireArray(value.audit_artifacts, `${path}.audit_artifacts`).map((item, index) =>
+    readDiscoveryAuditArtifact(item, `${path}.audit_artifacts[${index}]`),
+  );
+  if (auditArtifacts.length > 128 || new Set(auditArtifacts.map((item) => item.batch_index)).size !== auditArtifacts.length) {
+    throw invalidResponse(`${path}.audit_artifacts 数量或批次重复`);
+  }
+  const limitations = requireArray(value.limitations, `${path}.limitations`).map((item, index) => {
+    const text = requireString(item, `${path}.limitations[${index}]`);
+    if (text.length > 400) throw invalidResponse(`${path}.limitations[${index}]`);
+    return text;
+  });
+  if (limitations.length > 1100 || limitations.reduce((sum, item) => sum + item.length, 0) > 1100 * 400) {
+    throw invalidResponse(`${path}.limitations 数量或字符数越界`);
+  }
+  return {
+    kind: "fintrace_annual_discovery",
+    run_id: expected.runId,
+    company_id: expected.companyId,
+    report_year: expected.reportYear,
+    source_document_id: expected.sourceDocumentId,
+    source_sha256: sourceSha256,
+    status: status as AnnualModelDiscovery["status"],
+    prompt_version: "annual_discovery_v1",
+    model_called: modelCalled,
+    model_call_count: modelCallCount,
+    model_call_attempt_count: modelCallAttemptCount,
+    coverage,
+    findings,
+    evidences,
+    audit_artifacts: auditArtifacts,
+    limitations,
+    reason,
+    fraud_conclusion: null,
+  };
+}
+
+function readDiscoveryCoverage(value: unknown, path: string, status: string): AnnualDiscoveryCoverage {
+  const record = requireRecord(value, path);
+  exactKeys(record, [
+    "total_pages", "text_pages", "total_blocks", "total_chars", "planned_batches", "processed_batches",
+    "successful_batches", "failed_batches", "batch_results", "processed_chars", "attempted_chars",
+    "unattempted_batches", "unattempted_chars", "planned_chars", "omitted_chars", "unread_pages",
+    "failed_pages", "no_text_pages", "image_pages", "unread_image_pages", "truncated", "complete",
+    "source_status", "content_status", "time_budget_exhausted", "text_only_scope",
+  ], path);
+  const countNames = [
+    "total_pages", "text_pages", "total_blocks", "total_chars", "planned_batches", "processed_batches",
+    "successful_batches", "failed_batches", "processed_chars", "attempted_chars", "unattempted_batches",
+    "unattempted_chars", "planned_chars", "omitted_chars",
+  ] as const;
+  const counts = Object.fromEntries(countNames.map((key) => [key, safeNonNegativeInteger(record[key], `${path}.${key}`)])) as Record<(typeof countNames)[number], number>;
+  const truncated = requireBoolean(record.truncated, `${path}.truncated`);
+  const complete = requireBoolean(record.complete, `${path}.complete`);
+  const timeBudgetExhausted = requireBoolean(record.time_budget_exhausted, `${path}.time_budget_exhausted`);
+  const sourceStatus = requireString(record.source_status, `${path}.source_status`);
+  const contentStatus = requireString(record.content_status, `${path}.content_status`);
+  const textOnlyScope = requireString(record.text_only_scope, `${path}.text_only_scope`);
+  if (
+    sourceStatus !== "parsed" && sourceStatus !== "unavailable" ||
+    contentStatus !== "text_available" && contentStatus !== "no_extractable_text" && contentStatus !== "unavailable" ||
+    textOnlyScope.length > 200 || counts.total_pages > 100_000 || counts.text_pages > counts.total_pages ||
+    counts.planned_batches > 128 || counts.processed_batches > counts.planned_batches || counts.total_chars < 0
+  ) throw invalidResponse(`${path} 的范围或来源状态无效`);
+  const pageLists = {} as Record<"unread_pages" | "failed_pages" | "no_text_pages" | "image_pages" | "unread_image_pages", number[]>;
+  for (const field of ["unread_pages", "failed_pages", "no_text_pages", "image_pages", "unread_image_pages"] as const) {
+    const items = requireArray(record[field], `${path}.${field}`).map((page, index) =>
+      safeNonNegativeInteger(page, `${path}.${field}[${index}]`),
+    );
+    if (
+      items.length > counts.total_pages || items.some((page) => page < 1 || page > counts.total_pages) ||
+      new Set(items).size !== items.length || items.some((page, index) => index > 0 && items[index - 1] >= page)
+    ) throw invalidResponse(`${path}.${field} 页码列表无效`);
+    pageLists[field] = items;
+  }
+  const pageSet = (field: keyof typeof pageLists) => new Set(pageLists[field]);
+  const noText = pageSet("no_text_pages");
+  const imagePages = pageSet("image_pages");
+  const unreadImagePages = pageSet("unread_image_pages");
+  const failedPages = pageSet("failed_pages");
+  const unreadPages = pageSet("unread_pages");
+  if (
+    counts.text_pages + pageLists.no_text_pages.length !== counts.total_pages ||
+    [...unreadImagePages].some((page) => !imagePages.has(page) || !noText.has(page)) ||
+    [...failedPages].some((page) => !unreadPages.has(page)) ||
+    (contentStatus === "text_available" && counts.total_chars === 0) ||
+    (contentStatus === "no_extractable_text" && counts.total_chars !== 0)
+  ) throw invalidResponse(`${path} 页码或内容计数关系无效`);
+  const rawBatchResults = requireArray(record.batch_results, `${path}.batch_results`);
+  const batchResults = rawBatchResults.map((item, index) => readDiscoveryBatchResult(item, `${path}.batch_results[${index}]`, counts.total_pages));
+  if (sourceStatus === "unavailable") {
+    if (
+      contentStatus !== "unavailable" || countNames.some((field) => counts[field] !== 0) ||
+      Object.values(pageLists).some((items) => items.length > 0) || complete || truncated || timeBudgetExhausted ||
+      batchResults.length > 0 || status !== "failed" && status !== "not_called"
+    ) throw invalidResponse(`${path} 不可用来源不能包含虚构覆盖`);
+  } else {
+    if (
+      contentStatus === "unavailable" || counts.processed_batches !== counts.successful_batches + counts.failed_batches ||
+      counts.unattempted_batches !== counts.planned_batches - counts.processed_batches ||
+      counts.planned_chars > counts.total_chars || counts.planned_chars > DISCOVERY_MAX_CHARS ||
+      counts.attempted_chars > counts.planned_chars || counts.unattempted_chars > counts.planned_chars ||
+      counts.processed_chars > counts.attempted_chars || counts.processed_chars > counts.planned_chars ||
+      counts.omitted_chars !== Math.max(counts.total_chars - counts.planned_chars, 0) + counts.unattempted_chars ||
+      batchResults.length !== counts.planned_batches
+    ) throw invalidResponse(`${path} 批次/字符计数关系无效`);
+    const seen = new Set<number>();
+    const chars = { succeeded: 0, failed: 0, unattempted: 0 };
+    const batchPageSets = { succeeded: new Set<number>(), failed: new Set<number>(), unattempted: new Set<number>() };
+    for (const batch of batchResults) {
+      if (seen.has(batch.batch_index) || batch.batch_index > counts.planned_batches) throw invalidResponse(`${path} 批次编号重复或越界`);
+      seen.add(batch.batch_index);
+      chars[batch.status] += batch.raw_chars;
+      batch.pages.forEach((page) => batchPageSets[batch.status].add(page));
+      if ((batch.batch_index <= counts.processed_batches) === (batch.status === "unattempted")) {
+        throw invalidResponse(`${path} 批次顺序与结束状态不一致`);
+      }
+    }
+    const successCount = batchResults.filter((batch) => batch.status === "succeeded").length;
+    const failedCount = batchResults.filter((batch) => batch.status === "failed").length;
+    const unattemptedCount = batchResults.filter((batch) => batch.status === "unattempted").length;
+    if (
+      seen.size !== counts.planned_batches || chars.succeeded + chars.failed + chars.unattempted !== counts.planned_chars ||
+      chars.succeeded !== counts.processed_chars || chars.succeeded + chars.failed !== counts.attempted_chars ||
+      chars.unattempted !== counts.unattempted_chars || successCount !== counts.successful_batches ||
+      failedCount !== counts.failed_batches || unattemptedCount !== counts.unattempted_batches ||
+      [...batchPageSets.failed].some((page) => !failedPages.has(page) || !unreadPages.has(page)) ||
+      [...batchPageSets.unattempted].some((page) => !unreadPages.has(page)) ||
+      batchPageSets.failed.size !== failedPages.size ||
+      [...failedPages].some((page) => !batchPageSets.failed.has(page)) ||
+      truncated !== Boolean(counts.omitted_chars || counts.unattempted_batches || counts.unattempted_chars)
+    ) throw invalidResponse(`${path} 批次结果与汇总不一致`);
+  }
+  const expectedComplete = sourceStatus === "parsed" && contentStatus === "text_available" && counts.total_chars > 0 &&
+    !truncated && pageLists.unread_image_pages.length === 0 && counts.planned_chars === counts.total_chars &&
+    counts.processed_batches === counts.planned_batches && counts.failed_batches === 0 &&
+    counts.successful_batches === counts.planned_batches && counts.processed_chars === counts.planned_chars &&
+    pageLists.unread_pages.length === 0;
+  if (
+    complete !== expectedComplete || status === "completed" && !expectedComplete ||
+    status === "partial" && (expectedComplete || counts.successful_batches === 0) ||
+    status === "failed" && sourceStatus === "parsed" && (counts.failed_batches === 0 || counts.successful_batches !== 0) ||
+    status === "not_called" && sourceStatus === "parsed" && counts.processed_batches !== 0
+  ) throw invalidResponse(`${path} 完成状态与覆盖不一致`);
+  return {
+    ...counts,
+    batch_results: batchResults,
+    unread_pages: pageLists.unread_pages,
+    failed_pages: pageLists.failed_pages,
+    no_text_pages: pageLists.no_text_pages,
+    image_pages: pageLists.image_pages,
+    unread_image_pages: pageLists.unread_image_pages,
+    truncated,
+    complete,
+    source_status: sourceStatus as AnnualDiscoveryCoverage["source_status"],
+    content_status: contentStatus as AnnualDiscoveryCoverage["content_status"],
+    time_budget_exhausted: timeBudgetExhausted,
+    text_only_scope: textOnlyScope,
+  };
+}
+
+function readDiscoveryBatchResult(value: unknown, path: string, totalPages: number): AnnualDiscoveryBatchResult {
+  const record = requireRecord(value, path);
+  exactKeys(record, ["batch_index", "status", "reason", "pages", "raw_chars"], path);
+  const index = safeNonNegativeInteger(record.batch_index, `${path}.batch_index`);
+  const status = requireString(record.status, `${path}.status`);
+  const reason = nullableString(record.reason, `${path}.reason`);
+  const rawChars = safeNonNegativeInteger(record.raw_chars, `${path}.raw_chars`);
+  const pages = requireArray(record.pages, `${path}.pages`).map((page, pageIndex) => safeNonNegativeInteger(page, `${path}.pages[${pageIndex}]`));
+  if (
+    index < 1 || status !== "succeeded" && status !== "failed" && status !== "unattempted" ||
+    rawChars < 1 || rawChars > 12_000 || pages.length === 0 ||
+    pages.some((page) => page < 1 || page > totalPages) || new Set(pages).size !== pages.length ||
+    pages.some((page, position) => position > 0 && pages[position - 1] >= page) ||
+    status === "succeeded" && reason !== null ||
+    status !== "succeeded" && (reason === null || !/^[a-z][a-z0-9_]{0,99}$/.test(reason))
+  ) throw invalidResponse(`${path} 字段无效`);
+  return { batch_index: index, status, reason, pages, raw_chars: rawChars };
+}
+
+function readDiscoveryEvidence(
+  value: unknown,
+  path: string,
+  expectedDocumentId: string,
+  expectedSha256: string,
+  totalPages: number,
+): AnnualDiscoveryEvidence {
+  const record = requireRecord(value, path);
+  exactKeys(record, ["evidence_id", "source_document_id", "source_sha256", "pdf_page", "block_index", "start_char", "bbox", "raw_text"], path);
+  const evidenceId = requireString(record.evidence_id, `${path}.evidence_id`);
+  const sourceDocumentId = requireString(record.source_document_id, `${path}.source_document_id`);
+  const sourceSha256 = requireString(record.source_sha256, `${path}.source_sha256`).toLowerCase();
+  const page = safeNonNegativeInteger(record.pdf_page, `${path}.pdf_page`);
+  const blockIndex = safeNonNegativeInteger(record.block_index, `${path}.block_index`);
+  const startChar = safeNonNegativeInteger(record.start_char, `${path}.start_char`);
+  const rawText = requireString(record.raw_text, `${path}.raw_text`);
+  const idMatch = evidenceId.match(new RegExp(`^adisc-${expectedSha256.slice(0, 12)}-p([1-9][0-9]*)-b([0-9]+)-c([0-9]+)-[0-9a-f]{12}$`));
+  if (
+    sourceDocumentId !== expectedDocumentId || sourceSha256 !== expectedSha256.toLowerCase() ||
+    !SHA256_PATTERN.test(sourceSha256) || page < 1 || page > totalPages || rawText.trim() === "" || rawText.length > 1200 ||
+    idMatch === null || Number(idMatch[1]) !== page || Number(idMatch[2]) !== blockIndex || Number(idMatch[3]) !== startChar
+  ) throw invalidResponse(`${path} 来源、文本或坐标 ID 无效`);
+  return {
+    evidence_id: evidenceId,
+    source_document_id: sourceDocumentId,
+    source_sha256: sourceSha256,
+    pdf_page: page,
+    block_index: blockIndex,
+    start_char: startChar,
+    bbox: readBox(record.bbox, `${path}.bbox`),
+    raw_text: rawText,
+  };
+}
+
+function readDiscoveryFinding(
+  value: unknown,
+  path: string,
+  sourceSha256: string,
+  evidenceById: Map<string, AnnualDiscoveryEvidence>,
+): AnnualDiscoveryFinding {
+  const record = requireRecord(value, path);
+  exactKeys(record, ["finding_id", "title", "observation", "why_it_matters", "follow_up", "priority", "classification", "verification_status", "evidence_ids", "citations"], path);
+  const findingId = requireString(record.finding_id, `${path}.finding_id`);
+  const priority = requireString(record.priority, `${path}.priority`);
+  if (
+    !new RegExp(`^disc:${sourceSha256.slice(0, 12)}-[0-9a-f]{20}$`).test(findingId) ||
+    priority !== "high" && priority !== "medium" && priority !== "low" ||
+    record.classification !== "unverified_model_finding" || record.verification_status !== "unverified"
+  ) throw invalidResponse(`${path} 标识、优先级或核验状态无效`);
+  const opinion = {} as Pick<AnnualDiscoveryFinding, "title" | "observation" | "why_it_matters" | "follow_up">;
+  for (const [field, limit] of [["title", 100], ["observation", 600], ["why_it_matters", 400], ["follow_up", 400]] as const) {
+    const text = requireString(record[field], `${path}.${field}`);
+    if (!text.trim() || text.length > limit || /[0-9]/.test(text) || /[\u0000-\u001f\u007f]/.test(text)) {
+      throw invalidResponse(`${path}.${field} 不符合观点文本限制`);
+    }
+    opinion[field] = text;
+  }
+  const evidenceIds = requireArray(record.evidence_ids, `${path}.evidence_ids`).map((item, index) => requireString(item, `${path}.evidence_ids[${index}]`));
+  const citations = requireArray(record.citations, `${path}.citations`).map((item, index) => {
+    const citationPath = `${path}.citations[${index}]`;
+    const citation = requireRecord(item, citationPath);
+    exactKeys(citation, ["evidence_id", "quote"], citationPath);
+    const evidenceId = requireString(citation.evidence_id, `${citationPath}.evidence_id`);
+    const quote = requireString(citation.quote, `${citationPath}.quote`);
+    const evidence = evidenceById.get(evidenceId);
+    if (!evidence || !quote.trim() || quote.trim().length < 2 || quote.length > 300 || !evidence.raw_text.includes(quote)) {
+      throw invalidResponse(`${citationPath} 不是本批原文中的有效引用`);
+    }
+    return { evidence_id: evidenceId, quote };
+  });
+  if (
+    citations.length < 1 || citations.length > 4 || evidenceIds.length !== citations.length ||
+    new Set(evidenceIds).size !== evidenceIds.length ||
+    [...new Set(citations.map((citation) => citation.evidence_id))].length !== citations.length ||
+    evidenceIds.some((id) => !citations.some((citation) => citation.evidence_id === id))
+  ) throw invalidResponse(`${path} 引用 ID 与 evidence_ids 不一致`);
+  return {
+    finding_id: findingId,
+    ...opinion,
+    priority,
+    classification: "unverified_model_finding",
+    verification_status: "unverified",
+    evidence_ids: evidenceIds,
+    citations,
+  };
+}
+
+function readDiscoveryAuditArtifact(value: unknown, path: string): AnnualDiscoveryAuditArtifact {
+  const record = requireRecord(value, path);
+  exactKeys(record, ["batch_index", "audit_dir", "request_path", "response_path", "failure_path", "status", "prompt_version"], path);
+  const batchIndex = safeNonNegativeInteger(record.batch_index, `${path}.batch_index`);
+  const status = requireString(record.status, `${path}.status`);
+  const promptVersion = requireString(record.prompt_version, `${path}.prompt_version`);
+  const paths = {} as Pick<AnnualDiscoveryAuditArtifact, "audit_dir" | "request_path" | "response_path" | "failure_path">;
+  for (const key of ["audit_dir", "request_path", "response_path", "failure_path"] as const) {
+    const pathValue = nullableString(record[key], `${path}.${key}`);
+    if (pathValue !== null && !safeAuditPath(pathValue)) throw invalidResponse(`${path}.${key} 不安全`);
+    paths[key] = pathValue;
+  }
+  if (
+    batchIndex < 1 || batchIndex > 128 ||
+    status !== "started" && status !== "succeeded" && status !== "failed" && status !== "incomplete" ||
+    promptVersion !== "annual_discovery_v1"
+  ) throw invalidResponse(`${path} 状态无效`);
+  return { batch_index: batchIndex, ...paths, status, prompt_version: "annual_discovery_v1" };
+}
+
+function readDiscoveryEvidenceIndex(
+  value: unknown,
+  layer: AnnualModelDiscovery | null,
+  runId: string,
+  sourceDocumentId: string,
+  sourceSha256: string,
+): AnnualDiscoveryEvidenceIndex {
+  const record = requireRecord(value, "discovery_evidences");
+  exactKeys(record, ["interpretation_label", "items"], "discovery_evidences");
+  if (record.interpretation_label !== DISCOVERY_INTERPRETATION_LABEL) throw invalidResponse("discovery_evidences.interpretation_label");
+  const items = requireArray(record.items, "discovery_evidences.items").map((value, index) => {
+    const path = `discovery_evidences.items[${index}]`;
+    const itemRecord = requireRecord(value, path);
+    exactKeys(itemRecord, [
+      "evidence_id", "source_document_id", "source_sha256", "pdf_page", "block_index", "start_char", "bbox", "raw_text",
+      "finding_ids", "citations", "preview_url",
+    ], path);
+    if (layer === null) throw invalidResponse("无顶层发现时不能包含原文定位项目");
+    const evidenceFields = ["evidence_id", "source_document_id", "source_sha256", "pdf_page", "block_index", "start_char", "bbox", "raw_text"];
+    const evidenceValue = Object.fromEntries(evidenceFields.map((field) => [field, itemRecord[field]]));
+    const evidence = readDiscoveryEvidence(evidenceValue, path, sourceDocumentId, sourceSha256, layer.coverage.total_pages);
+    const findingIds = requireArray(itemRecord.finding_ids, `${path}.finding_ids`).map((id, idIndex) => requireString(id, `${path}.finding_ids[${idIndex}]`));
+    const citations = requireArray(itemRecord.citations, `${path}.citations`).map((citationValue, citationIndex) => {
+      const citationPath = `${path}.citations[${citationIndex}]`;
+      const citation = requireRecord(citationValue, citationPath);
+      exactKeys(citation, ["finding_id", "quote"], citationPath);
+      return {
+        finding_id: requireString(citation.finding_id, `${citationPath}.finding_id`),
+        quote: requireString(citation.quote, `${citationPath}.quote`),
+      };
+    });
+    const previewUrl = requireString(itemRecord.preview_url, `${path}.preview_url`);
+    const expectedUrl = `/v1/annual-analyses/${runId}/discovery-evidences/${encodeURIComponent(evidence.evidence_id)}/preview.png`;
+    if (
+      previewUrl !== expectedUrl || findingIds.length === 0 ||
+      new Set(findingIds).size !== findingIds.length || findingIds.some((id, idx) => idx > 0 && findingIds[idx - 1] >= id)
+    ) throw invalidResponse(`${path} 的引用关系或预览路径无效`);
+    return { ...evidence, finding_ids: findingIds, citations, preview_url: previewUrl };
+  });
+  if (layer === null) {
+    if (items.length > 0) throw invalidResponse("旧报告不能包含未绑定的发现原文");
+    return { interpretation_label: DISCOVERY_INTERPRETATION_LABEL, items: [] };
+  }
+  const expectedEvidenceById = new Map(layer.evidences.map((evidence) => [evidence.evidence_id, evidence]));
+  const expectedCitationByEvidence = new Map<string, Array<{ finding_id: string; quote: string }>>();
+  for (const finding of layer.findings) {
+    for (const citation of finding.citations) {
+      const refs = expectedCitationByEvidence.get(citation.evidence_id) ?? [];
+      refs.push({ finding_id: finding.finding_id, quote: citation.quote });
+      expectedCitationByEvidence.set(citation.evidence_id, refs);
+    }
+  }
+  if (items.length !== expectedEvidenceById.size) throw invalidResponse("发现原文索引与报告证据数量不一致");
+  const seen = new Set<string>();
+  for (const item of items) {
+    if (seen.has(item.evidence_id)) throw invalidResponse("发现原文索引包含重复 evidence_id");
+    seen.add(item.evidence_id);
+    const expected = expectedEvidenceById.get(item.evidence_id);
+    const expectedRefs = expectedCitationByEvidence.get(item.evidence_id) ?? [];
+    const expectedFindingIds = [...new Set(expectedRefs.map((item) => item.finding_id))].sort();
+    if (
+      expected === undefined || !sameDiscoveryEvidence(item, expected) ||
+      !sameJsonValue(item.finding_ids, expectedFindingIds) ||
+      !sameJsonValue([...item.citations].sort(compareDiscoveryCitation), [...expectedRefs].sort(compareDiscoveryCitation))
+    ) throw invalidResponse("发现原文索引与本次模型发现引用不一致");
+  }
+  return { interpretation_label: DISCOVERY_INTERPRETATION_LABEL, items };
+}
+
+function sameDiscoveryEvidence(left: AnnualDiscoveryEvidence, right: AnnualDiscoveryEvidence): boolean {
+  return left.evidence_id === right.evidence_id && left.source_document_id === right.source_document_id &&
+    left.source_sha256 === right.source_sha256 && left.pdf_page === right.pdf_page &&
+    left.block_index === right.block_index && left.start_char === right.start_char &&
+    left.raw_text === right.raw_text && sameJsonValue(left.bbox, right.bbox);
+}
+
+function compareDiscoveryCitation(left: { finding_id: string; quote: string }, right: { finding_id: string; quote: string }): number {
+  return left.finding_id.localeCompare(right.finding_id) || left.quote.localeCompare(right.quote);
+}
+
+function safeAuditPath(value: string): boolean {
+  if (value.length > 500 || value.includes("\\") || value.startsWith("/")) return false;
+  const parts = value.split("/");
+  return parts.length >= 4 && parts[0] === "artifacts" && parts[1] === "runs" && parts.every((part) => part !== "" && part !== "." && part !== "..");
+}
+
+function exactKeys(record: Record<string, unknown>, expected: string[], path: string): void {
+  if (record === null || Object.keys(record).length !== expected.length || expected.some((key) => !Object.prototype.hasOwnProperty.call(record, key))) {
+    throw invalidResponse(`${path} 字段集合无效`);
+  }
+}
+
+function safeNonNegativeInteger(value: unknown, path: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw invalidResponse(path);
+  return value;
+}
+
+function sameJsonValue(left: unknown, right: unknown): boolean {
+  const canonical = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (typeof value !== "object" || value === null) return value;
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, canonical(item)]));
+  };
+  return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
 }
 
 function readSourceProvenance(value: unknown, sourceSha256: string): AnnualSourceProvenance {
@@ -447,6 +948,16 @@ function readReport(value: Record<string, unknown>, path: string): AnnualAnalysi
         : value.model_investigation === null
           ? null
           : requireRecord(value.model_investigation, path + ".model_investigation"),
+    model_discovery:
+      value.model_discovery === undefined
+        ? undefined
+        : readModelDiscovery(requireRecord(value.model_discovery, path + ".model_discovery"), path + ".model_discovery", {
+            runId,
+            companyId,
+            reportYear,
+            sourceDocumentId,
+            sourceSha256,
+          }),
     model_review: modelReview,
   };
 }
