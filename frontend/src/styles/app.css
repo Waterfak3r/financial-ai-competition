@@ -5795,3 +5795,479 @@ summary:focus-visible {
     justify-content: flex-start;
   }
 }
+
+.annual-job-reanalysis-note {
+  margin: 0.65rem 0;
+  padding: 0.65rem 0.75rem;
+  border-left: 3px solid #b88d43;
+  background: #fff8e9;
+  color: #594a2c;
+  line-height: 1.5;
+}
+
+.annual-discovery:focus,
+.annual-discovery-finding:focus {
+  outline: none;
+}
+
+.annual-discovery:focus-visible,
+.annual-discovery-finding:focus-visible {
+  outline: 3px solid var(--blue);
+  outline-offset: 3px;
+}
+
+.annual-discovery-overview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.8rem;
+  margin: 0.35rem 0 0.65rem;
+}
+
+.annual-discovery-count {
+  margin: 0;
+  color: #263f58;
+  font-size: 1.08rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.annual-discovery-count strong {
+  color: #145ebd;
+  font-size: 1.22rem;
+}
+
+.annual-discovery-priority-counts,
+.annual-discovery-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.annual-discovery-priority-counts > span {
+  padding: 0.2rem 0.5rem;
+  border-radius: 5px;
+  background: #eff3f7;
+  color: #53667a;
+  font-size: 0.86rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.annual-discovery-priority-counts > .priority-high {
+  background: #fff0e8;
+  color: #94492b;
+}
+
+.annual-discovery-priority-counts > .priority-medium {
+  background: #fff6df;
+  color: #7b5a1a;
+}
+
+.annual-discovery-coverage-alert,
+.annual-discovery-image-note {
+  margin: 0.45rem 0;
+  padding: 0.65rem 0.75rem;
+  border-left: 3px solid #b88d43;
+  background: #fff8e9;
+  color: #594a2c;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.annual-discovery-coverage-alert.is-complete {
+  border-left-color: #659175;
+  background: #f2f8f3;
+  color: #3d5945;
+}
+
+.annual-discovery-image-note {
+  border-left-width: 2px;
+  border-left-color: #8b9cac;
+  background: #f7f9fb;
+  color: #536579;
+  font-size: 0.9rem;
+}
+
+.annual-discovery-scan-details {
+  margin: 0.55rem 0 0.7rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid #dce5ed;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.annual-discovery-scan-details > summary,
+.annual-discovery-finding-details > summary {
+  color: #34526d;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.annual-discovery-scan-details > summary {
+  min-height: 2rem;
+  padding-block: 0.15rem;
+}
+
+.annual-discovery-coverage-metrics {
+  display: grid;
+  grid-template-columns: minmax(9rem, 0.35fr) minmax(0, 1fr);
+  gap: 0.3rem 0.7rem;
+  margin: 0.55rem 0;
+  font-size: 0.91rem;
+  line-height: 1.45;
+}
+
+.annual-discovery-coverage-metrics dt {
+  color: #5d6f82;
+  font-weight: 650;
+}
+
+.annual-discovery-coverage-metrics dd {
+  min-width: 0;
+  margin: 0;
+  color: #344e67;
+  overflow-wrap: anywhere;
+}
+
+.annual-discovery-page-groups {
+  display: grid;
+  gap: 0.32rem;
+  margin: 0.6rem 0;
+  padding-block: 0.55rem;
+  border-block: 1px solid #e3e9ef;
+}
+
+.annual-discovery-page-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.5rem;
+  min-width: 0;
+  color: #4d6176;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.annual-discovery-page-list strong {
+  color: #3f566e;
+}
+
+.annual-discovery-page-list details {
+  flex: 0 0 auto;
+}
+
+.annual-discovery-page-list details summary {
+  color: #1d66ba;
+  cursor: pointer;
+  font-size: 0.86rem;
+  text-decoration: underline;
+  text-underline-offset: 0.12em;
+}
+
+.annual-discovery-page-list details p {
+  max-width: 100%;
+  margin: 0.3rem 0;
+  color: #263d53;
+  overflow-wrap: anywhere;
+}
+
+.annual-discovery-batch-section {
+  margin-top: 0.65rem;
+}
+
+.annual-discovery-batch-section h4,
+.annual-discovery-limitations h4 {
+  margin: 0 0 0.4rem;
+  color: #3b536b;
+  font-size: 0.95rem;
+}
+
+.annual-discovery-batches {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+  padding-left: 1.45rem;
+}
+
+.annual-discovery-batches > li {
+  min-width: 0;
+  padding: 0.35rem 0.45rem;
+  border-left: 2px solid #d5e0e9;
+  background: #fff;
+}
+
+.annual-discovery-batch-heading {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.2rem 0.65rem;
+  color: #40566e;
+  font-size: 0.9rem;
+}
+
+.annual-discovery-batch-counts {
+  margin: 0.18rem 0;
+  color: #536579;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.annual-discovery-batch-reason,
+.annual-discovery-technical-note {
+  margin: 0.3rem 0 0;
+  color: #874c3f;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.annual-discovery-technical-note p {
+  margin: 0;
+}
+
+.annual-discovery-limitations {
+  margin-top: 0.7rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid #e3e9ef;
+}
+
+.annual-discovery-limitations ul {
+  margin: 0.35rem 0 0;
+  padding-left: 1.2rem;
+}
+
+.annual-discovery-limitations li {
+  margin-top: 0.25rem;
+  color: #4f6276;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.annual-discovery-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.55rem 0.75rem;
+  margin: 0.75rem 0 0.35rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid #e1e7ed;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.annual-discovery-toolbar label {
+  display: grid;
+  gap: 0.24rem;
+  min-width: 10rem;
+  color: #435a72;
+  font-size: 0.86rem;
+  font-weight: 650;
+}
+
+.annual-discovery-toolbar label:first-child {
+  flex: 1 1 18rem;
+}
+
+.annual-discovery-toolbar input,
+.annual-discovery-toolbar select {
+  width: 100%;
+  min-height: 2.45rem;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid #cbd6e0;
+  border-radius: 6px;
+  background: #fff;
+  color: #263d53;
+  font: inherit;
+  font-size: 0.92rem;
+}
+
+.annual-discovery-toolbar input:focus-visible,
+.annual-discovery-toolbar select:focus-visible {
+  outline: 3px solid #1677ff;
+  outline-offset: 2px;
+}
+
+.annual-discovery-clear {
+  min-height: 2.4rem;
+  padding: 0.35rem 0.5rem;
+  border: 0;
+  background: transparent;
+  color: #1d66ba;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 650;
+  text-decoration: underline;
+  text-underline-offset: 0.12em;
+}
+
+.annual-discovery-clear:disabled {
+  color: #8391a0;
+  cursor: default;
+}
+
+.annual-discovery-filter-count {
+  align-self: center;
+  margin: 0;
+  color: #536579;
+  font-size: 0.88rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.annual-discovery-findings {
+  gap: 0.45rem;
+  margin-top: 0.55rem;
+}
+
+.annual-discovery-finding {
+  gap: 0.35rem;
+  padding: 0.7rem 0.8rem;
+  border: 0;
+  border-left: 3px solid #ccdae6;
+  border-radius: 3px 8px 8px 3px;
+  background: #f8fafc;
+  scroll-margin-top: 0.75rem;
+}
+
+.annual-discovery-finding-heading {
+  align-items: center;
+  gap: 0.35rem 0.65rem;
+}
+
+.annual-discovery-finding-heading h4 {
+  font-size: 1rem;
+  line-height: 1.4;
+}
+
+.annual-discovery-badges {
+  justify-content: flex-end;
+}
+
+.annual-discovery-badges .annual-discovery-unverified,
+.annual-discovery-badges .annual-discovery-priority {
+  width: fit-content;
+  padding: 0.16rem 0.45rem;
+  font-size: 0.78rem;
+}
+
+.annual-discovery-observation {
+  font-size: 0.96rem;
+  line-height: 1.5;
+}
+
+.annual-discovery-page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.42rem;
+  min-width: 0;
+  color: #5d6f82;
+  font-size: 0.84rem;
+}
+
+.annual-discovery-page-action {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  max-width: 100%;
+}
+
+.annual-discovery-page-link {
+  min-height: 2rem;
+  padding: 0.18rem 0.45rem;
+  border-radius: 5px;
+  font-size: 0.86rem;
+}
+
+.annual-discovery-invalid-reference {
+  color: #874c3f;
+  font-size: 0.84rem;
+  overflow-wrap: anywhere;
+}
+
+.annual-discovery-finding-details {
+  margin-top: 0.1rem;
+}
+
+.annual-discovery-finding-details > summary {
+  width: fit-content;
+  min-height: 1.9rem;
+  padding-block: 0.2rem;
+  color: #1d66ba;
+  font-size: 0.9rem;
+  text-decoration: underline;
+  text-underline-offset: 0.12em;
+}
+
+.annual-discovery-finding-details .annual-discovery-opinions {
+  margin-top: 0.4rem;
+}
+
+.annual-discovery-finding-details .annual-discovery-citations {
+  margin-top: 0.55rem;
+}
+
+@media (max-width: 620px) {
+  .annual-discovery-overview {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .annual-discovery-coverage-metrics {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.1rem;
+  }
+
+  .annual-discovery-coverage-metrics dd {
+    margin-bottom: 0.32rem;
+  }
+
+  .annual-discovery-toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: end;
+    gap: 0.4rem 0.5rem;
+  }
+
+  .annual-discovery-toolbar label,
+  .annual-discovery-toolbar label:first-child {
+    min-width: 0;
+  }
+
+  .annual-discovery-toolbar label:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .annual-discovery-toolbar label:nth-child(2) {
+    grid-column: 1;
+  }
+
+  .annual-discovery-clear {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .annual-discovery-filter-count {
+    grid-column: 3;
+    justify-self: end;
+    white-space: nowrap;
+  }
+
+  .annual-discovery-finding-heading {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .annual-discovery-badges {
+    justify-content: flex-start;
+  }
+
+  .annual-discovery-page-link {
+    width: auto;
+    min-height: 2rem;
+  }
+}

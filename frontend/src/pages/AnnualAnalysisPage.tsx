@@ -430,15 +430,16 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
   async function submitJob(
     requestFactory: () => Promise<AnnualAnalysisJobRequest> | AnnualAnalysisJobRequest,
     action: Exclude<JobAction, null>,
+    requestedMode: AnnualAnalysisJobRequest["mode"] = mode,
   ) {
     if (jobSubmitLock.current || jobRefreshLock.current) {
       return;
     }
-    if (modeUsesModel(mode) && modelDiscoverySupported !== true) {
+    if (modeUsesModel(requestedMode) && modelDiscoverySupported !== true) {
       setJobError("AI 全文分析不可用：当前后端尚未加载全文分析版本，请重启后端。标准分析和本地试行筛查仍可使用。");
       return;
     }
-    if (modeUsesModel(mode) && modelCapability !== "ready") {
+    if (modeUsesModel(requestedMode) && modelCapability !== "ready") {
       setJobError(
         modelCapability === "not_configured"
           ? "AI 分析不可用：后端尚未配置云端模型。标准分析仍可单独运行。"
@@ -554,10 +555,10 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
   }
 
   async function onRetryJob() {
-    if (job === null || !isFailedJob(job)) {
+    if (job === null || !canReanalyzeJob(job)) {
       return;
     }
-    await submitJob(() => job.request, "retrying");
+    await submitJob(() => job.request, "retrying", job.request.mode);
   }
 
   async function onRefreshJob() {
@@ -1718,12 +1719,17 @@ function JobStatusPanel({
         {` 公司代码 ${job.request.company_id}，报告年份 ${job.request.report_year}。`}
         {terminal ? " 处理状态已稳定。" : " 页面会自动更新处理状态。"}
       </p>
+      {job.status === "completed_with_issues" ? (
+        <p className="annual-job-reanalysis-note" role="note">
+          点击“重新分析这份报告”会用同一来源创建新任务，当前报告归档会保留；这不是续跑失败批次。AI 模式会重新发送整份年报中可提取的文字，并可能产生费用。
+        </p>
+      ) : null}
       {job.discovery_progress === undefined ? null : (
         <div className="annual-discovery-progress" role="status" aria-live="polite">
           <strong>全文发现扫描进度</strong>
           <p>
             已结束 {job.discovery_progress.processed_batches}/{job.discovery_progress.planned_batches} 批；
-            成功 {job.discovery_progress.successful_batches} 批，失败 {job.discovery_progress.failed_batches} 批。
+            完整通过 {job.discovery_progress.successful_batches} 批、部分有效 {job.discovery_progress.partial_batches} 批、失败 {job.discovery_progress.failed_batches} 批。
             {job.discovery_progress.total_chars > 0 ? ` 原文共 ${formatInteger(job.discovery_progress.total_chars)} 个字符。` : ""}
           </p>
           <p>{discoveryProgressStatusText(job.discovery_progress.status, job.discovery_progress.event, job.status)}</p>
@@ -1746,9 +1752,11 @@ function JobStatusPanel({
         </div>
       ) : null}
       <div className="annual-job-actions annual-job-status-actions">
-        {isFailedJob(job) ? (
+        {canReanalyzeJob(job) ? (
           <button type="button" className="primary" disabled={action !== null} onClick={onRetry}>
-            {action === "retrying" ? "正在重新提交…" : "重新提交同一来源"}
+            {action === "retrying"
+              ? job.status === "completed_with_issues" ? "正在创建新分析任务…" : "正在重新提交…"
+              : job.status === "completed_with_issues" ? "重新分析这份报告" : "重新提交同一来源"}
           </button>
         ) : null}
         <button type="button" className="secondary" disabled={action !== null} onClick={onRefresh}>
@@ -1780,9 +1788,12 @@ function AnnualDiscoverySection({
   legacyInvestigationRecorded,
   modelReview,
   previewBusyId,
-  visibleCount,
-  onShowMore,
-  onCollapse,
+  query,
+  priority,
+  expandedFindings,
+  onQueryChange,
+  onPriorityChange,
+  onToggleFinding,
   onPreview,
 }: {
   discovery: AnnualModelDiscovery | null;
@@ -1792,9 +1803,12 @@ function AnnualDiscoverySection({
   legacyInvestigationRecorded: boolean;
   modelReview: AnnualAnalysisModelReview | null;
   previewBusyId: string | null;
-  visibleCount: number;
-  onShowMore: () => void;
-  onCollapse: () => void;
+  query: string;
+  priority: AnnualModelDiscovery["findings"][number]["priority"] | "all";
+  expandedFindings: Set<string>;
+  onQueryChange: (value: string) => void;
+  onPriorityChange: (value: AnnualModelDiscovery["findings"][number]["priority"] | "all") => void;
+  onToggleFinding: (findingId: string, isOpen: boolean) => void;
   onPreview: (evidenceId: string, findingId: string) => void;
 }) {
   const findings = discovery?.findings ?? [];
@@ -1804,12 +1818,40 @@ function AnnualDiscoverySection({
   const isLegacyAiArchive = discovery === null && legacyAiMode;
   const hasDiscoveryFindings = findings.length > 0;
   const coverage = discovery?.coverage ?? null;
+  const partialBatchCount = coverage === null ? 0 : discoveryPartialBatchCount(coverage);
+  const batchOutcomeLabels = coverage === null ? [] : [
+    coverage.successful_batches > 0 ? `${coverage.successful_batches} 批完整通过` : "",
+    partialBatchCount > 0 ? `${partialBatchCount} 批部分有效` : "",
+    coverage.failed_batches > 0 ? `${coverage.failed_batches} 批失败` : "",
+    coverage.unattempted_batches > 0 ? `${coverage.unattempted_batches} 批未尝试` : "",
+  ].filter(Boolean);
   const pendingReviewFailed = modelReview?.status === "failed" || modelReview?.status === "not_called";
+  const priorityCounts = {
+    high: findings.filter((finding) => finding.priority === "high").length,
+    medium: findings.filter((finding) => finding.priority === "medium").length,
+    low: findings.filter((finding) => finding.priority === "low").length,
+  };
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const filteredFindings = findings.filter((finding) => {
+    if (priority !== "all" && finding.priority !== priority) return false;
+    if (normalizedQuery === "") return true;
+    const searchableText = [
+      finding.title,
+      finding.observation,
+      finding.why_it_matters,
+      finding.follow_up,
+      ...finding.citations.flatMap((citation) => [
+        citation.quote,
+        evidenceById.get(citation.evidence_id)?.raw_text ?? "",
+      ]),
+    ].join(" ").toLocaleLowerCase();
+    return searchableText.includes(normalizedQuery);
+  });
   return (
     <section id="annual-discovery" className="panel annual-section annual-discovery" aria-labelledby="annual-discovery-title" tabIndex={-1}>
       <div className="annual-section-heading">
         <div>
-          <p className="eyebrow">独立全文文字扫描 · 模型观点未经独立语义核验</p>
+          <p className="eyebrow">独立全文文字扫描 · 仅可提取文字</p>
           <h3 id="annual-discovery-title">AI 待核查线索</h3>
         </div>
         {discovery === null ? <span className="review-chip">{hasLegacyAiRecord ? "旧版候选 AI 调查已归档" : isLegacyAiArchive ? "旧版 AI 模式归档" : "未运行"}</span> : <span className={"annual-discovery-status is-" + discovery.status}>{discoveryStatusLabel(discovery.status)}</span>}
@@ -1827,30 +1869,83 @@ function AnnualDiscoverySection({
         )
       ) : (
         <>
-          <div className="annual-discovery-coverage" aria-label="全文扫描覆盖">
+          {findings.length > 0 ? (
+            <div className="annual-discovery-overview" aria-label="线索概况">
+              <p className="annual-discovery-count">共 <strong>{findings.length}</strong> 条待核查线索</p>
+              <div className="annual-discovery-priority-counts" aria-label="按核查顺序统计">
+                <span className="priority-high">优先 {priorityCounts.high}</span>
+                <span className="priority-medium">随后 {priorityCounts.medium}</span>
+                <span className="priority-low">一般 {priorityCounts.low}</span>
+              </div>
+            </div>
+          ) : null}
+          <p className={`annual-discovery-coverage-alert${coverage?.complete ? " is-complete" : " is-incomplete"}`} role="note">
+            {coverage?.source_status === "unavailable"
+              ? `年报文本解析不可用，未规划扫描批次。模型尝试 ${discovery.model_call_attempt_count} 次、收到响应 ${discovery.model_call_count} 次；这些计数不表示文字已处理。`
+              : coverage?.complete
+                ? `扫描已处理全部可提取文字：${coverage.successful_batches}/${coverage.planned_batches} 批完整通过。`
+                : coverage !== null && (coverage.successful_batches > 0 || partialBatchCount > 0)
+                  ? `扫描未完整：${coverage.processed_batches}/${coverage.planned_batches} 批已结束；${batchOutcomeLabels.join("、")}；${partialBatchCount > 0 ? "保留的部分线索仍可查看；" : ""}文字覆盖未完整。`
+                  : `扫描未完成：没有成功处理的全文批次。${findings.length} 条已保存线索仍可查看；模型响应计数不代表扫描覆盖。`}
+          </p>
+          <details className="annual-discovery-scan-details">
+            <summary>扫描详情</summary>
             {coverage?.source_status === "unavailable" ? (
-              <p>年报文本解析不可用，未规划可核查批次。模型尝试 {discovery.model_call_attempt_count} 次，收到响应 {discovery.model_call_count} 次；这些计数不表示文字已处理。</p>
-            ) : (
+              <p className="annual-discovery-technical-note">年报文本解析不可用，未规划批次。模型尝试 {discovery.model_call_attempt_count} 次、收到响应 {discovery.model_call_count} 次；收到响应不等于成功处理了年报文字。</p>
+            ) : coverage !== null ? (
               <>
-                <p>
-                  可提取文字 {formatInteger(coverage?.total_chars ?? 0)} 字符，来自 {coverage?.text_pages ?? 0}/{coverage?.total_pages ?? 0} 页；
-                  已结束 {coverage?.processed_batches ?? 0}/{coverage?.planned_batches ?? 0} 批，成功 {coverage?.successful_batches ?? 0} 批，失败 {coverage?.failed_batches ?? 0} 批。
-                </p>
-                <p>
-                  {coverage?.complete ? "已处理全部可提取文字。" : coverage?.successful_batches === 0 ? "没有成功处理的全文批次。" : "全文扫描有未完成或失败部分。"}
-                  {coverage?.unattempted_batches ? " 尚未尝试 " + coverage.unattempted_batches + " 批。" : ""}
-                  {coverage?.truncated ? " 文字覆盖因批次数或字符预算存在截断。" : ""}
-                </p>
-                <p>
-                  年报图片内容未做 OCR；含图页 {coverage?.image_pages.length ?? 0} 页。
-                  {coverage?.unread_image_pages.length ? " 无可提取文字的图片页：" + coverage.unread_image_pages.join("、") + "。" : ""}
-                  {coverage?.no_text_pages.length && !coverage?.unread_image_pages.length ? " 无可提取文字页：" + coverage.no_text_pages.join("、") + "。" : ""}
-                </p>
-                {coverage?.unread_pages.length ? <p>未完整处理页码：{coverage.unread_pages.join("、")}。</p> : null}
-                {coverage?.failed_pages.length ? <p>失败批次涉及页码：{coverage.failed_pages.join("、")}。</p> : null}
+                <dl className="annual-discovery-coverage-metrics">
+                  <dt>可提取文字</dt><dd>{formatInteger(coverage.total_chars)} 字符，{formatInteger(coverage.total_blocks)} 个文字块</dd>
+                  <dt>文字页 / PDF 总页数</dt><dd>{coverage.text_pages} / {coverage.total_pages} 页</dd>
+                  <dt>字符处理进度</dt><dd>成功处理 {formatInteger(coverage.processed_chars)}，尝试 {formatInteger(coverage.attempted_chars)}，计划 {formatInteger(coverage.planned_chars)}，省略 {formatInteger(coverage.omitted_chars)} 字符</dd>
+                  <dt>扫描范围</dt><dd>{coverage.text_only_scope}</dd>
+                  <dt>OCR / 图片页</dt><dd>此流程不做 OCR；含图片页不等于整页没有可提取文字。</dd>
+                  <dt>预算状态</dt><dd>{coverage.time_budget_exhausted ? "达到时间预算" : coverage.truncated ? "文字覆盖有截断" : coverage.complete ? "可提取文字覆盖完整" : "存在未完成批次或页面"}</dd>
+                </dl>
+                <div className="annual-discovery-page-groups" aria-label="覆盖页码明细">
+                  <DiscoveryPageList label="未完整处理页码" pages={coverage.unread_pages} />
+                  <DiscoveryPageList label="失败批次涉及页码" pages={coverage.failed_pages} />
+                  <DiscoveryPageList label="无可提取文字页" pages={coverage.no_text_pages} />
+                  <DiscoveryPageList label="无可提取文字的图片页" pages={coverage.unread_image_pages} />
+                  <DiscoveryPageList label="含图片页（不代表整页未读）" pages={coverage.image_pages} />
+                </div>
+                {coverage.batch_results.length > 0 ? (
+                  <div className="annual-discovery-batch-section">
+                    <h4>每批处理记录</h4>
+                    <ol className="annual-discovery-batches">
+                      {coverage.batch_results.map((batch) => (
+                        <li key={batch.batch_index}>
+                          <div className="annual-discovery-batch-heading">
+                            <strong>第 {batch.batch_index} 批 · {discoveryBatchStatusText(batch.status)}</strong>
+                            <span>{formatInteger(batch.raw_chars)} 字符</span>
+                          </div>
+                          {batch.accepted_findings !== undefined || batch.rejected_findings !== undefined || batch.restored_quotes !== undefined ? (
+                            <p className="annual-discovery-batch-counts">
+                              保留线索 {formatInteger(batch.accepted_findings ?? 0)} · 剔除线索 {formatInteger(batch.rejected_findings ?? 0)} · 还原空白格式的引用 {formatInteger(batch.restored_quotes ?? 0)}
+                            </p>
+                          ) : null}
+                          <DiscoveryPageList label="批次页码" pages={batch.pages} />
+                          {batch.reason ? <DiscoveryReason reason={batch.reason} labelPrefix="批次说明" /> : null}
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                ) : null}
+                {discovery.prompt_version === "annual_discovery_v2" ? (
+                  <p className="annual-discovery-technical-note">
+                    部分有效表示仅保留通过格式和原文引用检查的线索，仍可能有内容被剔除；不代表整批完整处理或模型观点已核验。空白还原只修复引用中的换行和空格格式。
+                  </p>
+                ) : null}
               </>
-            )}
-          </div>
+            ) : null}
+            {discovery.reason ? <DiscoveryReason reason={discovery.reason} labelPrefix="扫描状态" /> : null}
+            {discovery.limitations.length > 0 ? (
+              <div className="annual-discovery-limitations">
+                <h4>限制与未完成项</h4>
+                <ul>{discovery.limitations.map((item, index) => <li key={index + "-" + item}>{item}</li>)}</ul>
+              </div>
+            ) : null}
+          </details>
           {hasDiscoveryFindings && pendingReviewFailed ? (
             <p className="annual-discovery-review-gap" role="note">
               全文扫描已保留 {findings.length} 条待核查线索，但最终评审未完成；线索和原文出处仍可在本区查看。
@@ -1858,72 +1953,212 @@ function AnnualDiscoverySection({
           ) : null}
           {findings.length === 0 ? (
             <p className="annual-discovery-empty">
-              {coverage?.successful_batches
+              {coverage !== null && (coverage.successful_batches > 0 || partialBatchCount > 0)
                 ? "本次没有提出带有效原文引用的具体待核查线索；这不代表整份年报没有风险。"
                 : "没有成功扫描的全文批次，因此没有可展示的动态线索；这不代表整份年报没有风险。"}
             </p>
           ) : (
             <>
-              <p className="annual-discovery-priority-note">核查优先级只表示建议的阅读顺序，不是风险概率或已核验结论。每条引用可打开对应 PDF 页图；原文卡片显示的是被引文本片段，不保证构成完整段落。</p>
+              <div className="annual-discovery-toolbar">
+                <label>
+                  <span>搜索线索</span>
+                  <input
+                    type="search"
+                    value={query}
+                    onChange={(event) => onQueryChange(event.target.value)}
+                    placeholder="标题、观察、核查说明或引用原文"
+                    aria-label="搜索线索标题与内容"
+                  />
+                </label>
+                <label>
+                  <span>核查顺序</span>
+                  <select
+                    value={priority}
+                    onChange={(event) => onPriorityChange(event.target.value as typeof priority)}
+                    aria-label="按核查顺序筛选线索"
+                  >
+                    <option value="all">全部优先级</option>
+                    <option value="high">优先</option>
+                    <option value="medium">随后</option>
+                    <option value="low">一般</option>
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className="text-button annual-discovery-clear"
+                  onClick={() => { onQueryChange(""); onPriorityChange("all"); }}
+                  disabled={query === "" && priority === "all"}
+                >清空筛选</button>
+                <p className="annual-discovery-filter-count" role="status" aria-live="polite">显示 {filteredFindings.length} / {findings.length} 条</p>
+              </div>
+              <p className="annual-discovery-priority-note">核查顺序是建议阅读先后，不是风险概率。</p>
+              {filteredFindings.length === 0 ? (
+                <p className="annual-discovery-empty" role="status">
+                  {normalizedQuery !== "" || priority !== "all"
+                    ? "没有符合当前搜索和筛选条件的线索。清空筛选可查看全部归档条目。"
+                    : "没有带有效原文引用的具体待核查线索；这不代表整份年报没有风险。"}
+                </p>
+              ) : null}
               <div className="annual-discovery-findings">
-                {findings.slice(0, visibleCount).map((finding) => (
+                {filteredFindings.map((finding) => {
+                  const pageCitations = Array.from(new Map(finding.citations.map((citation) => [citation.evidence_id, citation])).values());
+                  const pageCounts = new Map<number, number>();
+                  pageCitations.forEach((citation) => {
+                    const evidence = evidenceById.get(citation.evidence_id);
+                    if (evidence !== undefined) pageCounts.set(evidence.pdf_page, (pageCounts.get(evidence.pdf_page) ?? 0) + 1);
+                  });
+                  const pageOrdinals = new Map<number, number>();
+                  return (
                   <article className="annual-discovery-finding" id={"annual-discovery-" + finding.finding_id} key={finding.finding_id} tabIndex={-1}>
                     <header className="annual-discovery-finding-heading">
                       <div>
                         <h4>{finding.title}</h4>
+                      </div>
+                      <div className="annual-discovery-badges">
+                        <span className={"annual-discovery-priority priority-" + finding.priority}>核查顺序：{priorityText(finding.priority)}</span>
                         <span className="annual-discovery-unverified">待核查 · 模型观点</span>
                       </div>
-                      <span className={"annual-discovery-priority priority-" + finding.priority}>核查顺序：{priorityText(finding.priority)}</span>
                     </header>
                     <p className="annual-discovery-observation">{finding.observation}</p>
-                    <dl className="annual-discovery-opinions">
-                      <dt>关注理由</dt><dd>{finding.why_it_matters}</dd>
-                      <dt>后续核查</dt><dd>{finding.follow_up}</dd>
-                    </dl>
-                    <div className="annual-discovery-citations">
-                      <h5>年报原文引用</h5>
-                      {finding.citations.map((citation, index) => {
+                    <div className="annual-discovery-page-actions" aria-label={`${finding.title} 的原文页码和定位`}>
+                      <strong>原文页码：</strong>
+                      {pageCitations.map((citation, index) => {
                         const evidence = evidenceById.get(citation.evidence_id);
+                        const pageOrdinal = evidence === undefined ? 0 : (pageOrdinals.get(evidence.pdf_page) ?? 0) + 1;
+                        if (evidence !== undefined) pageOrdinals.set(evidence.pdf_page, pageOrdinal);
+                        const fragmentLabel = evidence !== undefined && (pageCounts.get(evidence.pdf_page) ?? 0) > 1 ? ` · 片段 ${pageOrdinal}` : "";
                         return (
-                          <section className="annual-discovery-citation" key={citation.evidence_id + "-" + index}>
-                            <blockquote className="annual-discovery-quote">{citation.quote}</blockquote>
+                          <span className="annual-discovery-page-action" key={citation.evidence_id + "-" + index}>
                             {evidence === undefined ? (
-                              <p className="annual-discovery-invalid-reference">原文出处未通过当前报告来源校验，未请求页图。</p>
+                              <span className="annual-discovery-invalid-reference">出处未通过来源校验，未请求页图</span>
                             ) : (
-                              <>
-                                <button type="button" className="secondary annual-discovery-page-link" onClick={() => onPreview(evidence.evidence_id, finding.finding_id)} disabled={previewBusyId === evidence.evidence_id}>
-                                  {previewBusyId === evidence.evidence_id ? "正在打开…" : "查看 PDF 第 " + evidence.pdf_page + " 页原文定位"}
-                                </button>
-                                <p className="annual-discovery-fragment-label">被引用文本片段（完整片段，不代表完整段落）</p>
-                                <pre className="annual-discovery-fragment">{evidence.raw_text}</pre>
-                                <small className="annual-discovery-source-meta">页码 {evidence.pdf_page} · 来源块 {evidence.block_index}</small>
-                              </>
+                              <button type="button" className="secondary annual-discovery-page-link" onClick={() => onPreview(evidence.evidence_id, finding.finding_id)} disabled={previewBusyId === evidence.evidence_id}>
+                                {previewBusyId === evidence.evidence_id ? "正在打开…" : `PDF 第 ${evidence.pdf_page} 页${fragmentLabel} · 查看原文`}
+                              </button>
                             )}
-                          </section>
+                          </span>
                         );
                       })}
                     </div>
+                    <details
+                      className="annual-discovery-finding-details"
+                      open={expandedFindings.has(finding.finding_id)}
+                      onToggle={(event) => onToggleFinding(finding.finding_id, event.currentTarget.open)}
+                    >
+                      <summary>关注理由、后续核查与 {finding.citations.length} 处原文引用</summary>
+                      <dl className="annual-discovery-opinions">
+                        <dt>关注理由</dt><dd>{finding.why_it_matters}</dd>
+                        <dt>后续核查</dt><dd>{finding.follow_up}</dd>
+                      </dl>
+                      <div className="annual-discovery-citations">
+                        <h5>引用原文（仅用于定位，模型观点尚未独立核验）</h5>
+                        {finding.citations.map((citation, index) => {
+                          const evidence = evidenceById.get(citation.evidence_id);
+                          return (
+                            <section className="annual-discovery-citation" key={citation.evidence_id + "-detail-" + index}>
+                              <blockquote className="annual-discovery-quote">{citation.quote}</blockquote>
+                              {evidence === undefined ? (
+                                <p className="annual-discovery-invalid-reference">原文出处未通过当前报告来源校验，未提供片段或页图。</p>
+                              ) : (
+                                <>
+                                  <p className="annual-discovery-fragment-label">被引用文本片段（不是对完整段落的保证）</p>
+                                  <pre className="annual-discovery-fragment">{evidence.raw_text}</pre>
+                                  <small className="annual-discovery-source-meta">PDF 第 {evidence.pdf_page} 页 · 来源块 {evidence.block_index}</small>
+                                </>
+                              )}
+                            </section>
+                          );
+                        })}
+                      </div>
+                    </details>
                   </article>
-                ))}
+                  );
+                })}
               </div>
-              {visibleCount < findings.length ? (
-                <button type="button" className="secondary annual-discovery-more" onClick={onShowMore}>
-                  再显示 8 条（剩余 {findings.length - visibleCount} 条）
-                </button>
-              ) : findings.length > 8 ? (
-                <button type="button" className="secondary annual-discovery-more" onClick={onCollapse}>收起到前 8 条</button>
-              ) : null}
             </>
           )}
-          {discovery.limitations.length > 0 ? (
-            <details className="annual-discovery-limitations">
-              <summary>本层限制与未完成事项（{discovery.limitations.length}）</summary>
-              <ul>{discovery.limitations.map((item, index) => <li key={index + "-" + item}>{item}</li>)}</ul>
-            </details>
-          ) : null}
         </>
       )}
     </section>
+  );
+}
+
+function DiscoveryPageList({ label, pages }: { label: string; pages: number[] }) {
+  if (pages.length === 0) return null;
+  const compact = compactPageRanges(pages);
+  return (
+    <div className="annual-discovery-page-list">
+      <strong>{label}：</strong><span>{compact}</span>
+      <details>
+        <summary>查看全部 {pages.length} 个页码</summary>
+        <p>{[...pages].sort((left, right) => left - right).join("、")}</p>
+      </details>
+    </div>
+  );
+}
+
+function compactPageRanges(pages: number[]): string {
+  const sorted = [...new Set(pages)].sort((left, right) => left - right);
+  if (sorted.length === 0) return "无";
+  const ranges: string[] = [];
+  let start = sorted[0];
+  let end = start;
+  for (const page of sorted.slice(1)) {
+    if (page === end + 1) {
+      end = page;
+      continue;
+    }
+    ranges.push(start === end ? `${start}` : `${start}–${end}`);
+    start = page;
+    end = page;
+  }
+  ranges.push(start === end ? `${start}` : `${start}–${end}`);
+  return ranges.join("、");
+}
+
+function discoveryBatchStatusText(status: string): string {
+  if (status === "succeeded") return "完整通过";
+  if (status === "partial") return "部分有效";
+  return status === "failed" ? "失败" : "未尝试";
+}
+
+function discoveryPartialBatchCount(coverage: AnnualModelDiscovery["coverage"]): number {
+  const value = (coverage as typeof coverage & { partial_batches?: unknown }).partial_batches;
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0;
+}
+
+function DiscoveryReason({ reason, labelPrefix }: { reason: string; labelPrefix: string }) {
+  const labels: Record<string, string> = {
+    invalid_model_json: "模型返回内容无法按 JSON 格式读取",
+    model_response_too_large: "模型回应超过允许长度",
+    invalid_model_schema: "模型回应未符合字段结构要求",
+    findings_invalid: "线索字段格式不符合要求",
+    limitations_invalid: "限制说明格式不符合要求",
+    all_findings_rejected: "本批线索均未通过结构、字段或原文引用检查",
+    invalid_model_response: "模型回应未通过结构与引用检查",
+    limitation_invalid: "限制说明格式不符合要求",
+    limitation_contains_unquoted_digit: "限制说明中的数字应放在原文引用中",
+    limitation_contains_control_character: "限制说明含有无法读取的字符",
+    definitive_conclusion_forbidden: "模型回应包含本流程不允许的定性结论",
+    batch_missing: "批次处理记录不完整",
+    model_call_failed: "本批次未能取得模型回应",
+    model_call_timeout: "本批次等待模型回应超时",
+    serialized_input_limit_breached: "本批次文字超过输入长度限制",
+    some_findings_rejected: "部分线索未通过结构、字段或原文引用检查；其余有效线索已保留",
+    workflow_time_budget_exhausted: "扫描达到本次处理时间预算",
+  };
+  const machineCode = /^[a-z][a-z0-9_]*$/.test(reason);
+  const label = labels[reason] ?? (machineCode ? "扫描环节未完整完成，请查看批次记录" : reason);
+  return (
+    <div className="annual-discovery-technical-note">
+      <p>{labelPrefix}：{label}</p>
+      {machineCode ? (
+        <details className="annual-technical-record">
+          <summary>技术代码</summary>
+          <code>{reason}</code>
+        </details>
+      ) : null}
+    </div>
   );
 }
 
@@ -1933,14 +2168,7 @@ function discoverySummary(discovery: AnnualModelDiscovery | null, mode: string |
     if (mode === "deterministic" || mode === "m3_screening" || mode === "integrated_analysis") return "本次未运行 AI 全文发现。下面的基础年度比较仅覆盖固定财务指标。";
     return "本次归档没有全文发现层；不得据此推断年报已经扫描。";
   }
-  const coverage = discovery.coverage;
-  const result = discovery.status === "completed"
-    ? coverage.complete ? "全文批次已完成" : "调用状态完成，但文字覆盖不完整"
-    : discovery.status === "partial" ? "扫描部分完成" : discovery.status === "failed" ? "扫描失败" : "未调用扫描";
-  const findingText = discovery.findings.length === 0
-    ? "没有带有效引用的具体模型线索"
-    : "模型提出 " + discovery.findings.length + " 条待核查线索：" + discovery.findings.slice(0, 3).map((item) => item.title).join("、") + (discovery.findings.length > 3 ? "等" : "");
-  return result + "；" + findingText + "。这些模型观点仍待人工或独立证据核对。";
+  return "模型观点尚未经过独立语义核验。";
 }
 
 function discoveryStatusLabel(status: AnnualModelDiscovery["status"]): string {
@@ -1975,7 +2203,9 @@ function AnnualReportView({
   const [exporting, setExporting] = useState<"json" | "markdown" | "html" | null>(null);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
-  const [discoveryVisibleCount, setDiscoveryVisibleCount] = useState(8);
+  const [discoveryQuery, setDiscoveryQuery] = useState("");
+  const [discoveryPriority, setDiscoveryPriority] = useState<AnnualModelDiscovery["findings"][number]["priority"] | "all">("all");
+  const [expandedDiscoveryFindings, setExpandedDiscoveryFindings] = useState<Set<string>>(() => new Set());
   const [pendingDiscoveryTarget, setPendingDiscoveryTarget] = useState<string | null>(null);
   const { report, manifest, verification_evidences: evidenceIndex } = response;
   const evidenceById = new Map(evidenceIndex.map((evidence) => [evidence.evidence_id, evidence]));
@@ -2020,7 +2250,9 @@ function AnnualReportView({
       : "原因尚未说明。";
 
   useEffect(() => {
-    setDiscoveryVisibleCount(8);
+    setDiscoveryQuery("");
+    setDiscoveryPriority("all");
+    setExpandedDiscoveryFindings(new Set());
     setPendingDiscoveryTarget(null);
   }, [discovery?.run_id]);
 
@@ -2031,14 +2263,24 @@ function AnnualReportView({
     target.scrollIntoView({ block: "start", behavior: "smooth" });
     target.focus({ preventScroll: true });
     setPendingDiscoveryTarget(null);
-  }, [pendingDiscoveryTarget, discoveryVisibleCount]);
+  }, [pendingDiscoveryTarget, discoveryQuery, discoveryPriority, expandedDiscoveryFindings]);
 
   const locateDiscoveryFinding = (findingId: string) => {
     if (discovery === null) return;
-    const index = discovery.findings.findIndex((item) => item.finding_id === findingId);
-    if (index < 0) return;
-    setDiscoveryVisibleCount((count) => Math.max(count, index + 1));
+    if (!discovery.findings.some((item) => item.finding_id === findingId)) return;
+    setDiscoveryQuery("");
+    setDiscoveryPriority("all");
+    setExpandedDiscoveryFindings((current) => new Set(current).add(findingId));
     setPendingDiscoveryTarget(findingId);
+  };
+
+  const toggleDiscoveryFinding = (findingId: string, isOpen: boolean) => {
+    setExpandedDiscoveryFindings((current) => {
+      const next = new Set(current);
+      if (isOpen) next.add(findingId);
+      else next.delete(findingId);
+      return next;
+    });
   };
 
   const downloadExport = async (format: "json" | "markdown" | "html") => {
@@ -2129,9 +2371,12 @@ function AnnualReportView({
         legacyInvestigationRecorded={historicInvestigationRecorded}
         modelReview={reportModelReview}
         previewBusyId={previewBusyId}
-        visibleCount={discoveryVisibleCount}
-        onShowMore={() => setDiscoveryVisibleCount((count) => Math.min(discovery?.findings.length ?? count, count + 8))}
-        onCollapse={() => setDiscoveryVisibleCount(8)}
+        query={discoveryQuery}
+        priority={discoveryPriority}
+        expandedFindings={expandedDiscoveryFindings}
+        onQueryChange={setDiscoveryQuery}
+        onPriorityChange={setDiscoveryPriority}
+        onToggleFinding={toggleDiscoveryFinding}
         onPreview={onDiscoveryPreview}
       />
 
@@ -4612,6 +4857,10 @@ function isSuccessfulJob(job: AnnualAnalysisJob): boolean {
 
 function isFailedJob(job: AnnualAnalysisJob): boolean {
   return job.status === "failed" || job.status === "interrupted";
+}
+
+function canReanalyzeJob(job: AnnualAnalysisJob): boolean {
+  return isFailedJob(job) || job.status === "completed_with_issues";
 }
 
 function jobStatusText(status: AnnualAnalysisJob["status"]): string {
