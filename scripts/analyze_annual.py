@@ -842,7 +842,7 @@ def _progress_writer(
     def write(event: dict[str, object]) -> None:
         expected_event_fields = {
             "event", "status", "batch_index", "planned_batches", "processed_batches",
-            "successful_batches", "failed_batches", "total_pages", "total_chars",
+            "successful_batches", "partial_batches", "failed_batches", "total_pages", "total_chars",
         }
         if set(event) != expected_event_fields:
             raise ValueError("discovery progress schema invalid")
@@ -850,7 +850,7 @@ def _progress_writer(
             raise ValueError("discovery progress state invalid")
         integer_fields = (
             "batch_index", "planned_batches", "processed_batches", "successful_batches",
-            "failed_batches", "total_pages", "total_chars",
+            "partial_batches", "failed_batches", "total_pages", "total_chars",
         )
         safe_event: dict[str, object] = {"event": event["event"], "status": event["status"]}
         for field in integer_fields:
@@ -860,12 +860,13 @@ def _progress_writer(
             safe_event[field] = value
         planned = int(safe_event["planned_batches"])
         processed = int(safe_event["processed_batches"])
+        successful = int(safe_event["successful_batches"])
+        partial = int(safe_event["partial_batches"])
         failed = int(safe_event["failed_batches"])
         if (
             planned > 128
             or processed > planned
-            or failed > processed
-            or int(safe_event["successful_batches"]) != max(processed - failed, 0)
+            or successful + partial + failed != processed
             or int(safe_event["batch_index"]) > planned
         ):
             raise ValueError("discovery progress relation invalid")

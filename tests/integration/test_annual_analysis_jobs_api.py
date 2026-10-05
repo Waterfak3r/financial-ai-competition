@@ -20,6 +20,7 @@ import finagent.api.annual_analysis_jobs as jobs_module
 from finagent.api.annual_analysis_jobs import CliResult
 from finagent.api.app import create_app
 from finagent.core.model_settings_store import save_local_settings
+from scripts import analyze_annual
 
 
 def _make_source(root: Path, *, document_id: str = "doc-1") -> dict[str, object]:
@@ -570,10 +571,70 @@ def test_discovery_progress_accepts_full_source_counts_and_rejects_unknown_field
 
     assert progress is not None
     assert progress["total_chars"] == 1_300_000
+    assert progress["partial_batches"] == 0  # Old progress records normalize to zero.
     assert "raw_text" not in progress
+    record.update(
+        event="batch_finished",
+        status="partial",
+        batch_index=1,
+        planned_batches=128,
+        processed_batches=1,
+        successful_batches=0,
+        partial_batches=1,
+        failed_batches=0,
+    )
+    progress_path.write_text(json.dumps(record), encoding="utf-8")
+    progress = jobs_module._read_discovery_progress(job_dir, job_id, state)
+    assert progress is not None
+    assert progress["partial_batches"] == 1
+    assert progress["successful_batches"] == 0
+    record["partial_batches"] = 0
+    progress_path.write_text(json.dumps(record), encoding="utf-8")
+    assert jobs_module._read_discovery_progress(job_dir, job_id, state) is None
     record["raw_text"] = "must never be accepted or returned"
     progress_path.write_text(json.dumps(record), encoding="utf-8")
     assert jobs_module._read_discovery_progress(job_dir, job_id, state) is None
+
+
+def test_discovery_progress_writer_persists_partial_as_incomplete_count_only_state(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "artifacts" / "runs" / "annual-analysis-progress-test"
+    job_dir = tmp_path / "artifacts" / "annual-analysis-jobs" / f"annual-job-{uuid4().hex}"
+    run_dir.mkdir(parents=True)
+    job_dir.mkdir(parents=True)
+    writer = analyze_annual._progress_writer(
+        run_dir,
+        job_dir / "discovery-progress.json",
+        run_id=run_dir.name,
+        company_id="603288",
+        report_year=2024,
+        document_id="doc-progress",
+        source_sha256="a" * 64,
+        job_id=job_dir.name,
+    )
+    event = {
+        "event": "batch_finished",
+        "status": "partial",
+        "batch_index": 1,
+        "planned_batches": 2,
+        "processed_batches": 1,
+        "successful_batches": 0,
+        "partial_batches": 1,
+        "failed_batches": 0,
+        "total_pages": 2,
+        "total_chars": 100,
+    }
+
+    writer(event)
+
+    for path in (run_dir / "discovery-progress.json", job_dir / "discovery-progress.json"):
+        record = json.loads(path.read_text(encoding="utf-8"))
+        assert record["partial_batches"] == 1
+        assert record["successful_batches"] + record["partial_batches"] + record["failed_batches"] == 1
+        assert "raw_text" not in record
+    with pytest.raises(ValueError, match="relation invalid"):
+        writer({**event, "successful_batches": 1})
 
 
 def test_running_model_job_exposes_only_its_source_bound_discovery_progress(
@@ -603,11 +664,12 @@ def test_running_model_job_exposes_only_its_source_bound_discovery_progress(
             "source_document_id": request["document_id"],
             "source_sha256": request["sha256"],
             "event": "batch_finished",
-            "status": "running",
+            "status": "partial",
             "batch_index": 1,
             "planned_batches": 8,
             "processed_batches": 1,
-            "successful_batches": 1,
+            "successful_batches": 0,
+            "partial_batches": 1,
             "failed_batches": 0,
             "total_pages": 208,
             "total_chars": 1_300_000,
@@ -637,6 +699,8 @@ def test_running_model_job_exposes_only_its_source_bound_discovery_progress(
         assert progress["event"] == "batch_finished"
         assert progress["planned_batches"] == 8
         assert progress["processed_batches"] == 1
+        assert progress["successful_batches"] == 0
+        assert progress["partial_batches"] == 1
         assert progress["total_chars"] == 1_300_000
         assert "source_sha256" not in progress
         assert "raw_text" not in progress

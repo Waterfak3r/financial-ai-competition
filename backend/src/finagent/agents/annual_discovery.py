@@ -21,7 +21,7 @@ from typing import Literal, TypedDict
 from finagent.audit import EvidenceRef, audited_complete_chat
 from finagent.audit.audited_chat import repository_runs_root
 from finagent.core.model_settings import ModelSettings
-from finagent.llm.chat_completion import ChatMessage
+from finagent.llm.chat_completion import ChatMessage, ModelResponseError
 from finagent.retrieval.annual_discovery_context import (
     MAX_BATCHES,
     MAX_SERIALIZED_INPUT_CHARS,
@@ -38,14 +38,15 @@ from finagent.retrieval.annual_discovery_context import (
     validate_annual_discovery_identity,
 )
 
-PROMPT_VERSION = "annual_discovery_v1"
+PROMPT_VERSION = "annual_discovery_v2"
+SUPPORTED_PROMPT_VERSIONS = frozenset({"annual_discovery_v1", "annual_discovery_v2"})
 MAX_FINDINGS_PER_BATCH = 6
 MAX_CITATIONS_PER_FINDING = 4
 MAX_QUOTE_CHARS = 300
 MAX_MODEL_RESPONSE_CHARS = 80000
 MAX_WORKFLOW_SECONDS = 1800.0
 _monotonic_clock = time.monotonic
-_PROMPT_PATH = Path(__file__).resolve().parents[4] / "config" / "prompts" / "annual_discovery_v1.md"
+_PROMPT_PATH = Path(__file__).resolve().parents[4] / "config" / "prompts" / "annual_discovery_v2.md"
 _DIGIT_RE = re.compile(r"[0-9]")
 _RUN_REPARSE_POINT = 0x400
 
@@ -126,6 +127,7 @@ class _ParsedFinding:
     follow_up: str
     priority: str
     citations: tuple[tuple[str, str], ...]
+    restored_quotes: int = 0
 
     def duplicate_key(self) -> str:
         return json.dumps(
@@ -165,6 +167,7 @@ class AnnualDiscoveryState(TypedDict, total=False):
     model_call_attempt_count: int
     processed_batches: int
     successful_batches: int
+    partial_batches: int
     failed_batches: int
     processed_chars: int
     attempted_chars: int
@@ -178,6 +181,41 @@ class AnnualDiscoveryState(TypedDict, total=False):
     progress_warning: bool
     not_called_reason: str | None
     budget_exhausted: bool
+
+
+@dataclass(frozen=True, slots=True)
+class AnnualDiscoveryParseResult:
+    findings: tuple[_ParsedFinding, ...]
+    limitations: tuple[str, ...]
+    rejected_findings: int
+    restored_quotes: int
+
+
+_SAFE_CONTAINER_FAILURES = frozenset(
+    {
+        "invalid_model_json",
+        "model_response_too_large",
+        "invalid_model_schema",
+        "findings_invalid",
+        "limitations_invalid",
+        "all_findings_rejected",
+        "invalid_model_response",
+        "limitation_invalid",
+        "limitation_contains_unquoted_digit",
+        "limitation_contains_control_character",
+        "definitive_conclusion_forbidden",
+    }
+)
+
+_SAFE_BATCH_FAILURES = frozenset(
+    {
+        *_SAFE_CONTAINER_FAILURES,
+        "batch_missing",
+        "model_call_failed",
+        "model_call_timeout",
+        "serialized_input_limit_breached",
+    }
+)
 
 
 def run_annual_discovery(
@@ -216,6 +254,7 @@ def run_annual_discovery(
             "model_call_attempt_count": 0,
             "processed_batches": 0,
             "successful_batches": 0,
+            "partial_batches": 0,
             "failed_batches": 0,
             "processed_chars": 0,
             "attempted_chars": 0,
@@ -354,6 +393,155 @@ def parse_annual_discovery_response(
         if limitation not in limitations:
             limitations.append(limitation)
     return tuple(parsed), tuple(limitations)
+
+
+def parse_annual_discovery_response_v2(
+    response_text: object, batch: DiscoveryBatch
+) -> AnnualDiscoveryParseResult:
+    """Validate a v2 container strictly while retaining independently valid findings."""
+
+    if not isinstance(response_text, str) or not response_text.strip():
+        raise ValueError("invalid_model_json")
+    if len(response_text) > MAX_MODEL_RESPONSE_CHARS:
+        raise ValueError("model_response_too_large")
+    try:
+        payload = json.loads(response_text, object_pairs_hook=_reject_duplicate_json_keys)
+    except (json.JSONDecodeError, _DuplicateJsonKey):
+        raise ValueError("invalid_model_json") from None
+    if not isinstance(payload, dict) or set(payload) != {"findings", "limitations"}:
+        raise ValueError("invalid_model_schema")
+
+    raw_findings = payload.get("findings")
+    if not isinstance(raw_findings, list) or len(raw_findings) > MAX_FINDINGS_PER_BATCH:
+        raise ValueError("findings_invalid")
+    raw_limitations = payload.get("limitations")
+    if not isinstance(raw_limitations, list) or len(raw_limitations) > 8:
+        raise ValueError("limitations_invalid")
+
+    fragments = {item.evidence_id: item for item in batch.fragments}
+    parsed: list[_ParsedFinding] = []
+    rejected = 0
+    for raw_finding in raw_findings:
+        try:
+            parsed.append(_parse_v2_finding(raw_finding, fragments))
+        except (ValueError, TypeError, KeyError):
+            rejected += 1
+
+    limitations: list[str] = []
+    for raw_limitation in raw_limitations:
+        limitation = _bounded_opinion_text(raw_limitation, "limitation", 400)
+        _reject_definitive_conclusion((limitation,))
+        if limitation not in limitations:
+            limitations.append(limitation)
+
+    return AnnualDiscoveryParseResult(
+        findings=tuple(parsed),
+        limitations=tuple(limitations),
+        rejected_findings=rejected,
+        restored_quotes=sum(item.restored_quotes for item in parsed),
+    )
+
+
+def _parse_v2_finding(
+    raw_finding: object, fragments: Mapping[str, DiscoveryFragment]
+) -> _ParsedFinding:
+    if not isinstance(raw_finding, dict) or set(raw_finding) != {
+        "title",
+        "observation",
+        "why_it_matters",
+        "follow_up",
+        "priority",
+        "citations",
+    }:
+        raise ValueError("finding_schema_invalid")
+    title = _bounded_opinion_text(raw_finding.get("title"), "title", 100)
+    observation = _bounded_opinion_text(raw_finding.get("observation"), "observation", 600)
+    why_it_matters = _bounded_opinion_text(
+        raw_finding.get("why_it_matters"), "why_it_matters", 400
+    )
+    follow_up = _bounded_opinion_text(raw_finding.get("follow_up"), "follow_up", 400)
+    _reject_definitive_conclusion((title, observation, why_it_matters, follow_up))
+    priority = raw_finding.get("priority")
+    if not isinstance(priority, str) or priority not in {"high", "medium", "low"}:
+        raise ValueError("priority_invalid")
+
+    citations_raw = raw_finding.get("citations")
+    if not isinstance(citations_raw, list) or not 1 <= len(citations_raw) <= MAX_CITATIONS_PER_FINDING:
+        raise ValueError("citations_invalid")
+    citations: list[tuple[str, str]] = []
+    evidence_ids: set[str] = set()
+    citation_pairs: set[tuple[str, str]] = set()
+    restored_quotes = 0
+    for citation in citations_raw:
+        if not isinstance(citation, dict) or set(citation) != {"evidence_id", "quote"}:
+            raise ValueError("citation_schema_invalid")
+        evidence_id = citation.get("evidence_id")
+        quote = citation.get("quote")
+        if not isinstance(evidence_id, str) or evidence_id not in fragments:
+            raise ValueError("citation_evidence_id_invalid")
+        if not isinstance(quote, str) or not quote.strip() or len(quote) > MAX_QUOTE_CHARS:
+            raise ValueError("citation_quote_invalid")
+        if len(quote.strip()) < 2:
+            raise ValueError("citation_quote_not_exact_source_substring")
+        source_text = fragments[evidence_id].raw_text
+        if quote not in source_text:
+            quote = _restore_whitespace_only_quote(quote, source_text)
+            if quote is None:
+                raise ValueError("citation_quote_not_exact_source_substring")
+            restored_quotes += 1
+        pair = (evidence_id, quote)
+        if pair in citation_pairs:
+            raise ValueError("citation_repeated")
+        citation_pairs.add(pair)
+        evidence_ids.add(evidence_id)
+        citations.append(pair)
+    return _ParsedFinding(
+        title=title,
+        observation=observation,
+        why_it_matters=why_it_matters,
+        follow_up=follow_up,
+        priority=priority,
+        citations=tuple(citations),
+        restored_quotes=restored_quotes,
+    )
+
+
+def _restore_whitespace_only_quote(quote: str, source_text: str) -> str | None:
+    """Recover one uniquely located exact substring after removing Unicode whitespace."""
+
+    normalized_quote = "".join(char for char in quote if not char.isspace())
+    if len(normalized_quote) < 2:
+        return None
+    normalized_source: list[str] = []
+    source_positions: list[int] = []
+    for index, char in enumerate(source_text):
+        if not char.isspace():
+            normalized_source.append(char)
+            source_positions.append(index)
+    normalized_text = "".join(normalized_source)
+    matches: list[int] = []
+    cursor = 0
+    while True:
+        position = normalized_text.find(normalized_quote, cursor)
+        if position < 0:
+            break
+        matches.append(position)
+        if len(matches) > 1:
+            return None
+        cursor = position + 1
+    if len(matches) != 1:
+        return None
+    start = matches[0]
+    end = start + len(normalized_quote)
+    recovered = source_text[source_positions[start] : source_positions[end - 1] + 1]
+    if (
+        len(recovered) > MAX_QUOTE_CHARS
+        or len(recovered.strip()) < 2
+        or recovered not in source_text
+        or "".join(char for char in recovered if not char.isspace()) != normalized_quote
+    ):
+        return None
+    return recovered
 
 
 def _plan_node(state: AnnualDiscoveryState) -> dict[str, object]:
@@ -547,6 +735,7 @@ def _batch_call_node(state: AnnualDiscoveryState) -> dict[str, object]:
                 batch_index=batch.batch_index,
                 planned_batches=len(batches),
                 processed_batches=state.get("processed_batches", 0),
+                partial_batches=state.get("partial_batches", 0),
                 failed_batches=state.get("failed_batches", 0),
                 total_pages=coverage.get("total_pages", 0),
                 total_chars=coverage.get("total_chars", 0),
@@ -576,6 +765,7 @@ def _batch_call_node(state: AnnualDiscoveryState) -> dict[str, object]:
         batch_index=batch.batch_index,
         planned_batches=len(state.get("batches", [])),
         processed_batches=state.get("processed_batches", 0),
+        partial_batches=state.get("partial_batches", 0),
         failed_batches=state.get("failed_batches", 0),
         total_pages=state.get("coverage", {}).get("total_pages", 0),
         total_chars=state.get("coverage", {}).get("total_chars", 0),
@@ -594,7 +784,7 @@ def _batch_call_node(state: AnnualDiscoveryState) -> dict[str, object]:
             prompt_version=PROMPT_VERSION,
             timeout_seconds=min(state["settings"].timeout_seconds, remaining_seconds),
         )
-    except Exception:
+    except Exception as exc:
         artifacts = _audit_artifacts_for_new_children(
             Path(state["run_dir"]), before, batch.batch_index
         )
@@ -606,7 +796,7 @@ def _batch_call_node(state: AnnualDiscoveryState) -> dict[str, object]:
             "model_call_attempt_count": attempts,
             "audit_artifacts": state.get("audit_artifacts", []) + artifacts,
             "call_succeeded": False,
-            "failure_code": "model_call_failed",
+            "failure_code": "model_call_timeout" if _is_timeout_exception(exc) else "model_call_failed",
             "attempted_chars": state.get("attempted_chars", 0) + batch.raw_chars,
             "progress_warning": state.get("progress_warning", False) or callback_warning,
         }
@@ -632,21 +822,29 @@ def _parse_check_node(state: AnnualDiscoveryState) -> dict[str, object]:
         return _finish_failed_batch(state, state.get("failure_code") or "model_call_failed")
 
     try:
-        parsed_findings, limitations = parse_annual_discovery_response(
+        parsed_result = parse_annual_discovery_response_v2(
             state.get("response_text"), batch
         )
-    except (ValueError, TypeError, KeyError):
-        return _finish_failed_batch(state, "invalid_model_response")
+    except (ValueError, TypeError, KeyError) as exc:
+        code = str(exc)
+        safe_code = code if code in _SAFE_CONTAINER_FAILURES else "invalid_model_response"
+        return _finish_failed_batch(state, safe_code)
+    if not parsed_result.findings and parsed_result.rejected_findings:
+        return _finish_failed_batch(
+            state,
+            "all_findings_rejected",
+            rejected_findings=parsed_result.rejected_findings,
+        )
 
     findings = list(state.get("findings", []))
     finding_keys = list(state.get("finding_keys", []))
-    for parsed in parsed_findings:
+    for parsed in parsed_result.findings:
         key = parsed.duplicate_key()
         if key in finding_keys:
             continue
         finding_keys.append(key)
         finding_id = _finding_id(str(state["identity"]["source_sha256"]), key)
-        evidence_ids = [evidence_id for evidence_id, _quote in parsed.citations]
+        evidence_ids = list(dict.fromkeys(evidence_id for evidence_id, _quote in parsed.citations))
         findings.append(
             {
                 "finding_id": finding_id,
@@ -666,21 +864,42 @@ def _parse_check_node(state: AnnualDiscoveryState) -> dict[str, object]:
         )
 
     merged_limitations = list(state.get("limitations", []))
-    for limitation in limitations:
+    for limitation in parsed_result.limitations:
         if limitation not in merged_limitations:
             merged_limitations.append(limitation)
+    if parsed_result.rejected_findings:
+        return _finish_partial_batch(
+            state,
+            findings=findings,
+            finding_keys=finding_keys,
+            limitations=merged_limitations,
+            accepted_findings=len(parsed_result.findings),
+            rejected_findings=parsed_result.rejected_findings,
+            restored_quotes=parsed_result.restored_quotes,
+        )
+
     coverage = dict(state.get("coverage", {}))
     processed = state.get("processed_batches", 0) + 1
     chars = state.get("processed_chars", 0) + batch.raw_chars
+    successful = state.get("successful_batches", 0) + 1
     coverage.update(
         {
             "processed_batches": processed,
-            "successful_batches": state.get("successful_batches", 0) + 1,
+            "successful_batches": successful,
+            "partial_batches": state.get("partial_batches", 0),
             "failed_batches": state.get("failed_batches", 0),
             "processed_chars": chars,
             "attempted_chars": state.get("attempted_chars", 0),
             "batch_results": list(state.get("coverage", {}).get("batch_results", []))
-            + [_batch_result(batch, "succeeded", None)],
+            + [
+                _batch_result(
+                    batch,
+                    "succeeded",
+                    None,
+                    accepted_findings=len(parsed_result.findings),
+                    restored_quotes=parsed_result.restored_quotes,
+                )
+            ],
         }
     )
     coverage["complete"] = coverage_is_complete(coverage)
@@ -692,6 +911,7 @@ def _parse_check_node(state: AnnualDiscoveryState) -> dict[str, object]:
             batch_index=batch.batch_index,
             planned_batches=len(state.get("batches", [])),
             processed_batches=processed,
+            partial_batches=state.get("partial_batches", 0),
             failed_batches=state.get("failed_batches", 0),
             total_pages=coverage.get("total_pages", 0),
             total_chars=coverage.get("total_chars", 0),
@@ -704,7 +924,7 @@ def _parse_check_node(state: AnnualDiscoveryState) -> dict[str, object]:
         "finding_keys": finding_keys,
         "limitations": merged_limitations,
         "processed_batches": processed,
-        "successful_batches": state.get("successful_batches", 0) + 1,
+        "successful_batches": successful,
         "processed_chars": chars,
         "coverage": coverage,
         "reason": state.get("reason"),
@@ -712,18 +932,107 @@ def _parse_check_node(state: AnnualDiscoveryState) -> dict[str, object]:
     }
 
 
-def _finish_failed_batch(state: AnnualDiscoveryState, failure_code: str) -> dict[str, object]:
+def _finish_partial_batch(
+    state: AnnualDiscoveryState,
+    *,
+    findings: list[dict[str, object]],
+    finding_keys: list[str],
+    limitations: list[str],
+    accepted_findings: int,
+    rejected_findings: int,
+    restored_quotes: int,
+) -> dict[str, object]:
     batch = state.get("current_batch")
+    if batch is None:
+        return _finish_failed_batch(state, "batch_missing")
+    processed = state.get("processed_batches", 0) + 1
+    partial = state.get("partial_batches", 0) + 1
+    coverage = dict(state.get("coverage", {}))
+    coverage.update(
+        {
+            "processed_batches": processed,
+            "successful_batches": state.get("successful_batches", 0),
+            "partial_batches": partial,
+            "failed_batches": state.get("failed_batches", 0),
+            "processed_chars": state.get("processed_chars", 0),
+            "attempted_chars": state.get("attempted_chars", 0),
+            "batch_results": list(coverage.get("batch_results", []))
+            + [
+                _batch_result(
+                    batch,
+                    "partial",
+                    "some_findings_rejected",
+                    accepted_findings=accepted_findings,
+                    rejected_findings=rejected_findings,
+                    restored_quotes=restored_quotes,
+                )
+            ],
+        }
+    )
+    unread_pages = set(coverage.get("unread_pages", []))
+    unread_pages.update(fragment.pdf_page for fragment in batch.fragments)
+    coverage["unread_pages"] = sorted(unread_pages)
+    coverage["complete"] = coverage_is_complete(coverage)
+    partial_limitation = "部分发现条目未通过严格字段或原文引用检查；该批次不计入完整处理字符。"
+    if partial_limitation not in limitations:
+        limitations.append(partial_limitation)
+    warning = _emit_progress(
+        state.get("progress_callback"),
+        _progress_event(
+            "batch_finished",
+            status="partial",
+            batch_index=batch.batch_index,
+            planned_batches=len(state.get("batches", [])),
+            processed_batches=processed,
+            partial_batches=partial,
+            failed_batches=state.get("failed_batches", 0),
+            total_pages=coverage.get("total_pages", 0),
+            total_chars=coverage.get("total_chars", 0),
+        ),
+    )
+    if warning and "progress_callback_failed" not in limitations:
+        limitations.append("progress_callback_failed")
+    return {
+        "findings": findings,
+        "finding_keys": finding_keys,
+        "limitations": limitations,
+        "processed_batches": processed,
+        "successful_batches": state.get("successful_batches", 0),
+        "partial_batches": partial,
+        "failed_batches": state.get("failed_batches", 0),
+        "processed_chars": state.get("processed_chars", 0),
+        "coverage": coverage,
+        "reason": state.get("reason") or "some_findings_rejected",
+        "progress_warning": state.get("progress_warning", False) or warning,
+    }
+
+
+def _finish_failed_batch(
+    state: AnnualDiscoveryState,
+    failure_code: str,
+    *,
+    rejected_findings: int = 0,
+) -> dict[str, object]:
+    batch = state.get("current_batch")
+    safe_failure_code = failure_code if failure_code in _SAFE_BATCH_FAILURES else "invalid_model_response"
     processed = state.get("processed_batches", 0) + 1
     failed = state.get("failed_batches", 0) + 1
     coverage = dict(state.get("coverage", {}))
     batch_results = list(coverage.get("batch_results", []))
     if batch is not None:
-        batch_results.append(_batch_result(batch, "failed", failure_code))
+        batch_results.append(
+            _batch_result(
+                batch,
+                "failed",
+                safe_failure_code,
+                rejected_findings=rejected_findings,
+            )
+        )
     coverage.update(
         {
             "processed_batches": processed,
             "successful_batches": state.get("successful_batches", 0),
+            "partial_batches": state.get("partial_batches", 0),
             "failed_batches": failed,
             "processed_chars": state.get("processed_chars", 0),
             "attempted_chars": state.get("attempted_chars", 0),
@@ -741,7 +1050,7 @@ def _finish_failed_batch(state: AnnualDiscoveryState, failure_code: str) -> dict
     limitations = list(state.get("limitations", []))
     safe_limitation = (
         "至少一个批次的模型调用失败。"
-        if failure_code == "model_call_failed"
+        if safe_failure_code in {"model_call_failed", "model_call_timeout"}
         else "至少一个批次的模型回应未通过严格结构或引用检查。"
     )
     if safe_limitation not in limitations:
@@ -754,6 +1063,7 @@ def _finish_failed_batch(state: AnnualDiscoveryState, failure_code: str) -> dict
             batch_index=batch.batch_index if batch else state.get("current_index", 0) + 1,
             planned_batches=len(state.get("batches", [])),
             processed_batches=processed,
+            partial_batches=state.get("partial_batches", 0),
             failed_batches=failed,
             total_pages=coverage.get("total_pages", 0),
             total_chars=coverage.get("total_chars", 0),
@@ -764,11 +1074,12 @@ def _finish_failed_batch(state: AnnualDiscoveryState, failure_code: str) -> dict
     return {
         "processed_batches": processed,
         "successful_batches": state.get("successful_batches", 0),
+        "partial_batches": state.get("partial_batches", 0),
         "failed_batches": failed,
         "processed_chars": state.get("processed_chars", 0),
         "coverage": coverage,
         "limitations": limitations,
-        "reason": state.get("reason") or failure_code,
+        "reason": state.get("reason") or safe_failure_code,
         "progress_warning": state.get("progress_warning", False) or warning,
     }
 
@@ -783,6 +1094,7 @@ def _finish_node(state: AnnualDiscoveryState) -> dict[str, object]:
         {
             "processed_batches": state.get("processed_batches", 0),
             "successful_batches": state.get("successful_batches", 0),
+            "partial_batches": state.get("partial_batches", 0),
             "failed_batches": state.get("failed_batches", 0),
             "processed_chars": state.get("processed_chars", 0),
             "attempted_chars": state.get("attempted_chars", 0),
@@ -795,18 +1107,27 @@ def _finish_node(state: AnnualDiscoveryState) -> dict[str, object]:
     elif state.get("overall_status") == "budget_exhausted":
         if state.get("model_call_attempt_count", 0) == 0:
             status = "not_called"
-        elif state.get("successful_batches", 0) == 0 and state.get("failed_batches", 0) > 0:
+        elif (
+            state.get("successful_batches", 0) == 0
+            and state.get("partial_batches", 0) == 0
+            and not state.get("findings", [])
+        ):
             status = "failed"
         else:
             status = "partial"
         reason = "workflow_time_budget_exhausted"
-    elif state.get("processed_batches", 0) == 0 and state.get("failed_batches", 0) > 0:
+    elif (
+        state.get("successful_batches", 0) == 0
+        and state.get("partial_batches", 0) == 0
+        and state.get("failed_batches", 0) > 0
+    ):
         status = "failed"
         reason = state.get("reason") or "all_batches_failed"
-    elif state.get("failed_batches", 0) == len(state.get("batches", [])) and state.get("batches", []):
-        status = "failed"
-        reason = state.get("reason") or "all_batches_failed"
-    elif state.get("failed_batches", 0) > 0 or not coverage.get("complete"):
+    elif (
+        state.get("partial_batches", 0) > 0
+        or state.get("failed_batches", 0) > 0
+        or not coverage.get("complete")
+    ):
         status = "partial"
         reason = state.get("reason") or (
             "batch_failures" if state.get("failed_batches", 0) else "coverage_incomplete"
@@ -1025,6 +1346,7 @@ def _progress_event(
     batch_index: int,
     planned_batches: int,
     processed_batches: int,
+    partial_batches: int = 0,
     failed_batches: int,
     total_pages: object,
     total_chars: object,
@@ -1036,20 +1358,40 @@ def _progress_event(
         "batch_index": batch_index,
         "planned_batches": planned_batches,
         "processed_batches": processed_batches,
-        "successful_batches": max(processed_batches - failed_batches, 0),
+        "successful_batches": max(processed_batches - partial_batches - failed_batches, 0),
+        "partial_batches": partial_batches,
         "failed_batches": failed_batches,
         "total_pages": total_pages,
         "total_chars": total_chars,
     }
 
 
-def _batch_result(batch: DiscoveryBatch, status: str, reason: str | None) -> dict[str, object]:
+def _is_timeout_exception(exc: BaseException) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    # ModelResponseError messages are fixed by the local transport adapter and
+    # never include provider response bodies, request URLs, or exception text.
+    return isinstance(exc, ModelResponseError) and str(exc) == "模型服务请求超时。"
+
+
+def _batch_result(
+    batch: DiscoveryBatch,
+    status: str,
+    reason: str | None,
+    *,
+    accepted_findings: int = 0,
+    rejected_findings: int = 0,
+    restored_quotes: int = 0,
+) -> dict[str, object]:
     return {
         "batch_index": batch.batch_index,
         "status": status,
         "reason": reason,
         "pages": sorted({fragment.pdf_page for fragment in batch.fragments}),
         "raw_chars": batch.raw_chars,
+        "accepted_findings": accepted_findings,
+        "rejected_findings": rejected_findings,
+        "restored_quotes": restored_quotes,
     }
 
 

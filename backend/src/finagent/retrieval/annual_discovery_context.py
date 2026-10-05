@@ -19,7 +19,6 @@ from typing import Any
 from finagent.ingestion.parse_text_pdf import parse_text_pdf
 from finagent.schemas.text_pdf import ParsedTextPdf, PdfBBox
 
-PROMPT_VERSION = "annual_discovery_v1"
 MAX_FRAGMENT_CHARS = 1200
 MAX_BATCH_RAW_CHARS = 12000
 MAX_SERIALIZED_INPUT_CHARS = 24000
@@ -299,6 +298,7 @@ def build_annual_discovery_context(
         "planned_batches": len(batches),
         "processed_batches": 0,
         "successful_batches": 0,
+        "partial_batches": 0,
         "failed_batches": 0,
         "batch_results": [],
         "processed_chars": 0,
@@ -373,6 +373,8 @@ def coverage_is_complete(coverage: Mapping[str, object]) -> bool:
     try:
         planned_batches = int(coverage["planned_batches"])
         processed_batches = int(coverage["processed_batches"])
+        partial_batches = int(coverage.get("partial_batches", 0))
+        successful_batches = int(coverage["successful_batches"])
         failed_batches = int(coverage["failed_batches"])
         planned_chars = int(coverage["planned_chars"])
         processed_chars = int(coverage["processed_chars"])
@@ -386,6 +388,8 @@ def coverage_is_complete(coverage: Mapping[str, object]) -> bool:
         and not coverage.get("unread_image_pages")
         and planned_chars == total_chars
         and processed_batches == planned_batches
+        and partial_batches == 0
+        and successful_batches == planned_batches
         and failed_batches == 0
         and processed_chars == planned_chars
     )
@@ -402,6 +406,7 @@ def empty_coverage() -> dict[str, object]:
         "planned_batches": 0,
         "processed_batches": 0,
         "successful_batches": 0,
+        "partial_batches": 0,
         "failed_batches": 0,
         "batch_results": [],
         "processed_chars": 0,

@@ -513,11 +513,11 @@ def _build_review_input(
             "discovery_coverage_complete": discovery_coverage.get("complete") is True,
             "discovery_truncated": discovery_coverage.get("truncated") is True,
             "discovery_coverage": {
-                key: discovery_coverage.get(key)
+                key: discovery_coverage.get(key, 0 if key == "partial_batches" else None)
                 for key in (
                     "total_pages", "text_pages", "total_blocks", "total_chars",
                     "planned_batches", "processed_batches", "successful_batches",
-                    "failed_batches", "processed_chars", "unread_pages", "failed_pages",
+                    "partial_batches", "failed_batches", "processed_chars", "unread_pages", "failed_pages",
                     "truncated", "complete", "no_text_pages", "image_pages",
                     "unread_image_pages", "text_only_scope",
                 )
@@ -650,6 +650,7 @@ def _build_review_input(
         and data["coverage"]["discovery_identity_matches"]
         and data["coverage"]["discovery_status"] == "completed"
         and data["coverage"]["discovery_coverage_complete"]
+        and data["coverage"]["discovery_coverage"].get("partial_batches", 0) == 0
         and not data["coverage"]["discovery_truncated"]
         and data["coverage"]["discovery_findings_count"] == 0
         and data["coverage"]["discovery_omitted_count"] == 0

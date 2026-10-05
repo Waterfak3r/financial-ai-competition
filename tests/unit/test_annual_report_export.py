@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from dataclasses import replace
@@ -14,6 +15,7 @@ import finagent.api.annual_report_export as annual_export_module
 from finagent.api.annual_report_export import AnnualReportExportError, export_annual_report
 from finagent.api.annual_report_read import AnnualReportReadError, load_annual_report
 from finagent.api.app import create_app
+from finagent.retrieval.annual_discovery_context import empty_coverage
 
 
 def _archive(root: Path, run_id: str = "export-test-001", *, mode: str = "integrated_analysis") -> dict[str, object]:
@@ -370,6 +372,50 @@ def test_html_and_markdown_escape_untrusted_html_and_links(tmp_path: Path) -> No
     assert "调查调用次数" in html and ">2</td>" in html
     assert "最终评审调用次数" in html and ">1</td>" in html
     assert "总调用尝试次数（含最终评审）" in html and ">4</td>" in html
+
+
+def test_v2_export_projection_preserves_partial_counts_and_rejects_unsafe_failure_codes() -> None:
+    coverage = empty_coverage()
+    coverage.update(
+        planned_batches=1,
+        processed_batches=1,
+        successful_batches=0,
+        partial_batches=1,
+        failed_batches=0,
+        batch_results=[{
+            "batch_index": 1,
+            "status": "partial",
+            "reason": "some_findings_rejected",
+            "pages": [1],
+            "raw_chars": 24,
+            "accepted_findings": 1,
+            "rejected_findings": 1,
+            "restored_quotes": 1,
+        }],
+    )
+    projected = annual_export_module._project_discovery_coverage(
+        coverage, "annual_discovery_v2"
+    )
+
+    assert projected is not None
+    assert projected["partial_batches"] == 1
+    assert projected["batch_results"][0]["accepted_findings"] == 1
+    assert projected["batch_results"][0]["rejected_findings"] == 1
+
+    unsafe = copy.deepcopy(coverage)
+    unsafe["successful_batches"] = 0
+    unsafe["partial_batches"] = 0
+    unsafe["failed_batches"] = 1
+    unsafe["batch_results"][0].update(
+        status="failed",
+        reason="private exception detail",
+        accepted_findings=0,
+        rejected_findings=0,
+        restored_quotes=0,
+    )
+    assert annual_export_module._project_discovery_coverage(
+        unsafe, "annual_discovery_v2"
+    ) is None
 
 
 def test_call_counter_projection_rejects_bool_negative_and_noninteger_values(tmp_path: Path) -> None:

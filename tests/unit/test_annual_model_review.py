@@ -291,7 +291,49 @@ def test_no_candidate_can_receive_scoped_no_priority_only_with_complete_verified
 
     assert review["status"] == "completed"
     assert review["assessment"] == "no_priority_issue_identified_within_scope"
-    assert json.loads(server.requests[0]["messages"][1]["content"])["coverage"]["no_priority_eligible"] is True
+    review_context = json.loads(server.requests[0]["messages"][1]["content"])
+    assert review_context["coverage"]["no_priority_eligible"] is True
+    assert review_context["coverage"]["discovery_coverage"]["partial_batches"] == 0
+
+
+def test_review_context_preserves_partial_discovery_coverage_and_blocks_no_priority() -> None:
+    report = _report(candidate=False)
+    investigation = _investigation(report)
+    investigation["discovery"] = {
+        "kind": "fintrace_annual_discovery",
+        "run_id": RUN_ID,
+        "company_id": "603288",
+        "report_year": 2024,
+        "source_document_id": SOURCE_ID,
+        "source_sha256": SOURCE_SHA,
+        "status": "partial",
+        "coverage": {
+            "complete": False,
+            "truncated": False,
+            "planned_batches": 1,
+            "processed_batches": 1,
+            "successful_batches": 0,
+            "partial_batches": 1,
+            "failed_batches": 0,
+            "processed_chars": 0,
+            "unread_pages": [1],
+        },
+        "findings": [],
+        "evidences": [],
+    }
+
+    data, _, _, no_priority = annual_review._build_review_input(
+        report,
+        investigation,
+        annual_review._report_identity(report),
+        request_model="review-test-model",
+        system_prompt="review test prompt",
+    )
+
+    assert data["coverage"]["discovery_coverage"]["partial_batches"] == 1
+    assert data["coverage"]["discovery_coverage_complete"] is False
+    assert data["coverage"]["no_priority_eligible"] is False
+    assert no_priority is False
 
 
 def test_discovery_review_budget_counts_actual_payload_and_preserves_high_priority_tail() -> None:

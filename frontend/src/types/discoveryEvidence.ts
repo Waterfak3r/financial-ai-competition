@@ -5,10 +5,13 @@ export type AnnualDiscoveryPriority = "high" | "medium" | "low";
 
 export interface AnnualDiscoveryBatchResult {
   batch_index: number;
-  status: "succeeded" | "failed" | "unattempted";
+  status: "succeeded" | "partial" | "failed" | "unattempted";
   reason: string | null;
   pages: number[];
   raw_chars: number;
+  accepted_findings?: number;
+  rejected_findings?: number;
+  restored_quotes?: number;
 }
 
 export interface AnnualDiscoveryCoverage {
@@ -19,6 +22,7 @@ export interface AnnualDiscoveryCoverage {
   planned_batches: number;
   processed_batches: number;
   successful_batches: number;
+  partial_batches?: number;
   failed_batches: number;
   batch_results: AnnualDiscoveryBatchResult[];
   processed_chars: number;
@@ -93,7 +97,7 @@ export interface AnnualModelDiscovery {
   source_document_id: string;
   source_sha256: string;
   status: AnnualDiscoveryStatus;
-  prompt_version: "annual_discovery_v1";
+  prompt_version: "annual_discovery_v1" | "annual_discovery_v2";
   model_called: boolean;
   model_call_count: number;
   model_call_attempt_count: number;
@@ -113,5 +117,5 @@ export interface AnnualDiscoveryAuditArtifact {
   response_path: string | null;
   failure_path: string | null;
   status: "started" | "succeeded" | "failed" | "incomplete";
-  prompt_version: "annual_discovery_v1";
+  prompt_version: "annual_discovery_v1" | "annual_discovery_v2";
 }

@@ -201,6 +201,7 @@ def _attach_valid_discovery(root: Path, run_id: str, created: dict[str, object])
     batch = context.batches[0]
     fragment = batch.fragments[0]
     coverage = dict(context.coverage)
+    coverage.pop("partial_batches", None)
     coverage.update({
         "processed_batches": len(context.batches),
         "successful_batches": len(context.batches),
@@ -276,6 +277,52 @@ def test_report_api_returns_manifest_binding_and_only_verified_evidence(tmp_path
     assert [item["evidence_id"] for item in payload["verification_evidences"]] == ["ev-independent"]
     assert payload["narrative_evidences"]["items"] == []
     assert "D:\\private\\source.pdf" not in response.text
+
+
+def test_v2_read_api_keeps_findings_from_partial_batches_with_no_full_success(tmp_path: Path) -> None:
+    run_id = "synthetic-discovery-partial-v2"
+    created = _make_archive(tmp_path, run_id)
+    evidence_id, finding_id = _attach_valid_discovery(tmp_path, run_id, created)
+    report_path = tmp_path / "artifacts" / "reports" / run_id / "report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    layer = report["model_discovery"]
+    coverage = layer["coverage"]
+    batch_result = coverage["batch_results"][0]
+    coverage.update(
+        successful_batches=0,
+        partial_batches=1,
+        failed_batches=0,
+        processed_chars=0,
+        attempted_chars=batch_result["raw_chars"],
+        unread_pages=batch_result["pages"],
+        complete=False,
+        batch_results=[{
+            "batch_index": batch_result["batch_index"],
+            "status": "partial",
+            "reason": "some_findings_rejected",
+            "pages": batch_result["pages"],
+            "raw_chars": batch_result["raw_chars"],
+            "accepted_findings": 1,
+            "rejected_findings": 1,
+            "restored_quotes": 0,
+        }],
+    )
+    layer.update(status="partial", prompt_version="annual_discovery_v2")
+    report_path.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+
+    client = TestClient(create_app(tmp_path))
+    response = client.get(f"/v1/annual-analyses/{run_id}")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["report"]["model_discovery"]["status"] == "partial"
+    assert payload["report"]["model_discovery"]["coverage"]["successful_batches"] == 0
+    assert payload["report"]["model_discovery"]["coverage"]["partial_batches"] == 1
+    assert payload["report"]["model_discovery"]["coverage"]["complete"] is False
+    assert [item["finding_id"] for item in payload["report"]["model_discovery"]["findings"]] == [finding_id]
+    index = client.get(f"/v1/annual-analyses/{run_id}/discovery-evidences")
+    assert index.status_code == 200, index.text
+    assert index.json()["items"][0]["evidence_id"] == evidence_id
 
 
 @pytest.mark.parametrize("invalid_case", ["source_sha", "quote", "extra_field", "failed_with_findings", "unsafe_reason"])

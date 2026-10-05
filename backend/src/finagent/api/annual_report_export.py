@@ -15,6 +15,25 @@ from finagent.core.sample_provenance import resolve_sample_provenance
 from finagent.reports.annual_report import render_markdown
 
 _FORMATS = {"json", "markdown", "html"}
+_V2_SAFE_BATCH_FAILURES = frozenset(
+    {
+        "all_findings_rejected",
+        "batch_missing",
+        "definitive_conclusion_forbidden",
+        "findings_invalid",
+        "invalid_model_json",
+        "invalid_model_response",
+        "invalid_model_schema",
+        "limitations_invalid",
+        "limitation_contains_control_character",
+        "limitation_contains_unquoted_digit",
+        "limitation_invalid",
+        "model_call_failed",
+        "model_call_timeout",
+        "model_response_too_large",
+        "serialized_input_limit_breached",
+    }
+)
 _ASCII_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$")
 _ROOT_FIELDS = (
     "kind", "title", "run_id", "company_id", "report_year", "source_document_id",
@@ -567,6 +586,10 @@ def _project_discovery(
             "findings": [],
             "limitations": ["开放式发现来源身份未能绑定到当前报告，已省略动态发现内容。"],
         }, set()
+    prompt_version = value.get("prompt_version")
+    if not isinstance(prompt_version, str) or prompt_version not in {"annual_discovery_v1", "annual_discovery_v2"}:
+        return {"status": "limited", "source_binding_status": "matched_but_invalid", "findings": []}, set()
+    is_v2 = prompt_version == "annual_discovery_v2"
     status = value.get("status")
     called = value.get("model_called")
     call_count = value.get("model_call_count")
@@ -613,12 +636,14 @@ def _project_discovery(
             or finding.get("classification") != "unverified_model_finding"
             or finding.get("verification_status") != "unverified"
             or not isinstance(evidence_ids, list) or any(not isinstance(item, str) for item in evidence_ids)
+            or len(evidence_ids) != len(set(evidence_ids))
             or not isinstance(citations, list) or not 1 <= len(citations) <= 4
         ):
             return {"status": "limited", "source_binding_status": "matched_but_invalid", "findings": []}, set()
         finding_ids.add(finding_id)
         citation_locations: list[dict[str, Any]] = []
         citation_ids: list[str] = []
+        citation_pairs: set[tuple[str, str]] = set()
         for citation in citations:
             if not isinstance(citation, Mapping):
                 return {"status": "limited", "source_binding_status": "matched_but_invalid", "findings": []}, set()
@@ -627,12 +652,19 @@ def _project_discovery(
             if (
                 evidence is None
                 or not isinstance(citation.get("quote"), str)
+                or len(citation["quote"].strip()) < 2
+                or len(citation["quote"]) > 300
+                or citation["quote"] not in str(evidence.get("raw_text", ""))
                 or finding_id not in evidence.get("finding_ids", [])
                 or evidence.get("source_document_id") != identity["document_id"]
                 or evidence.get("source_sha256") != identity["source_sha256"]
                 or type(evidence.get("pdf_page")) is not int
             ):
                 return {"status": "limited", "source_binding_status": "matched_but_invalid", "findings": []}, set()
+            pair = (evidence_id, citation["quote"])
+            if pair in citation_pairs:
+                return {"status": "limited", "source_binding_status": "matched_but_invalid", "findings": []}, set()
+            citation_pairs.add(pair)
             citation_ids.append(evidence_id)
             citation_locations.append({
                 "evidence_id": evidence_id,
@@ -642,7 +674,11 @@ def _project_discovery(
                 "block_index": evidence.get("block_index"),
                 "start_char": evidence.get("start_char"),
             })
-        if set(citation_ids) != set(evidence_ids) or len(citation_ids) != len(set(citation_ids)):
+        if (
+            set(citation_ids) != set(evidence_ids)
+            or is_v2 and evidence_ids != list(dict.fromkeys(citation_ids))
+            or not is_v2 and len(citation_ids) != len(set(citation_ids))
+        ):
             return {"status": "limited", "source_binding_status": "matched_but_invalid", "findings": []}, set()
         projected_findings.append({
             "finding_id": finding_id,
@@ -656,7 +692,15 @@ def _project_discovery(
             "evidence_ids": list(evidence_ids),
             "citations": citation_locations,
         })
-    projected_coverage = _project_discovery_coverage(coverage)
+    if is_v2:
+        accepted_ceiling = sum(
+            int(item.get("accepted_findings", 0))
+            for item in coverage.get("batch_results", [])
+            if isinstance(item, Mapping) and _is_nonnegative_int(item.get("accepted_findings"))
+        ) if isinstance(coverage.get("batch_results"), list) else -1
+        if len(projected_findings) > accepted_ceiling:
+            return {"status": "limited", "source_binding_status": "matched_but_invalid", "findings": []}, set()
+    projected_coverage = _project_discovery_coverage(coverage, str(prompt_version))
     if projected_coverage is None:
         return {"status": "limited", "source_binding_status": "matched_but_invalid", "findings": []}, set()
     result: dict[str, Any] = {
@@ -665,7 +709,7 @@ def _project_discovery(
         "status": status,
         "source_binding_status": "matched",
         "opinion_label": "模型发现，未经独立语义核验",
-        "prompt_version": "annual_discovery_v1",
+        "prompt_version": prompt_version,
         "model_called": called,
         "model_call_count": call_count,
         "model_call_attempt_count": attempt_count,
@@ -678,7 +722,10 @@ def _project_discovery(
     return result, finding_ids
 
 
-def _project_discovery_coverage(value: Mapping[str, Any]) -> dict[str, Any] | None:
+def _project_discovery_coverage(
+    value: Mapping[str, Any], prompt_version: str = "annual_discovery_v1"
+) -> dict[str, Any] | None:
+    is_v2 = prompt_version == "annual_discovery_v2"
     fields = (
         "total_pages", "text_pages", "total_blocks", "total_chars", "planned_batches",
         "processed_batches", "successful_batches", "failed_batches", "processed_chars",
@@ -687,6 +734,8 @@ def _project_discovery_coverage(value: Mapping[str, Any]) -> dict[str, Any] | No
         "unread_image_pages", "truncated", "complete", "source_status", "content_status",
         "time_budget_exhausted", "text_only_scope",
     )
+    if is_v2:
+        fields = (*fields[:8], "partial_batches", *fields[8:])
     result = _pick(value, fields)
     if set(result) != set(fields):
         return None
@@ -697,10 +746,71 @@ def _project_discovery_coverage(value: Mapping[str, Any]) -> dict[str, Any] | No
     for item in batch_results:
         if not isinstance(item, Mapping):
             return None
-        row = _pick(item, ("batch_index", "status", "reason", "pages", "raw_chars"))
-        if set(row) != {"batch_index", "status", "reason", "pages", "raw_chars"}:
+        batch_fields = ("batch_index", "status", "reason", "pages", "raw_chars")
+        if is_v2:
+            batch_fields = (*batch_fields, "accepted_findings", "rejected_findings", "restored_quotes")
+        row = _pick(item, batch_fields)
+        if set(row) != set(batch_fields):
             return None
+        if is_v2:
+            accepted = row.get("accepted_findings")
+            rejected = row.get("rejected_findings")
+            restored = row.get("restored_quotes")
+            status = row.get("status")
+            reason = row.get("reason")
+            if (
+                not _is_nonnegative_int(accepted)
+                or accepted > 6
+                or not _is_nonnegative_int(rejected)
+                or rejected > 6
+                or accepted + rejected > 6
+                or not _is_nonnegative_int(restored)
+                or restored > 24
+                or restored > accepted * 4
+                or status not in {"succeeded", "partial", "failed", "unattempted"}
+                or status == "succeeded" and (rejected != 0 or reason is not None)
+                or status == "partial"
+                and (accepted < 1 or rejected < 1 or reason != "some_findings_rejected")
+                or status == "failed"
+                and (
+                    accepted != 0
+                    or not isinstance(reason, str)
+                    or reason not in _V2_SAFE_BATCH_FAILURES
+                    or (reason == "all_findings_rejected") != (rejected > 0)
+                )
+                or status == "unattempted"
+                and (
+                    accepted != 0
+                    or rejected != 0
+                    or restored != 0
+                    or reason != "workflow_time_budget_exhausted"
+                )
+                or status != "partial" and status != "failed" and rejected != 0
+            ):
+                return None
         result["batch_results"].append(row)
+    if is_v2:
+        integer_fields = (
+            "planned_batches", "processed_batches", "successful_batches",
+            "partial_batches", "failed_batches",
+        )
+        if any(not _is_nonnegative_int(value.get(field)) for field in integer_fields):
+            return None
+        status_counts = {
+            status: sum(row.get("status") == status for row in result["batch_results"])
+            for status in ("succeeded", "partial", "failed", "unattempted")
+        }
+        if (
+            len(result["batch_results"]) != value.get("planned_batches")
+            or status_counts["succeeded"] != value.get("successful_batches")
+            or status_counts["partial"] != value.get("partial_batches")
+            or status_counts["failed"] != value.get("failed_batches")
+            or value.get("successful_batches")
+            + value.get("partial_batches")
+            + value.get("failed_batches")
+            != value.get("processed_batches")
+        ):
+            return None
     return result
 
 
@@ -867,12 +977,12 @@ def _render_discovery(value: Any) -> list[str]:
         "<p><strong>模型提出的公司线索未经独立语义核验，不参与基础事实/计算核验。引文定位不证明因果。</strong></p>",
     ]
     lines.append(_html_table(
-        ("状态", "来源绑定", "模型调用", "覆盖状态", "文字页 / 总页", "已处理 / 计划批次", "成功 / 失败批次", "已处理 / 总文字字符", "截断"),
+        ("状态", "来源绑定", "模型调用", "覆盖状态", "文字页 / 总页", "已处理 / 计划批次", "成功 / 部分 / 失败批次", "已完整处理 / 总文字字符", "截断"),
         [(
             value.get("status"), value.get("source_binding_status"), value.get("model_called"),
             coverage.get("complete"), f"{coverage.get('text_pages')} / {coverage.get('total_pages')}",
             f"{coverage.get('processed_batches')} / {coverage.get('planned_batches')}",
-            f"{coverage.get('successful_batches')} / {coverage.get('failed_batches')}",
+            f"{coverage.get('successful_batches')} / {coverage.get('partial_batches', 0)} / {coverage.get('failed_batches')}",
             f"{coverage.get('processed_chars')} / {coverage.get('total_chars')}", coverage.get("truncated"),
         )],
     ))
@@ -910,7 +1020,7 @@ def _render_discovery_markdown(value: Any) -> str:
         f"- 状态：`{value.get('status')}`；来源绑定：`{value.get('source_binding_status')}`；模型调用：`{value.get('model_called')}`",
         f"- 覆盖：文字页 {coverage.get('text_pages')} / 总页 {coverage.get('total_pages')}；",
         f"原始文字块 {coverage.get('total_blocks')}；已处理字符 {coverage.get('processed_chars')} / 全部可提取字符 {coverage.get('total_chars')}；",
-        f"已结束批次 {coverage.get('processed_batches')} / 计划 {coverage.get('planned_batches')}（成功 {coverage.get('successful_batches')}、失败 {coverage.get('failed_batches')}）；",
+        f"已结束批次 {coverage.get('processed_batches')} / 计划 {coverage.get('planned_batches')}（成功 {coverage.get('successful_batches')}、部分 {coverage.get('partial_batches', 0)}、失败 {coverage.get('failed_batches')}）；",
         f"完整={coverage.get('complete')}，截断={coverage.get('truncated')}。",
     ]
     unread = coverage.get("unread_pages")

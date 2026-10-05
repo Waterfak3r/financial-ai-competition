@@ -34,6 +34,23 @@ const SHA256_PATTERN = /^[0-9a-f]{64}$/i;
 const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
 const DISCOVERY_INTERPRETATION_LABEL = "年报原文定位，模型发现未经独立语义核验";
 const DISCOVERY_MAX_CHARS = 1_200_000;
+const SAFE_DISCOVERY_FAILURE_REASONS = new Set([
+  "all_findings_rejected",
+  "batch_missing",
+  "definitive_conclusion_forbidden",
+  "findings_invalid",
+  "invalid_model_json",
+  "invalid_model_response",
+  "invalid_model_schema",
+  "limitations_invalid",
+  "limitation_contains_control_character",
+  "limitation_contains_unquoted_digit",
+  "limitation_invalid",
+  "model_call_failed",
+  "model_call_timeout",
+  "model_response_too_large",
+  "serialized_input_limit_breached",
+]);
 
 export interface EvidencePreviewRegion {
   bbox: PdfBox;
@@ -345,8 +362,10 @@ function readModelDiscovery(
   ], path);
   const sourceSha256 = requireString(value.source_sha256, `${path}.source_sha256`).toLowerCase();
   const status = requireString(value.status, `${path}.status`);
+  const promptVersion = requireString(value.prompt_version, `${path}.prompt_version`);
   if (
-    value.kind !== "fintrace_annual_discovery" || value.prompt_version !== "annual_discovery_v1" ||
+    value.kind !== "fintrace_annual_discovery" ||
+    promptVersion !== "annual_discovery_v1" && promptVersion !== "annual_discovery_v2" ||
     status !== "completed" && status !== "partial" && status !== "failed" && status !== "not_called" ||
     requireString(value.run_id, `${path}.run_id`) !== expected.runId ||
     requireString(value.company_id, `${path}.company_id`) !== expected.companyId ||
@@ -363,12 +382,13 @@ function readModelDiscovery(
   }
   const reason = nullableString(value.reason, `${path}.reason`);
   if (reason !== null && !/^[a-z][a-z0-9_]{0,99}$/.test(reason)) throw invalidResponse(`${path}.reason`);
-  const coverage = readDiscoveryCoverage(value.coverage, `${path}.coverage`, status);
+  const coverage = readDiscoveryCoverage(value.coverage, `${path}.coverage`, status, promptVersion);
   if (
     status === "not_called" && (modelCallAttemptCount !== 0 || modelCallCount !== 0) ||
     coverage.source_status === "parsed" && (
       modelCallAttemptCount !== coverage.processed_batches ||
-      coverage.successful_batches > modelCallCount || modelCallCount > modelCallAttemptCount
+      coverage.successful_batches + (promptVersion === "annual_discovery_v2" ? coverage.partial_batches ?? 0 : 0) > modelCallCount ||
+      modelCallCount > modelCallAttemptCount
     ) ||
     status === "completed" && (
       modelCallCount !== coverage.planned_batches || modelCallAttemptCount !== coverage.planned_batches
@@ -383,7 +403,7 @@ function readModelDiscovery(
     evidenceById.set(evidence.evidence_id, evidence);
   }
   const findings = requireArray(value.findings, `${path}.findings`).map((item, index) =>
-    readDiscoveryFinding(item, `${path}.findings[${index}]`, sourceSha256, evidenceById),
+    readDiscoveryFinding(item, `${path}.findings[${index}]`, sourceSha256, evidenceById, promptVersion),
   );
   const findingIds = new Set<string>();
   const citedEvidenceIds = new Set<string>();
@@ -402,10 +422,13 @@ function readModelDiscovery(
     findings.length > 768 || evidences.length > 3072 || totalOpinionChars > 1_200_000 ||
     totalQuoteChars > 768 * 4 * 300 || [...evidenceById.keys()].some((id) => !citedEvidenceIds.has(id)) ||
     citedEvidenceIds.size !== evidenceById.size ||
-    coverage.successful_batches === 0 && (findings.length > 0 || evidences.length > 0)
+    coverage.successful_batches + (promptVersion === "annual_discovery_v2" ? coverage.partial_batches ?? 0 : 0) === 0 &&
+      (findings.length > 0 || evidences.length > 0) ||
+    promptVersion === "annual_discovery_v2" &&
+      findings.length > coverage.batch_results.reduce((sum, batch) => sum + (batch.accepted_findings ?? 0), 0)
   ) throw invalidResponse(`${path} 的发现数量、意见、引用或证据不一致`);
   const auditArtifacts = requireArray(value.audit_artifacts, `${path}.audit_artifacts`).map((item, index) =>
-    readDiscoveryAuditArtifact(item, `${path}.audit_artifacts[${index}]`),
+    readDiscoveryAuditArtifact(item, `${path}.audit_artifacts[${index}]`, promptVersion),
   );
   if (auditArtifacts.length > 128 || new Set(auditArtifacts.map((item) => item.batch_index)).size !== auditArtifacts.length) {
     throw invalidResponse(`${path}.audit_artifacts 数量或批次重复`);
@@ -426,7 +449,7 @@ function readModelDiscovery(
     source_document_id: expected.sourceDocumentId,
     source_sha256: sourceSha256,
     status: status as AnnualModelDiscovery["status"],
-    prompt_version: "annual_discovery_v1",
+    prompt_version: promptVersion,
     model_called: modelCalled,
     model_call_count: modelCallCount,
     model_call_attempt_count: modelCallAttemptCount,
@@ -440,21 +463,30 @@ function readModelDiscovery(
   };
 }
 
-function readDiscoveryCoverage(value: unknown, path: string, status: string): AnnualDiscoveryCoverage {
+function readDiscoveryCoverage(
+  value: unknown,
+  path: string,
+  status: string,
+  promptVersion: AnnualModelDiscovery["prompt_version"],
+): AnnualDiscoveryCoverage {
   const record = requireRecord(value, path);
-  exactKeys(record, [
+  const isV2 = promptVersion === "annual_discovery_v2";
+  const coverageFields = [
     "total_pages", "text_pages", "total_blocks", "total_chars", "planned_batches", "processed_batches",
     "successful_batches", "failed_batches", "batch_results", "processed_chars", "attempted_chars",
     "unattempted_batches", "unattempted_chars", "planned_chars", "omitted_chars", "unread_pages",
     "failed_pages", "no_text_pages", "image_pages", "unread_image_pages", "truncated", "complete",
     "source_status", "content_status", "time_budget_exhausted", "text_only_scope",
-  ], path);
+  ];
+  if (isV2) coverageFields.splice(7, 0, "partial_batches");
+  exactKeys(record, coverageFields, path);
   const countNames = [
     "total_pages", "text_pages", "total_blocks", "total_chars", "planned_batches", "processed_batches",
     "successful_batches", "failed_batches", "processed_chars", "attempted_chars", "unattempted_batches",
     "unattempted_chars", "planned_chars", "omitted_chars",
   ] as const;
   const counts = Object.fromEntries(countNames.map((key) => [key, safeNonNegativeInteger(record[key], `${path}.${key}`)])) as Record<(typeof countNames)[number], number>;
+  const partialBatches = isV2 ? safeNonNegativeInteger(record.partial_batches, `${path}.partial_batches`) : 0;
   const truncated = requireBoolean(record.truncated, `${path}.truncated`);
   const complete = requireBoolean(record.complete, `${path}.complete`);
   const timeBudgetExhausted = requireBoolean(record.time_budget_exhausted, `${path}.time_budget_exhausted`);
@@ -492,16 +524,20 @@ function readDiscoveryCoverage(value: unknown, path: string, status: string): An
     (contentStatus === "no_extractable_text" && counts.total_chars !== 0)
   ) throw invalidResponse(`${path} 页码或内容计数关系无效`);
   const rawBatchResults = requireArray(record.batch_results, `${path}.batch_results`);
-  const batchResults = rawBatchResults.map((item, index) => readDiscoveryBatchResult(item, `${path}.batch_results[${index}]`, counts.total_pages));
+  const batchResults = rawBatchResults.map((item, index) =>
+    readDiscoveryBatchResult(item, `${path}.batch_results[${index}]`, counts.total_pages, promptVersion),
+  );
   if (sourceStatus === "unavailable") {
     if (
       contentStatus !== "unavailable" || countNames.some((field) => counts[field] !== 0) ||
+      partialBatches !== 0 ||
       Object.values(pageLists).some((items) => items.length > 0) || complete || truncated || timeBudgetExhausted ||
       batchResults.length > 0 || status !== "failed" && status !== "not_called"
     ) throw invalidResponse(`${path} 不可用来源不能包含虚构覆盖`);
   } else {
     if (
-      contentStatus === "unavailable" || counts.processed_batches !== counts.successful_batches + counts.failed_batches ||
+      contentStatus === "unavailable" ||
+      counts.processed_batches !== counts.successful_batches + partialBatches + counts.failed_batches ||
       counts.unattempted_batches !== counts.planned_batches - counts.processed_batches ||
       counts.planned_chars > counts.total_chars || counts.planned_chars > DISCOVERY_MAX_CHARS ||
       counts.attempted_chars > counts.planned_chars || counts.unattempted_chars > counts.planned_chars ||
@@ -510,8 +546,10 @@ function readDiscoveryCoverage(value: unknown, path: string, status: string): An
       batchResults.length !== counts.planned_batches
     ) throw invalidResponse(`${path} 批次/字符计数关系无效`);
     const seen = new Set<number>();
-    const chars = { succeeded: 0, failed: 0, unattempted: 0 };
-    const batchPageSets = { succeeded: new Set<number>(), failed: new Set<number>(), unattempted: new Set<number>() };
+    const chars: Record<string, number> = { succeeded: 0, failed: 0, unattempted: 0, ...(isV2 ? { partial: 0 } : {}) };
+    const batchPageSets: Record<string, Set<number>> = Object.fromEntries(
+      Object.keys(chars).map((key) => [key, new Set<number>()]),
+    );
     for (const batch of batchResults) {
       if (seen.has(batch.batch_index) || batch.batch_index > counts.planned_batches) throw invalidResponse(`${path} 批次编号重复或越界`);
       seen.add(batch.batch_index);
@@ -522,15 +560,18 @@ function readDiscoveryCoverage(value: unknown, path: string, status: string): An
       }
     }
     const successCount = batchResults.filter((batch) => batch.status === "succeeded").length;
+    const partialCount = batchResults.filter((batch) => batch.status === "partial").length;
     const failedCount = batchResults.filter((batch) => batch.status === "failed").length;
     const unattemptedCount = batchResults.filter((batch) => batch.status === "unattempted").length;
     if (
-      seen.size !== counts.planned_batches || chars.succeeded + chars.failed + chars.unattempted !== counts.planned_chars ||
-      chars.succeeded !== counts.processed_chars || chars.succeeded + chars.failed !== counts.attempted_chars ||
+      seen.size !== counts.planned_batches || chars.succeeded + chars.failed + (chars.partial ?? 0) + chars.unattempted !== counts.planned_chars ||
+      chars.succeeded !== counts.processed_chars || chars.succeeded + chars.failed + (chars.partial ?? 0) !== counts.attempted_chars ||
       chars.unattempted !== counts.unattempted_chars || successCount !== counts.successful_batches ||
+      isV2 && partialCount !== partialBatches ||
       failedCount !== counts.failed_batches || unattemptedCount !== counts.unattempted_batches ||
       [...batchPageSets.failed].some((page) => !failedPages.has(page) || !unreadPages.has(page)) ||
       [...batchPageSets.unattempted].some((page) => !unreadPages.has(page)) ||
+      isV2 && [...batchPageSets.partial].some((page) => !unreadPages.has(page)) ||
       batchPageSets.failed.size !== failedPages.size ||
       [...failedPages].some((page) => !batchPageSets.failed.has(page)) ||
       truncated !== Boolean(counts.omitted_chars || counts.unattempted_batches || counts.unattempted_chars)
@@ -539,16 +580,22 @@ function readDiscoveryCoverage(value: unknown, path: string, status: string): An
   const expectedComplete = sourceStatus === "parsed" && contentStatus === "text_available" && counts.total_chars > 0 &&
     !truncated && pageLists.unread_image_pages.length === 0 && counts.planned_chars === counts.total_chars &&
     counts.processed_batches === counts.planned_batches && counts.failed_batches === 0 &&
+    partialBatches === 0 &&
     counts.successful_batches === counts.planned_batches && counts.processed_chars === counts.planned_chars &&
     pageLists.unread_pages.length === 0;
   if (
     complete !== expectedComplete || status === "completed" && !expectedComplete ||
-    status === "partial" && (expectedComplete || counts.successful_batches === 0) ||
-    status === "failed" && sourceStatus === "parsed" && (counts.failed_batches === 0 || counts.successful_batches !== 0) ||
+    status === "partial" && (
+      expectedComplete || counts.successful_batches + (isV2 ? partialBatches : 0) === 0
+    ) ||
+    status === "failed" && sourceStatus === "parsed" && (
+      counts.failed_batches === 0 || counts.successful_batches !== 0 || isV2 && partialBatches !== 0
+    ) ||
     status === "not_called" && sourceStatus === "parsed" && counts.processed_batches !== 0
   ) throw invalidResponse(`${path} 完成状态与覆盖不一致`);
   return {
     ...counts,
+    ...(isV2 ? { partial_batches: partialBatches } : {}),
     batch_results: batchResults,
     unread_pages: pageLists.unread_pages,
     failed_pages: pageLists.failed_pages,
@@ -564,23 +611,61 @@ function readDiscoveryCoverage(value: unknown, path: string, status: string): An
   };
 }
 
-function readDiscoveryBatchResult(value: unknown, path: string, totalPages: number): AnnualDiscoveryBatchResult {
+function readDiscoveryBatchResult(
+  value: unknown,
+  path: string,
+  totalPages: number,
+  promptVersion: AnnualModelDiscovery["prompt_version"],
+): AnnualDiscoveryBatchResult {
   const record = requireRecord(value, path);
-  exactKeys(record, ["batch_index", "status", "reason", "pages", "raw_chars"], path);
+  const isV2 = promptVersion === "annual_discovery_v2";
+  exactKeys(record, [
+    "batch_index", "status", "reason", "pages", "raw_chars",
+    ...(isV2 ? ["accepted_findings", "rejected_findings", "restored_quotes"] : []),
+  ], path);
   const index = safeNonNegativeInteger(record.batch_index, `${path}.batch_index`);
   const status = requireString(record.status, `${path}.status`);
   const reason = nullableString(record.reason, `${path}.reason`);
   const rawChars = safeNonNegativeInteger(record.raw_chars, `${path}.raw_chars`);
+  const accepted = isV2 ? safeNonNegativeInteger(record.accepted_findings, `${path}.accepted_findings`) : 0;
+  const rejected = isV2 ? safeNonNegativeInteger(record.rejected_findings, `${path}.rejected_findings`) : 0;
+  const restored = isV2 ? safeNonNegativeInteger(record.restored_quotes, `${path}.restored_quotes`) : 0;
   const pages = requireArray(record.pages, `${path}.pages`).map((page, pageIndex) => safeNonNegativeInteger(page, `${path}.pages[${pageIndex}]`));
   if (
-    index < 1 || status !== "succeeded" && status !== "failed" && status !== "unattempted" ||
+    index < 1 ||
+    status !== "succeeded" && status !== "partial" && status !== "failed" && status !== "unattempted" ||
+    !isV2 && status === "partial" ||
     rawChars < 1 || rawChars > 12_000 || pages.length === 0 ||
     pages.some((page) => page < 1 || page > totalPages) || new Set(pages).size !== pages.length ||
     pages.some((page, position) => position > 0 && pages[position - 1] >= page) ||
     status === "succeeded" && reason !== null ||
-    status !== "succeeded" && (reason === null || !/^[a-z][a-z0-9_]{0,99}$/.test(reason))
+    status !== "succeeded" && (reason === null || !/^[a-z][a-z0-9_]{0,99}$/.test(reason)) ||
+    isV2 && (
+      accepted > 6 || rejected > 6 || accepted + rejected > 6 || restored > 24 || restored > accepted * 4 ||
+      status === "succeeded" && rejected !== 0 ||
+      status === "partial" && (accepted < 1 || rejected < 1 || reason !== "some_findings_rejected") ||
+      status === "failed" && (
+        accepted !== 0 || !SAFE_DISCOVERY_FAILURE_REASONS.has(reason ?? "") ||
+        (reason === "all_findings_rejected") !== (rejected > 0)
+      ) ||
+      status === "unattempted" && (
+        accepted !== 0 || rejected !== 0 || restored !== 0 || reason !== "workflow_time_budget_exhausted"
+      ) ||
+      status !== "partial" && status !== "failed" && rejected !== 0
+    )
   ) throw invalidResponse(`${path} 字段无效`);
-  return { batch_index: index, status, reason, pages, raw_chars: rawChars };
+  return {
+    batch_index: index,
+    status: status as AnnualDiscoveryBatchResult["status"],
+    reason,
+    pages,
+    raw_chars: rawChars,
+    ...(isV2 ? {
+      accepted_findings: accepted,
+      rejected_findings: rejected,
+      restored_quotes: restored,
+    } : {}),
+  };
 }
 
 function readDiscoveryEvidence(
@@ -622,7 +707,9 @@ function readDiscoveryFinding(
   path: string,
   sourceSha256: string,
   evidenceById: Map<string, AnnualDiscoveryEvidence>,
+  promptVersion: AnnualModelDiscovery["prompt_version"],
 ): AnnualDiscoveryFinding {
+  const isV2 = promptVersion === "annual_discovery_v2";
   const record = requireRecord(value, path);
   exactKeys(record, ["finding_id", "title", "observation", "why_it_matters", "follow_up", "priority", "classification", "verification_status", "evidence_ids", "citations"], path);
   const findingId = requireString(record.finding_id, `${path}.finding_id`);
@@ -653,11 +740,20 @@ function readDiscoveryFinding(
     }
     return { evidence_id: evidenceId, quote };
   });
+  const citationIds = citations.map((citation) => citation.evidence_id);
+  const citationPairs = citations.map((citation) => JSON.stringify([citation.evidence_id, citation.quote]));
   if (
-    citations.length < 1 || citations.length > 4 || evidenceIds.length !== citations.length ||
+    citations.length < 1 || citations.length > 4 ||
     new Set(evidenceIds).size !== evidenceIds.length ||
-    [...new Set(citations.map((citation) => citation.evidence_id))].length !== citations.length ||
-    evidenceIds.some((id) => !citations.some((citation) => citation.evidence_id === id))
+    isV2 && (
+      !sameJsonValue(evidenceIds, [...new Set(citationIds)]) ||
+      new Set(citationPairs).size !== citationPairs.length
+    ) ||
+    !isV2 && (
+      evidenceIds.length !== citations.length ||
+      new Set(citationIds).size !== citationIds.length ||
+      evidenceIds.some((id) => !citationIds.includes(id))
+    )
   ) throw invalidResponse(`${path} 引用 ID 与 evidence_ids 不一致`);
   return {
     finding_id: findingId,
@@ -670,7 +766,11 @@ function readDiscoveryFinding(
   };
 }
 
-function readDiscoveryAuditArtifact(value: unknown, path: string): AnnualDiscoveryAuditArtifact {
+function readDiscoveryAuditArtifact(
+  value: unknown,
+  path: string,
+  expectedPromptVersion: AnnualModelDiscovery["prompt_version"],
+): AnnualDiscoveryAuditArtifact {
   const record = requireRecord(value, path);
   exactKeys(record, ["batch_index", "audit_dir", "request_path", "response_path", "failure_path", "status", "prompt_version"], path);
   const batchIndex = safeNonNegativeInteger(record.batch_index, `${path}.batch_index`);
@@ -685,9 +785,9 @@ function readDiscoveryAuditArtifact(value: unknown, path: string): AnnualDiscove
   if (
     batchIndex < 1 || batchIndex > 128 ||
     status !== "started" && status !== "succeeded" && status !== "failed" && status !== "incomplete" ||
-    promptVersion !== "annual_discovery_v1"
+    promptVersion !== expectedPromptVersion
   ) throw invalidResponse(`${path} 状态无效`);
-  return { batch_index: batchIndex, ...paths, status, prompt_version: "annual_discovery_v1" };
+  return { batch_index: batchIndex, ...paths, status, prompt_version: expectedPromptVersion };
 }
 
 function readDiscoveryEvidenceIndex(

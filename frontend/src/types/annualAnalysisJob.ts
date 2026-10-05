@@ -33,6 +33,7 @@ export interface AnnualAnalysisDiscoveryProgress {
   planned_batches: number;
   processed_batches: number;
   successful_batches: number;
+  partial_batches: number;
   failed_batches: number;
   total_pages: number;
   total_chars: number;

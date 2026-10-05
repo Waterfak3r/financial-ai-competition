@@ -31,6 +31,26 @@ _MAX_DISCOVERY_EVIDENCE_CHARS = 4_000_000
 _MAX_DISCOVERY_OPINION_CHARS = 1_200_000
 _MAX_DISCOVERY_LIMITATIONS = 1_100
 _MAX_DISCOVERY_QUOTE_CHARS = 300
+_DISCOVERY_PROMPT_VERSIONS = frozenset({"annual_discovery_v1", "annual_discovery_v2"})
+_V2_SAFE_BATCH_FAILURES = frozenset(
+    {
+        "all_findings_rejected",
+        "batch_missing",
+        "definitive_conclusion_forbidden",
+        "findings_invalid",
+        "invalid_model_json",
+        "invalid_model_response",
+        "invalid_model_schema",
+        "limitations_invalid",
+        "limitation_contains_control_character",
+        "limitation_contains_unquoted_digit",
+        "limitation_invalid",
+        "model_call_failed",
+        "model_call_timeout",
+        "model_response_too_large",
+        "serialized_input_limit_breached",
+    }
+)
 _REPARSE_POINT_ATTRIBUTE = 0x400
 NARRATIVE_EVIDENCE_INTERPRETATION = "原文片段定位/模型观点引用，非独立因果核验"
 DISCOVERY_EVIDENCE_INTERPRETATION = "年报原文定位，模型发现未经独立语义核验"
@@ -613,7 +633,8 @@ def _collect_discovery_evidences(
             "annual_discovery_identity_mismatch",
             "年度开放式发现与当前归档来源身份不一致。",
         )
-    if layer.get("prompt_version") != "annual_discovery_v1":
+    prompt_version = layer.get("prompt_version")
+    if not isinstance(prompt_version, str) or prompt_version not in _DISCOVERY_PROMPT_VERSIONS:
         raise AnnualReportReadError(422, "annual_discovery_invalid", "年度开放式发现提示词版本无效。")
     status = layer.get("status")
     if not isinstance(status, str) or status not in {"completed", "partial", "failed", "not_called"}:
@@ -627,7 +648,7 @@ def _collect_discovery_evidences(
     coverage = layer.get("coverage")
     if not isinstance(coverage, Mapping):
         raise AnnualReportReadError(422, "annual_discovery_invalid", "年度开放式发现覆盖记录无效。")
-    _validate_discovery_coverage(coverage, status)
+    _validate_discovery_coverage(coverage, status, str(prompt_version))
     if layer.get("fraud_conclusion") is not None:
         raise AnnualReportReadError(422, "annual_discovery_invalid", "开放式发现不能包含舞弊结论。")
     called = layer.get("model_called")
@@ -648,7 +669,7 @@ def _collect_discovery_evidences(
         raise AnnualReportReadError(422, "annual_discovery_invalid", "未调用状态不能包含模型响应。")
     if coverage["source_status"] == "parsed" and (
         attempt_count != coverage["processed_batches"]
-        or coverage["successful_batches"] > call_count
+        or coverage["successful_batches"] + (coverage.get("partial_batches", 0) if prompt_version == "annual_discovery_v2" else 0) > call_count
         or call_count > attempt_count
     ):
         raise AnnualReportReadError(422, "annual_discovery_invalid", "已解析来源的请求/响应数与结束批次不一致。")
@@ -672,7 +693,18 @@ def _collect_discovery_evidences(
         or sum(len(item) for item in limitations if isinstance(item, str)) > _MAX_DISCOVERY_LIMITATIONS * 400
     ):
         raise AnnualReportReadError(422, "annual_discovery_invalid", "开放式发现条目超过结构或字符上限。")
-    if coverage["successful_batches"] == 0 and (raw_findings or raw_evidences):
+    if prompt_version == "annual_discovery_v2":
+        accepted_count_ceiling = sum(
+            int(item["accepted_findings"])
+            for item in coverage["batch_results"]
+            if isinstance(item, Mapping) and type(item.get("accepted_findings")) is int
+        )
+        if len(raw_findings) > accepted_count_ceiling:
+            raise AnnualReportReadError(422, "annual_discovery_invalid", "归档发现数量超过批次验收计数。")
+    accepted_batch_count = coverage["successful_batches"] + (
+        coverage.get("partial_batches", 0) if prompt_version == "annual_discovery_v2" else 0
+    )
+    if accepted_batch_count == 0 and (raw_findings or raw_evidences):
         raise AnnualReportReadError(
             422,
             "annual_discovery_invalid",
@@ -693,7 +725,7 @@ def _collect_discovery_evidences(
             type(batch_index) is not int or batch_index < 1 or batch_index > 128
             or not isinstance(audit_status, str)
             or audit_status not in {"started", "succeeded", "failed", "incomplete"}
-            or audit.get("prompt_version") != "annual_discovery_v1"
+            or audit.get("prompt_version") != prompt_version
         ):
             raise AnnualReportReadError(422, "annual_discovery_invalid", "开放式发现审计记录值无效。")
         audit_dir = audit.get("audit_dir")
@@ -799,16 +831,19 @@ def _collect_discovery_evidences(
             raise AnnualReportReadError(422, "annual_discovery_invalid", "开放式发现文本超过专用总字符上限。")
         citations = finding.get("citations")
         evidence_ids = finding.get("evidence_ids")
+        is_v2 = prompt_version == "annual_discovery_v2"
         if (
             not isinstance(citations, list)
             or not 1 <= len(citations) <= 4
             or not isinstance(evidence_ids, list)
-            or len(evidence_ids) != len(citations)
             or any(not isinstance(item, str) for item in evidence_ids)
             or len(set(evidence_ids)) != len(evidence_ids)
+            or not is_v2 and len(evidence_ids) != len(citations)
         ):
             raise AnnualReportReadError(422, "annual_discovery_invalid", "开放式发现引用列表无效。")
         cited_ids: set[str] = set()
+        citation_id_order: list[str] = []
+        citation_pairs: set[tuple[str, str]] = set()
         for citation in citations:
             if not isinstance(citation, Mapping) or set(citation) != {"evidence_id", "quote"}:
                 raise AnnualReportReadError(422, "annual_discovery_invalid", "开放式发现原文引用结构无效。")
@@ -828,11 +863,16 @@ def _collect_discovery_evidences(
             if total_quote_chars > _MAX_DISCOVERY_FINDINGS * 4 * _MAX_DISCOVERY_QUOTE_CHARS:
                 raise AnnualReportReadError(422, "annual_discovery_invalid", "开放式发现引用超过专用字符上限。")
             cited_ids.add(evidence_id)
+            citation_id_order.append(evidence_id)
+            pair = (evidence_id, quote)
+            if is_v2 and pair in citation_pairs:
+                raise AnnualReportReadError(422, "annual_discovery_invalid", "开放式发现包含重复的证据引用对。")
+            citation_pairs.add(pair)
             cited_by.setdefault(evidence_id, set()).add(finding_id)
             quotes_by_evidence.setdefault(evidence_id, []).append(
                 {"finding_id": finding_id, "quote": quote}
             )
-        if cited_ids != set(evidence_ids):
+        if cited_ids != set(evidence_ids) or is_v2 and evidence_ids != list(dict.fromkeys(citation_id_order)):
             raise AnnualReportReadError(422, "annual_discovery_invalid", "开放式发现引用 ID 与证据 ID 列表不一致。")
     if set(evidence_records) != set(cited_by):
         raise AnnualReportReadError(422, "annual_discovery_invalid", "开放式发现包含未被实际引用的证据。")
@@ -883,7 +923,10 @@ def _annual_discovery_evidence_id(source_sha256: str, page: int, block_index: in
     return f"adisc-{source_sha256[:12]}-p{page}-b{block_index}-c{start_char}-{digest}"
 
 
-def _validate_discovery_coverage(coverage: Mapping[str, Any], status: str) -> None:
+def _validate_discovery_coverage(
+    coverage: Mapping[str, Any], status: str, prompt_version: str = "annual_discovery_v1"
+) -> None:
+    is_v2 = prompt_version == "annual_discovery_v2"
     fields = {
         "total_pages", "text_pages", "total_blocks", "total_chars", "planned_batches",
         "processed_batches", "successful_batches", "failed_batches", "batch_results",
@@ -892,6 +935,8 @@ def _validate_discovery_coverage(coverage: Mapping[str, Any], status: str) -> No
         "image_pages", "unread_image_pages", "truncated", "complete", "source_status",
         "content_status", "time_budget_exhausted", "text_only_scope",
     }
+    if is_v2:
+        fields.add("partial_batches")
     if set(coverage) != fields:
         raise AnnualReportReadError(422, "annual_discovery_invalid", "年度开放式发现覆盖字段集合无效。")
     integer_fields = (
@@ -900,6 +945,8 @@ def _validate_discovery_coverage(coverage: Mapping[str, Any], status: str) -> No
         "attempted_chars", "unattempted_batches", "unattempted_chars", "planned_chars",
         "omitted_chars",
     )
+    if is_v2:
+        integer_fields = (*integer_fields[:-1], "partial_batches", integer_fields[-1])
     numbers: dict[str, int] = {}
     for field in integer_fields:
         value = coverage.get(field)
@@ -942,8 +989,9 @@ def _validate_discovery_coverage(coverage: Mapping[str, Any], status: str) -> No
 
     if numbers["planned_batches"] > 128 or numbers["processed_batches"] > numbers["planned_batches"]:
         raise AnnualReportReadError(422, "annual_discovery_invalid", "年度开放式发现批次计数越界。")
+    partial_batches = numbers.get("partial_batches", 0)
     if (
-        numbers["successful_batches"] + numbers["failed_batches"] != numbers["processed_batches"]
+        numbers["successful_batches"] + partial_batches + numbers["failed_batches"] != numbers["processed_batches"]
         or numbers["unattempted_batches"] != numbers["planned_batches"] - numbers["processed_batches"]
         or numbers["unattempted_chars"] > numbers["planned_chars"]
         or numbers["attempted_chars"] > numbers["planned_chars"]
@@ -977,10 +1025,14 @@ def _validate_discovery_coverage(coverage: Mapping[str, Any], status: str) -> No
         if not isinstance(batch_results, list) or len(batch_results) != numbers["planned_batches"]:
             raise AnnualReportReadError(422, "annual_discovery_invalid", "覆盖批次结果数与计划不一致。")
         seen_indices: set[int] = set()
-        result_chars = {"succeeded": 0, "failed": 0, "unattempted": 0}
+        result_statuses = ("succeeded", "partial", "failed", "unattempted") if is_v2 else ("succeeded", "failed", "unattempted")
+        result_chars = {key: 0 for key in result_statuses}
         result_pages: dict[str, set[int]] = {key: set() for key in result_chars}
         for result in batch_results:
-            if not isinstance(result, Mapping) or set(result) != {"batch_index", "status", "reason", "pages", "raw_chars"}:
+            result_fields = {"batch_index", "status", "reason", "pages", "raw_chars"}
+            if is_v2:
+                result_fields.update({"accepted_findings", "rejected_findings", "restored_quotes"})
+            if not isinstance(result, Mapping) or set(result) != result_fields:
                 raise AnnualReportReadError(422, "annual_discovery_invalid", "覆盖批次结果字段无效。")
             index = result.get("batch_index")
             batch_status = result.get("status")
@@ -1006,6 +1058,30 @@ def _validate_discovery_coverage(coverage: Mapping[str, Any], status: str) -> No
                 )
             ):
                 raise AnnualReportReadError(422, "annual_discovery_invalid", "覆盖批次结果值无效。")
+            if is_v2:
+                accepted = result.get("accepted_findings")
+                rejected = result.get("rejected_findings")
+                restored = result.get("restored_quotes")
+                if (
+                    type(accepted) is not int or not 0 <= accepted <= 6
+                    or type(rejected) is not int or not 0 <= rejected <= 6
+                    or accepted + rejected > 6
+                    or type(restored) is not int or not 0 <= restored <= 24
+                    or restored > accepted * 4
+                    or batch_status == "succeeded" and (rejected != 0 or reason is not None)
+                    or batch_status == "partial" and (accepted < 1 or rejected < 1 or reason != "some_findings_rejected")
+                    or batch_status == "failed" and (
+                        accepted != 0
+                        or not isinstance(reason, str)
+                        or reason not in _V2_SAFE_BATCH_FAILURES
+                        or (reason == "all_findings_rejected") != (rejected > 0)
+                    )
+                    or batch_status == "unattempted" and (
+                        accepted != 0 or rejected != 0 or restored != 0 or reason != "workflow_time_budget_exhausted"
+                    )
+                    or batch_status != "partial" and batch_status != "failed" and rejected != 0
+                ):
+                    raise AnnualReportReadError(422, "annual_discovery_invalid", "覆盖批次发现计数或安全原因无效。")
             seen_indices.add(index)
             result_chars[batch_status] += raw_chars
             result_pages[batch_status].update(batch_pages)
@@ -1021,7 +1097,9 @@ def _validate_discovery_coverage(coverage: Mapping[str, Any], status: str) -> No
             or not result_pages["failed"].issubset(pages["unread_pages"])
             or not result_pages["unattempted"].issubset(pages["unread_pages"])
             or result_pages["failed"] != set(pages["failed_pages"])
-            or numbers["attempted_chars"] != result_chars["succeeded"] + result_chars["failed"]
+            or numbers["attempted_chars"] != result_chars["succeeded"] + result_chars["failed"] + result_chars.get("partial", 0)
+            or is_v2 and len([r for r in batch_results if r["status"] == "partial"]) != numbers["partial_batches"]
+            or is_v2 and any(page not in pages["unread_pages"] for page in result_pages["partial"])
             or any(
                 (index <= numbers["processed_batches"]) == (result["status"] == "unattempted")
                 for index, result in ((item["batch_index"], item) for item in batch_results)
@@ -1041,6 +1119,7 @@ def _validate_discovery_coverage(coverage: Mapping[str, Any], status: str) -> No
         and not pages["unread_image_pages"]
         and numbers["planned_chars"] == numbers["total_chars"]
         and numbers["processed_batches"] == numbers["planned_batches"]
+        and partial_batches == 0
         and numbers["failed_batches"] == 0
         and numbers["successful_batches"] == numbers["planned_batches"]
         and numbers["processed_chars"] == numbers["planned_chars"]
@@ -1050,10 +1129,15 @@ def _validate_discovery_coverage(coverage: Mapping[str, Any], status: str) -> No
         raise AnnualReportReadError(422, "annual_discovery_invalid", "覆盖完整标志与批次/字符/页面计数不一致。")
     if status == "completed" and not expected_complete:
         raise AnnualReportReadError(422, "annual_discovery_invalid", "完成状态与全文覆盖记录不一致。")
-    if status == "partial" and (expected_complete or numbers["successful_batches"] == 0):
+    if status == "partial" and (
+        expected_complete
+        or numbers["successful_batches"] + (partial_batches if is_v2 else 0) == 0
+    ):
         raise AnnualReportReadError(422, "annual_discovery_invalid", "部分完成状态缺少成功批次或覆盖缺口。")
     if status == "failed" and source_status == "parsed" and (
-        numbers["failed_batches"] == 0 or numbers["successful_batches"] != 0
+        numbers["failed_batches"] == 0
+        or numbers["successful_batches"] != 0
+        or is_v2 and partial_batches != 0
     ):
         raise AnnualReportReadError(422, "annual_discovery_invalid", "失败状态与已尝试批次结果不一致。")
     if status == "not_called" and source_status == "parsed" and numbers["processed_batches"] != 0:

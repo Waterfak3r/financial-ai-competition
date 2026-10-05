@@ -12,6 +12,7 @@ import pymupdf
 from finagent.agents import annual_discovery
 from finagent.agents.annual_discovery import (
     parse_annual_discovery_response,
+    parse_annual_discovery_response_v2,
     run_annual_discovery,
 )
 from finagent.audit import audited_chat
@@ -118,6 +119,161 @@ def test_parser_accepts_dynamic_unknown_title_and_digits_only_in_exact_quote() -
     assert findings[0].title == "未预设的渠道政策变化"
     assert findings[0].citations == ((batch.fragments[0].evidence_id, quote),)
     assert limitations == ()
+
+
+def test_v2_parser_retains_valid_findings_when_another_finding_is_invalid() -> None:
+    batch = _batch()
+    evidence_id = batch.fragments[0].evidence_id
+    valid = json.loads(_valid_response(evidence_id, "客户甲在2025年度调整了交易安排"))["findings"][0]
+    invalid = copy.deepcopy(valid)
+    invalid["citations"][0]["evidence_id"] = "adisc-not-in-this-batch"
+    response = json.dumps({"findings": [valid, invalid], "limitations": []}, ensure_ascii=False)
+
+    parsed = parse_annual_discovery_response_v2(response, batch)
+
+    assert len(parsed.findings) == 1
+    assert parsed.rejected_findings == 1
+    assert parsed.restored_quotes == 0
+
+
+def test_v2_parser_counts_all_invalid_findings_and_accepts_empty_findings() -> None:
+    batch = _batch()
+    invalid = json.loads(_valid_response(batch.fragments[0].evidence_id, "客户甲在2025年度调整了交易安排"))["findings"][0]
+    invalid["citations"][0]["quote"] = "改写的虚构引文"
+    all_invalid = parse_annual_discovery_response_v2(
+        json.dumps({"findings": [invalid, invalid], "limitations": []}, ensure_ascii=False),
+        batch,
+    )
+    empty = parse_annual_discovery_response_v2('{"findings":[],"limitations":[]}', batch)
+
+    assert all_invalid.findings == ()
+    assert all_invalid.rejected_findings == 2
+    assert empty.findings == ()
+    assert empty.rejected_findings == 0
+
+
+def test_v2_parser_allows_distinct_quotes_from_one_fragment_but_rejects_duplicate_pairs() -> None:
+    batch = _batch(raw_text="客户甲在2025年度调整了交易安排，金额为120万元。")
+    evidence_id = batch.fragments[0].evidence_id
+    finding = json.loads(_valid_response(evidence_id, "客户甲在2025年度调整了交易安排"))["findings"][0]
+    finding["citations"].append({"evidence_id": evidence_id, "quote": "金额为120万元"})
+    distinct = parse_annual_discovery_response_v2(
+        json.dumps({"findings": [finding], "limitations": []}, ensure_ascii=False), batch
+    )
+    finding["citations"].append({"evidence_id": evidence_id, "quote": "金额为120万元"})
+    duplicate_pair = parse_annual_discovery_response_v2(
+        json.dumps({"findings": [finding], "limitations": []}, ensure_ascii=False), batch
+    )
+
+    assert len(distinct.findings) == 1
+    assert distinct.findings[0].citations == (
+        (evidence_id, "客户甲在2025年度调整了交易安排"),
+        (evidence_id, "金额为120万元"),
+    )
+    assert duplicate_pair.findings == ()
+    assert duplicate_pair.rejected_findings == 1
+
+
+def test_v2_parser_restores_only_unique_whitespace_variants_and_counts_them() -> None:
+    batch = _batch(raw_text="甲　乙在2025年度调整了交易安排")
+    evidence_id = batch.fragments[0].evidence_id
+    finding = json.loads(_valid_response(evidence_id, "甲乙在2025年度调整了交易安排"))["findings"][0]
+    parsed = parse_annual_discovery_response_v2(
+        json.dumps({"findings": [finding], "limitations": []}, ensure_ascii=False), batch
+    )
+
+    assert len(parsed.findings) == 1
+    assert parsed.findings[0].citations == ((evidence_id, "甲　乙在2025年度调整了交易安排"),)
+    assert parsed.restored_quotes == 1
+
+
+@pytest.mark.parametrize(
+    ("source", "quote"),
+    [
+        ("甲甲甲", "甲 甲"),  # ambiguous overlapping matches
+        ("甲 乙，丙丁", "甲乙丙丁"),  # omitted punctuation
+        ("甲乙丙丁", "甲乙丙戊"),  # changed character
+        ("甲 乙", "甲乙"),  # restoring would duplicate another citation pair
+    ],
+)
+def test_v2_parser_rejects_ambiguous_or_changed_whitespace_recovery(
+    source: str, quote: str
+) -> None:
+    batch = _batch(raw_text=source)
+    evidence_id = batch.fragments[0].evidence_id
+    finding = json.loads(_valid_response(evidence_id, quote))["findings"][0]
+    if source == "甲 乙":
+        finding["citations"].append({"evidence_id": evidence_id, "quote": "甲　乙"})
+
+    parsed = parse_annual_discovery_response_v2(
+        json.dumps({"findings": [finding], "limitations": []}, ensure_ascii=False), batch
+    )
+
+    assert parsed.findings == ()
+    assert parsed.rejected_findings == 1
+
+
+def test_v2_parser_rejects_wrong_fragment_and_restored_quotes_over_limit() -> None:
+    first = _batch(raw_text="己庚辛壬癸")
+    second = _batch(batch_index=2, raw_text="另一个片段")
+    wrong_fragment_id = second.fragments[0].evidence_id
+    wrong_id_finding = json.loads(_valid_response(wrong_fragment_id, "甲乙丙丁"))["findings"][0]
+    wrong_fragment = parse_annual_discovery_response_v2(
+        json.dumps({"findings": [wrong_id_finding], "limitations": []}, ensure_ascii=False), first
+    )
+
+    same_batch_other_fragment = DiscoveryBatch(
+        first.batch_index,
+        (first.fragments[0], DiscoveryFragment(
+            evidence_id=wrong_fragment_id,
+            pdf_page=1,
+            block_index=1,
+            start_char=len(first.fragments[0].raw_text),
+            bbox=(1.0, 2.0, 3.0, 4.0),
+            raw_text="甲乙丙丁戊己庚辛壬癸",
+        )),
+        len(first.fragments[0].raw_text) + len("甲乙丙丁戊己庚辛壬癸"),
+        1000,
+    )
+    wrong_local_quote = json.loads(
+        _valid_response(first.fragments[0].evidence_id, "甲乙丙丁")
+    )["findings"][0]
+    same_batch_wrong_fragment = parse_annual_discovery_response_v2(
+        json.dumps({"findings": [wrong_local_quote], "limitations": []}, ensure_ascii=False),
+        same_batch_other_fragment,
+    )
+
+    long_source = " ".join("甲" for _ in range(151))
+    long_batch = _batch(raw_text=long_source)
+    long_finding = json.loads(_valid_response(long_batch.fragments[0].evidence_id, "甲" * 151))["findings"][0]
+    over_limit = parse_annual_discovery_response_v2(
+        json.dumps({"findings": [long_finding], "limitations": []}, ensure_ascii=False), long_batch
+    )
+
+    assert wrong_fragment.findings == ()
+    assert wrong_fragment.rejected_findings == 1
+    assert same_batch_wrong_fragment.findings == ()
+    assert same_batch_wrong_fragment.rejected_findings == 1
+    assert over_limit.findings == ()
+    assert over_limit.rejected_findings == 1
+
+
+def test_v1_parser_remains_strict_for_repeated_fragment_ids_and_whitespace_variants() -> None:
+    batch = _batch(raw_text="客户甲在2025年度调整了交易安排，金额为120万元。")
+    evidence_id = batch.fragments[0].evidence_id
+    finding = json.loads(_valid_response(evidence_id, "客户甲在2025年度调整了交易安排"))["findings"][0]
+    finding["citations"].append({"evidence_id": evidence_id, "quote": "金额为120万元"})
+    with pytest.raises(ValueError, match="citation_evidence_id_repeated"):
+        parse_annual_discovery_response(
+            json.dumps({"findings": [finding], "limitations": []}, ensure_ascii=False), batch
+        )
+
+    whitespace_batch = _batch(raw_text="客户甲　调整了安排")
+    whitespace_finding = json.loads(
+        _valid_response(whitespace_batch.fragments[0].evidence_id, "客户甲调整了安排")
+    )
+    with pytest.raises(ValueError, match="citation_quote_not_exact_source_substring"):
+        parse_annual_discovery_response(json.dumps(whitespace_finding, ensure_ascii=False), whitespace_batch)
 
 
 @pytest.mark.parametrize(
@@ -404,8 +560,11 @@ def test_batch_failure_does_not_drop_successes_from_later_batches(tmp_path, monk
         "succeeded", "failed", "failed", "succeeded"
     ]
     assert [item["reason"] for item in payload["coverage"]["batch_results"]] == [
-        None, "invalid_model_response", "model_call_failed", None
+        None, "all_findings_rejected", "model_call_failed", None
     ]
+    rejected_batch = payload["coverage"]["batch_results"][1]
+    assert rejected_batch["accepted_findings"] == 0
+    assert rejected_batch["rejected_findings"] == 1
     assert [item["title"] for item in payload["findings"]] == ["首批渠道线索", "末批诉讼线索"]
     assert len(payload["audit_artifacts"]) == 4
     assert sum(item["status"] == "failed" for item in payload["audit_artifacts"]) == 1

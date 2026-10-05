@@ -73,7 +73,7 @@ flowchart TD
 | POST /v1/annual-prechecks | 创建旧预检 |
 | GET /v1/annual-prechecks/{run_id} | 读取旧预检归档 |
 | POST /v1/annual-analysis-jobs | 以已存来源创建 deterministic / m3_screening / model_investigation / integrated_analysis 任务 |
-| GET /v1/annual-analysis-jobs/{job_id} | 查询阶段、状态、结果 run_id / result_url；运行中的年度 CLI 阶段可附带来源绑定的安全批次进度 |
+| GET /v1/annual-analysis-jobs/{job_id} | 查询阶段、状态、结果 run_id / result_url；运行中的年度 CLI 阶段可附带来源绑定的安全批次进度，发现层分别统计 successful/partial/failed |
 | GET /v1/annual-analysis-history?limit=20&offset=0 | 只读本机年度任务与报告索引，按创建时间分页并报告总条数 |
 | GET /v1/annual-analyses/{run_id} | 只读已归档的 v2 报告，并分开返回已核验、narrative 与全文发现来源索引 |
 | GET /v1/annual-analyses/{run_id}/export?format=json\|markdown\|html | 验证既有年度归档及来源绑定后按白名单导出；不重跑分析、不导出整份 PDF/整页图、密钥或原始模型请求/响应 |
@@ -133,13 +133,13 @@ Claim 类型为 fact、calculation、inference、hypothesis；同比属于 calcu
 
 固定候选调查仍使用受限同源检索与单次补充检索，不开放任意互联网检索或读取评测标签。独立全文发现会把原 PDF 全部可提取文字按预算分批发送，不以候选、财务指标或 M3 作为触发条件；新发现观点均未核验。最终评审额外进行一次结构化调用，只接收基础报告与最多 12 条优先发现，并受实际请求字符上限约束。详细预算和覆盖状态见[全文发现契约](annual-discovery.md)。
 
-`config/prompts/annual_investigation_v1.md`、`annual_discovery_v1.md` 与 `annual_review_v2.md` 是当前运行时提示词，分别对应候选调查、全文发现和最终评审。输入 PDF 文本按不可信待分析数据处理。全文发现观点不得冒充核实结果；最终评审解析器拒绝模型观点字段中的阿拉伯数字，并只允许引用实际输入的 ID。页面需要展示数值时应从已核验结构化记录取值。改变这些限制须同时修改并验证输出契约，不能仅改 Markdown 措辞。
+`config/prompts/annual_investigation_v1.md`、`annual_discovery_v2.md` 与 `annual_review_v2.md` 是当前运行时提示词，分别对应候选调查、全文发现和最终评审；旧 `annual_discovery_v1` 归档仍由版本感知 reader 按 v1 规则读取，未知版本拒绝。v2 提示词目标为每批最多三条线索，解析器保留六条安全上限用于兼容历史响应；逐条 finding 校验允许部分保留有效项，但不放宽字段、数字、舞弊断言、来源 ID 或精确引用约束。相同批内片段可被不同 quote 多次引用，finding 的 `evidence_ids` 是按出现顺序去重的 ID；仅唯一 Unicode 空白差异可在同片段内恢复为精确连续子串，并通过 `restored_quotes` 计数。完整契约见[全文发现契约](annual-discovery.md)。输入 PDF 文本按不可信待分析数据处理。全文发现观点不得冒充核实结果；最终评审解析器拒绝模型观点字段中的阿拉伯数字，并只允许引用实际输入的 ID。页面需要展示数值时应从已核验结构化记录取值。改变这些限制须同时修改并验证输出契约，不能仅改 Markdown 措辞。
 
 审计目录为 `artifacts/runs/<run_id>/` 的 UUID 子目录，联网前写 request.json/started，成功写 response.json，失败写安全类别；凭据须脱敏，不记录请求头、base_url 或异常原文。响应审计写入失败抛 AuditPersistError，不返回审计成功；输出归档仍需独立检查是否可能夹带敏感信息，不能据一个脱敏环节推定整条链路安全。
 
 model_review 为可选报告字段，含 completed/failed/not_called 状态、assessment、理由、依据 ID、后续核查、限制及调用审计。assessment 可为 prioritize_review、no_priority_issue_identified_within_scope、insufficient_evidence。当前 `annual_review_v2` 与解析器保持同一输出约束：理由最多六项、后续核查最多八项、限制最多八项；每项 `evidence_ids` 最多八个互不重复的白名单 ID。`summary` 最多 800 字符、理由文本最多 500、后续动作最多 400、每条限制最多 400；模型观点字段不得包含阿拉伯数字，跟进对象必须同时出现在该项依据中。解析器拒绝越界、重复、无来源或不匹配的引用。提示词约束的行为调整须同时核对该解析契约及回归。
 
-观点校验不等同独立事实/语义核验；发现、评审失败仍尽量保留基础报告及成功层并暴露问题，旧报告无新全文发现层时仍按旧归档兼容读取。新全文发现层若来源 SHA、证据片段、引文或字段结构不符，报告读取、索引、页图及导出均 fail closed，不以旧字段绕过校验。
+观点校验不等同独立事实/语义核验；发现、评审失败仍尽量保留基础报告及成功层并暴露问题，旧报告无新全文发现层时仍按旧归档兼容读取。v2 `processed_batches` 必须等于 successful、partial 与 failed 之和；partial 至少保留一个有效项并拒绝至少一个项，且不计入完整处理字符或 `coverage.complete`。v2 部分 finding 仍可读取、索引和导出为未核验观点；最终评审接收 partial 计数且不把它视作无优先事项。旧进度没有 partial 字段时规范为零，新进度显式验证三类计数之和。新全文发现层若来源 SHA、证据片段、引文或字段结构不符，报告读取、索引、页图及导出均 fail closed，不以旧字段绕过校验。
 
 ### 叙述片段索引与页图
 

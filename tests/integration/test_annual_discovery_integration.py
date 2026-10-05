@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
@@ -63,12 +64,14 @@ def _synthetic_pdf(path: Path, topic: str) -> str:
 def _finding_for(batch: dict[str, object], topic: str) -> dict[str, object]:
     if topic == "related_party":
         quote = "关联交易涉及持续采购安排，披露说明仍需补充核对。"
+        second_quote = "披露说明仍需补充核对"
         title = "关联采购安排披露"
         observation = "报告披露关联采购安排，其交易背景和定价依据仍需单独核对。"
         why = "相关安排可能影响对业务往来和治理风险的理解。"
         follow = "建议核对相关合同、定价依据及审批记录。"
     else:
         quote = "主要客户集中度偏高，部分回款条款仍需进一步核验。"
+        second_quote = "部分回款条款仍需进一步核验"
         title = "客户集中与回款安排"
         observation = "报告披露主要客户集中度偏高，相关回款条款仍需核对。"
         why = "客户结构和回款安排可能影响对经营稳定性的理解。"
@@ -84,12 +87,15 @@ def _finding_for(batch: dict[str, object], topic: str) -> dict[str, object]:
         "why_it_matters": why,
         "follow_up": follow,
         "priority": "medium",
-        "citations": [{"evidence_id": selected["evidence_id"], "quote": quote}],
+        "citations": [
+            {"evidence_id": selected["evidence_id"], "quote": quote},
+            {"evidence_id": selected["evidence_id"], "quote": second_quote},
+        ],
     }
 
 
 @pytest.mark.parametrize(
-    ("topic", "company_id", "document_id", "expected_title", "quote"),
+    ("topic", "company_id", "document_id", "expected_title", "quote", "expected_discovery_status"),
     [
         (
             "related_party",
@@ -97,6 +103,7 @@ def _finding_for(batch: dict[str, object], topic: str) -> dict[str, object]:
             "synthetic-annual-assoc",
             "关联采购安排披露",
             "关联交易涉及持续采购安排，披露说明仍需补充核对。",
+            "partial",
         ),
         (
             "customer_concentration",
@@ -104,6 +111,7 @@ def _finding_for(batch: dict[str, object], topic: str) -> dict[str, object]:
             "synthetic-annual-customer",
             "客户集中与回款安排",
             "主要客户集中度偏高，部分回款条款仍需进一步核验。",
+            "completed",
         ),
     ],
 )
@@ -116,6 +124,7 @@ def test_synthetic_pdf_cli_mock_get_preview_and_three_exports(
     document_id: str,
     expected_title: str,
     quote: str,
+    expected_discovery_status: str,
 ) -> None:
     project_root = tmp_path / "isolated-project"
     source_pdf = project_root / "data" / "raw" / company_id.lower() / "2025" / document_id / "annual.pdf"
@@ -163,10 +172,15 @@ def test_synthetic_pdf_cli_mock_get_preview_and_three_exports(
         assert settings == _DUMMY_SETTINGS
         assert settings.api_key == "dummy-test-only-key-never-sent"
         user_content = messages[1].content
-        if prompt_version == "annual_discovery_v1":
+        if prompt_version == "annual_discovery_v2":
             batch = json.loads(user_content)
             finding = _finding_for(batch, topic)
-            response_text = json.dumps({"findings": [finding], "limitations": []}, ensure_ascii=False)
+            findings = [finding]
+            if expected_discovery_status == "partial":
+                invalid = copy.deepcopy(finding)
+                invalid["citations"][0]["quote"] = "并非来源中的原文"
+                findings.append(invalid)
+            response_text = json.dumps({"findings": findings, "limitations": []}, ensure_ascii=False)
         elif prompt_version == "annual_review_v2":
             review_input = json.loads(user_content)
             assert review_input["verified_facts"] == []
@@ -235,7 +249,7 @@ def test_synthetic_pdf_cli_mock_get_preview_and_three_exports(
     ])
     output = capsys.readouterr()
 
-    assert result == 0, output.out + output.err
+    assert result == (2 if expected_discovery_status == "partial" else 0), output.out + output.err
     run_match = re.search(r"run_id=(annual-analysis-[0-9a-f-]{36})", output.out)
     assert run_match is not None, output.out
     run_id = run_match.group(1)
@@ -249,20 +263,39 @@ def test_synthetic_pdf_cli_mock_get_preview_and_three_exports(
     assert report["confirmed"]["metrics"] == []
     assert report["model_investigation"]["status"] == "abstained"
     assert report["model_investigation"]["items"] == []
-    assert discovery["status"] == "completed"
+    assert discovery["status"] == expected_discovery_status
     assert discovery["findings"][0]["title"] == expected_title
     assert discovery["findings"][0]["finding_id"].startswith(f"disc:{source_sha[:12]}-")
     assert discovery["findings"][0]["classification"] == "unverified_model_finding"
+    assert discovery["findings"][0]["evidence_ids"] == [discovery["findings"][0]["citations"][0]["evidence_id"]]
+    assert len(discovery["findings"][0]["citations"]) == 2
+    assert len({citation["evidence_id"] for citation in discovery["findings"][0]["citations"]}) == 1
     assert discovery["fraud_conclusion"] is None
     assert report["model_review"]["status"] == "completed"
     assert report["model_review"]["reasons"][0]["evidence_ids"] == [
         discovery["findings"][0]["finding_id"]
     ]
-    assert analysis["model_discovery"]["status"] == "completed"
-    assert manifest["model_discovery_status"] == "completed"
+    assert analysis["model_discovery"]["status"] == expected_discovery_status
+    assert manifest["model_discovery_status"] == expected_discovery_status
+    if expected_discovery_status == "partial":
+        assert discovery["coverage"]["successful_batches"] == 0
+        assert discovery["coverage"]["partial_batches"] == 1
+        assert discovery["coverage"]["failed_batches"] == 0
+        assert discovery["coverage"]["processed_chars"] == 0
+        assert discovery["coverage"]["complete"] is False
+        assert discovery["coverage"]["failed_pages"] == []
+        assert discovery["coverage"]["unread_pages"] == discovery["coverage"]["batch_results"][0]["pages"]
+        assert 3 in discovery["coverage"]["unread_pages"]
+        assert discovery["coverage"]["batch_results"][0]["status"] == "partial"
+        assert discovery["coverage"]["batch_results"][0]["accepted_findings"] == 1
+        assert discovery["coverage"]["batch_results"][0]["rejected_findings"] == 1
+    else:
+        assert discovery["coverage"]["successful_batches"] == 1
+        assert discovery["coverage"]["partial_batches"] == 0
+        assert discovery["coverage"]["complete"] is True
     assert manifest["status"] == "completed_with_issues"
     assert [call["prompt_version"] for call in calls] == [
-        "annual_discovery_v1", "annual_review_v2"
+        "annual_discovery_v2", "annual_review_v2"
     ]
     discovery_request = calls[0]["request"]["messages"][1]["content"]
     serialized_batch = json.loads(discovery_request)
@@ -290,6 +323,11 @@ def test_synthetic_pdf_cli_mock_get_preview_and_three_exports(
     index = client.get(f"/v1/annual-analyses/{run_id}/discovery-evidences")
     assert index.status_code == 200, index.text
     assert index.json()["items"][0]["evidence_id"] == evidence["evidence_id"]
+    indexed_citations = index.json()["items"][0]["citations"]
+    assert len(indexed_citations) == 2
+    assert {item["quote"] for item in indexed_citations} == {
+        citation["quote"] for citation in discovery["findings"][0]["citations"]
+    }
     preview = client.get(
         f"/v1/annual-analyses/{run_id}/discovery-evidences/{evidence['evidence_id']}/preview.png"
     )
@@ -310,11 +348,16 @@ def test_synthetic_pdf_cli_mock_get_preview_and_three_exports(
         assert evidence["evidence_id"] in text
         assert discovery["findings"][0]["finding_id"] in text
         assert quote not in text
+        assert all(citation["quote"] not in text for citation in discovery["findings"][0]["citations"])
         assert "raw_text" not in text
         assert '"quote"' not in text
     json_payload = json.loads(json_text)
     assert json_payload["report"]["model_discovery"]["findings"][0]["verification_status"] == "unverified"
     assert json_payload["report"]["model_discovery"]["findings"][0]["citations"][0]["pdf_page"] == 3
+    assert len(json_payload["report"]["model_discovery"]["findings"][0]["citations"]) == 2
+    assert json_payload["report"]["model_discovery"]["coverage"]["partial_batches"] == (
+        1 if expected_discovery_status == "partial" else 0
+    )
     assert "PDF 第3页" in markdown_text
     assert "PDF 第3页" in html_text
     assert "discovery" not in json_payload["report"]["model_investigation"]

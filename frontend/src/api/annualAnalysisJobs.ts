@@ -211,7 +211,11 @@ function readDiscoveryProgress(value: unknown): AnnualAnalysisDiscoveryProgress 
     "event", "status", "batch_index", "planned_batches", "processed_batches",
     "successful_batches", "failed_batches", "total_pages", "total_chars", "updated_at",
   ];
-  if (record === null || Object.keys(record).length !== fields.length || fields.some((key) => !(key in record))) {
+  const hasPartialBatches = record !== null && Object.prototype.hasOwnProperty.call(record, "partial_batches");
+  if (
+    record === null || Object.keys(record).length !== fields.length + (hasPartialBatches ? 1 : 0) ||
+    fields.some((key) => !(key in record))
+  ) {
     throw invalidResponse("discovery_progress 字段集合无效");
   }
   const event = record.event;
@@ -224,12 +228,13 @@ function readDiscoveryProgress(value: unknown): AnnualAnalysisDiscoveryProgress 
     "batch_index", "planned_batches", "processed_batches", "successful_batches",
     "failed_batches", "total_pages", "total_chars",
   ].map((key) => [key, integerField(record, key)])) as Record<string, number>;
+  const partialBatches = hasPartialBatches ? integerField(record, "partial_batches") : 0;
   const updatedAt = stringField(record, "updated_at");
   if (
     Object.values(counts).some((count) => !Number.isSafeInteger(count) || count < 0) ||
+    !Number.isSafeInteger(partialBatches) || partialBatches < 0 ||
     counts.planned_batches > 128 || counts.processed_batches > counts.planned_batches ||
-    counts.failed_batches > counts.processed_batches ||
-    counts.successful_batches !== counts.processed_batches - counts.failed_batches ||
+    counts.successful_batches + partialBatches + counts.failed_batches !== counts.processed_batches ||
     counts.batch_index > counts.planned_batches || counts.total_pages > 100_000 ||
     counts.total_chars > Number.MAX_SAFE_INTEGER || updatedAt.length > 40 ||
     !/(?:Z|[+-]\d{2}:\d{2})$/.test(updatedAt) || !Number.isFinite(Date.parse(updatedAt))
@@ -241,6 +246,7 @@ function readDiscoveryProgress(value: unknown): AnnualAnalysisDiscoveryProgress 
     planned_batches: counts.planned_batches,
     processed_batches: counts.processed_batches,
     successful_batches: counts.successful_batches,
+    partial_batches: partialBatches,
     failed_batches: counts.failed_batches,
     total_pages: counts.total_pages,
     total_chars: counts.total_chars,

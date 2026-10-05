@@ -12,17 +12,19 @@
 
 默认每批原始正文不超过 12000 字，按实际 Chat Completions 请求 JSON 体计算的序列化输入不超过 24000 字符；全文最多 128 批、120 万字符。所有上限都不可由调用方调高。遇到限制时保留已规划批次，并在 coverage 中明确遗漏字符、页面和 `truncated`，不把前段扫描描述为全文完成。每次只对一批调用一次 `audited_complete_chat`，单批调用或解析失败后继续后续批次。
 
-coverage 区分原始 PDF 页数、含可提取文字的页数、原始文字块数、文字字符数、规划批次和已结束批次。`processed_batches` 表示已结束批次（成功与失败均计入），`successful_batches` 单列通过严格响应检查的批次，`failed_batches` 单列调用或解析失败；`batch_results` 为每批记录安全状态、失败类别、页码和字符数，不含正文。`processed_chars` 只计严格通过响应检查的批次；`attempted_chars` 计实际送入模型的正文，`unattempted_chars` 和 `unread_pages` 表示尚未扫描范围。失败批次所含页面列入 `failed_pages` 与 `unread_pages`，即使同页其他片段成功，该页也不是完整处理。
+coverage 区分原始 PDF 页数、含可提取文字的页数、原始文字块数、文字字符数、规划批次和已结束批次。v2 的 `processed_batches` 等于 `successful_batches + partial_batches + failed_batches`；预算耗尽后未尝试的批次另列为 `unattempted_batches`。`batch_results` 为每批记录安全状态、固定失败类别、页码和字符数，并在 v2 记录 `accepted_findings`、`rejected_findings` 与 `restored_quotes`，不含正文。`succeeded` 表示本批所有 finding 均通过（空 findings 合法），`partial` 表示有接受项也有拒绝项，`failed` 表示没有接受项或调用/容器失败。旧 v1 归档按严格 v1 规则读取，缺少 `partial_batches` 时按零处理；未知提示词版本拒绝读取。`processed_chars` 只计整批通过的批次；`attempted_chars` 计实际送入模型的正文，`unattempted_chars` 表示尚未尝试的字符，`unread_pages` 表示未完整处理的页面。失败批次页面列入 `failed_pages` 与 `unread_pages`；部分批次页面列入 `unread_pages`，但不标成整批失败页。两者都不能视为完整处理。
 
-`no_text_pages` 记录没有可提取文字的页；`image_pages` 记录存在图片块的页；`unread_image_pages` 只记录没有文字且有图片的页。带正文和 logo/插图的页面仍可完整处理其中全部可提取文字。`text_only_scope` 明确本模块不执行 OCR，图片本身和图片中的文字不在范围内。`complete` 仅表示至少有可提取文字，且全部可提取文字均在上限内成功处理、没有未读图片页；零文字来源不能因零字符等于零计划字符而标为完整。它不表示没有风险，也不证明模型发现正确。空白 PDF 状态为 `not_called`。
+`no_text_pages` 记录没有可提取文字的页；`image_pages` 记录存在图片块的页；`unread_image_pages` 只记录没有文字且有图片的页。带正文和 logo/插图的页面仍可完整处理其中全部可提取文字。`text_only_scope` 明确本模块不执行 OCR，图片本身和图片中的文字不在范围内。`complete` 仅表示至少有可提取文字，且全部可提取文字均在上限内由完整成功批次处理、`partial_batches` 与 `failed_batches` 均为零、没有未尝试字符或未读图片页；零文字来源不能因零字符等于零计划字符而标为完整。它不表示没有风险，也不证明模型发现正确。空白 PDF 状态为 `not_called`。
 
 ## 模型输出与证据
 
-模型每批只允许返回 `findings` 与 `limitations`，并提出动态标题、观察、关注理由、后续核查动作、优先级和本批精确引用；程序只生成发现 ID、固定未核验分类和状态，并检查引用与字段。仅标题/目录、泛泛行业风险和标准免责句不能构成公司特有发现；具体的清洁对照不自动算作风险。没有足够原文支持时允许空 `findings`。解析器在 JSON 解码前限制响应为八万字符，拒绝多余/缺失字段、重复 JSON 键、null、越界文本、观点文字中的阿拉伯数字、肯定性核实/舞弊断言、肯定性舞弊排除断言、跨批 ID、重复引用 ID 和非精确/过短/空白 quote；任一问题使整批无效。句式守卫只检查有限的中英文短语及当前标点/转折分句，保留“不能排除舞弊”“无法认定不存在舞弊”“目前未发现舞弊，仍需复核”等审慎表达。该守卫是程序措辞检查，不能独立判定全部语义，也不替代独立核验。每批最多六条发现、每条最多四个引用且单条 quote 最多三百字符，八万字符足以容纳这些字段在既定长度限制下的有效完整响应。数字可出现在其来源 quote 中，不会被转成观点结论。词法子串匹配只绑定引用位置，不是语义核验。
+当前提示词版本为 `annual_discovery_v2`：每批目标是不凑数地提出最多三条最值得核查的线索，每条简短说明观察、理由与后续动作，并优先引用最短且足以定位的原文。解析器仍安全封顶六条，以兼容历史模型回应；这不是新提示词目标。模型只返回 `findings` 与 `limitations`，程序生成发现 ID、固定未核验分类和状态。容器必须是严格 JSON 对象，拒绝代码围栏、额外/缺失字段、重复 JSON 键、null、越界字段或无效限制项；容器错误使整批失败。每条 finding 再独立校验字段、长度、优先级、数字限制、肯定性核实/舞弊断言、舞弊排除断言以及引用：v2 单条非法只拒绝该条，保留其余合格项；有接受项也有拒绝项时该批为 `partial`，无接受项时为 `failed`。这些逐条拒绝不会放宽任何字段或事实核验规则。句式守卫只检查有限的中英文短语及当前标点/转折分句，保留“不能排除舞弊”“无法认定不存在舞弊”“目前未发现舞弊，仍需复核”等审慎表达。它是程序措辞检查，不能独立判定全部语义，也不替代独立核验。
 
-程序为每条发现生成 `disc:<sha摘要>` ID，固定写入 `classification=unverified_model_finding`、`verification_status=unverified`，并将 `fraud_conclusion` 固定为 null。完全重复的发现去重；不同批次成功发现会保留。`evidences` 只返回实际被 findings 引用的原文片段。模型可返回空 findings；这表示本批没有提出可引用线索，不代表年报没有风险。
+v2 每条 finding 最多四个 citation、每条 quote 不超过三百字符；同一批片段 ID 可用于多个不同的精确连续子串，最终 `evidence_ids` 按引用顺序保留唯一 ID；重复 `(evidence_id, quote)` 仍拒绝。若 quote 与指定片段只在 Unicode 空白排版上不同，解析器仅在去空白后至少两个字符且该片段内恰好有一个匹配（包括重叠匹配计数）时恢复为一个连续原文子串；恢复后的原文长度仍受三百字符限制，并重新执行逐字检查。它不改字符、标点、数字或顺序，不跨片段、不替换 ID、不拼接或删词；歧义、非空白改写、错误片段及恢复后重复引用均拒绝该条。`restored_quotes` 让成功恢复数可审计。v1 历史层维持原有严格解析，不执行空白恢复或 v2 多引文规则。数字可出现在来源 quote 中，不会被转成观点结论；词法子串匹配只绑定引用位置，不是语义核验。
 
-状态为 `completed`（完整覆盖且所有批次检查通过）、`partial`（至少一个批次成功且仍有失败、超时或覆盖缺口）、`failed`（全部已尝试批次均失败；预算终止时若已有失败且没有成功批次也属此状态）或 `not_called`（没有进入任何模型调用）。总墙钟预算为三十分钟；每次连接器超时不超过该预算剩余时间，预算耗尽时未尝试批次/字符/页面显式记录并保留此前成功发现；全部已尝试批次失败时，未尝试范围仍列入 coverage。`model_call_count` 统计返回模型响应的审计调用；`model_call_attempt_count` 统计实际进入审计连接器的尝试。Progress callback 只收计数、序号和状态，不传入正文、quote、模型设置或路径；回调异常作为安全 limitation 记录，不中断发现流程。
+程序为每条发现生成 `disc:<sha摘要>` ID，固定写入 `classification=unverified_model_finding`、`verification_status=unverified`，并将 `fraud_conclusion` 固定为 null。完全重复的发现去重；不同批次成功发现会保留。`evidences` 只返回实际被 findings 引用的原文片段。模型可返回空 findings；这表示本批没有提出可引用线索，不代表年报没有风险。v2 部分接受的 finding 与完整成功批次中的 finding 一样可读，但其所在批次不算完整成功、字符不计入 `processed_chars`、所涉页仍为未完整处理。
+
+状态为 `completed`（完整覆盖且没有 partial/failed/unattempted 批次）、`partial`（存在部分接受、失败批次、超时或覆盖缺口；即使 `successful_batches=0`，只要 partial 批次保留了有效 finding 仍可有可读结果）、`failed`（没有任何可用 finding 且已尝试批次失败）或 `not_called`（没有进入任何模型调用）。调用失败与输出解析失败使用不同安全类别；可识别的超时归入 `model_call_timeout`，不伪装成 JSON 错误，报告不保存异常原文。总墙钟预算为三十分钟；每次连接器超时不超过该预算剩余时间，预算耗尽时未尝试批次/字符/页面显式记录并保留此前成功发现；全部已尝试批次失败且没有可用发现时仍为 `failed`。`model_call_count` 统计返回模型响应的审计调用；`model_call_attempt_count` 统计实际进入审计连接器的尝试。Progress callback 只收计数、序号和状态，不传入正文、quote、模型设置或路径；新进度事件明确给出 successful/partial/failed 三类计数，旧进度记录缺少 partial 时按零处理；回调异常作为安全 limitation 记录，不中断发现流程。
 
 每批请求和响应通过现有审计连接器归档至运行目录的 UUID 子目录。发现结果本身不复制凭据、服务地址或异常原文；审计连接器记录请求前先脱敏，调用失败只记录安全类别。不得将调用审计文件当作公开分发内容。
 

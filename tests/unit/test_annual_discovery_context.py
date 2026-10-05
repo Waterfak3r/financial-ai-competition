@@ -221,6 +221,8 @@ def test_coverage_complete_requires_every_planned_text_batch_and_no_unread_image
         "unread_image_pages": [],
         "planned_batches": 2,
         "processed_batches": 2,
+        "successful_batches": 2,
+        "partial_batches": 0,
         "failed_batches": 0,
         "planned_chars": 900,
         "total_chars": 900,

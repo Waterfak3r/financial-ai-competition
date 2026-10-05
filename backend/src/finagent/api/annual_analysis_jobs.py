@@ -564,6 +564,7 @@ def _read_discovery_progress(
         "processed_batches", "successful_batches", "failed_batches", "total_pages",
         "total_chars", "updated_at",
     }
+    expected_fields_with_partial = expected_fields | {"partial_batches"}
     try:
         parent = job_dir.resolve(strict=True)
         if path.parent.resolve(strict=True) != parent:
@@ -585,7 +586,12 @@ def _read_discovery_progress(
             return None
         record = json.loads(raw.decode("utf-8"))
         request = state.get("request")
-        if not isinstance(record, dict) or set(record) != expected_fields or not isinstance(request, Mapping):
+        record_fields = set(record) if isinstance(record, dict) else set()
+        if (
+            not isinstance(record, dict)
+            or record_fields != expected_fields and record_fields != expected_fields_with_partial
+            or not isinstance(request, Mapping)
+        ):
             return None
         if (
             record.get("kind") != "fintrace_annual_discovery_progress_v1"
@@ -620,11 +626,14 @@ def _read_discovery_progress(
             if type(value) is not int or value < 0:
                 return None
             counts[field] = value
+        partial_batches = record.get("partial_batches", 0)
+        if type(partial_batches) is not int or partial_batches < 0:
+            return None
+        counts["partial_batches"] = partial_batches
         if (
             counts["planned_batches"] > 128
             or counts["processed_batches"] > counts["planned_batches"]
-            or counts["failed_batches"] > counts["processed_batches"]
-            or counts["successful_batches"] != counts["processed_batches"] - counts["failed_batches"]
+            or counts["successful_batches"] + counts["partial_batches"] + counts["failed_batches"] != counts["processed_batches"]
             or counts["batch_index"] > counts["planned_batches"]
             or counts["total_pages"] > 100_000
             or counts["total_chars"] > 9_007_199_254_740_991
