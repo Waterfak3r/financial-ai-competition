@@ -1,0 +1,183 @@
+{
+  "schema_version": 1,
+  "kind": "annual_scan_latency_delivery_software_checks_v1",
+  "title": "年报发现并发性能基线软件检查摘要",
+  "date": "2026-10-05",
+  "privacy": {
+    "contains_user_pdf_name_or_path": false,
+    "contains_user_pdf_sha256": false,
+    "contains_user_pdf_text_or_page_images": false,
+    "contains_model_request_response_or_audit_body": false,
+    "contains_credentials_or_host_paths": false,
+    "contains_private_ui_image_bytes_or_hashes": false
+  },
+  "accepted_software_baseline": {
+    "commit": "c0c603bb896cd151d48cbdf74adbb7db9c15823b",
+    "tree": "f292583ed67a9eb7d72978ee3f64e752a9fcd773",
+    "fingerprint_scope": "并发实现相关运行模块、扫描上下文、提示词，以及未变更的年报 UI 两个源文件；各项分别记录工作区 raw SHA256、c0 Git payload SHA256 和 c0 blob OID。",
+    "runtime_file_fingerprints": [
+      {
+        "path": "backend/src/finagent/agents/annual_discovery.py",
+        "worktree_status": "clean",
+        "worktree_raw_sha256": "d550901d4693e4a76756da372ba85e8f5681a08fc8a2b2a7b1a45cfbe76ee07d",
+        "c0_commit_git_payload_sha256": "d550901d4693e4a76756da372ba85e8f5681a08fc8a2b2a7b1a45cfbe76ee07d",
+        "c0_commit_git_blob_oid_sha1": "5c61aa32de487f99d1437b877e94250836b6cb0c",
+        "worktree_raw_matches_c0_payload": true
+      },
+      {
+        "path": "backend/src/finagent/audit/audited_chat.py",
+        "worktree_status": "clean",
+        "worktree_raw_sha256": "65fe7c09854ccfe6ef542f96879d965cb51ead945914500978d1b063c4dedbaa",
+        "c0_commit_git_payload_sha256": "65fe7c09854ccfe6ef542f96879d965cb51ead945914500978d1b063c4dedbaa",
+        "c0_commit_git_blob_oid_sha1": "b7a81b27aee5bf45c1928bdb37782b79b30c9707",
+        "worktree_raw_matches_c0_payload": true
+      },
+      {
+        "path": "backend/src/finagent/reports/investigation_append.py",
+        "worktree_status": "clean",
+        "worktree_raw_sha256": "cc47480b541f2d299c5a70f5251ff089a7ad83bfab7736f1ce17e27810680d1e",
+        "c0_commit_git_payload_sha256": "cc47480b541f2d299c5a70f5251ff089a7ad83bfab7736f1ce17e27810680d1e",
+        "c0_commit_git_blob_oid_sha1": "79556e928b2bb8a165135ff7366c446ceddcbd40",
+        "worktree_raw_matches_c0_payload": true
+      },
+      {
+        "path": "backend/src/finagent/retrieval/annual_discovery_context.py",
+        "worktree_status": "clean",
+        "worktree_raw_sha256": "c07a4c53cf0d996d6140b65d061428b0bd0d17416cb25486ab639c94fb000a1c",
+        "c0_commit_git_payload_sha256": "c07a4c53cf0d996d6140b65d061428b0bd0d17416cb25486ab639c94fb000a1c",
+        "c0_commit_git_blob_oid_sha1": "c194633286391c6fb7f9ef47217d2e7c18685410",
+        "worktree_raw_matches_c0_payload": true
+      },
+      {
+        "path": "config/prompts/annual_discovery_v2.md",
+        "worktree_status": "clean",
+        "worktree_raw_sha256": "d3c7f91c0442910477ebdaedf8ae128ecddd613cf786fb35ee2934389b346593",
+        "c0_commit_git_payload_sha256": "d3c7f91c0442910477ebdaedf8ae128ecddd613cf786fb35ee2934389b346593",
+        "c0_commit_git_blob_oid_sha1": "85b957aa72999ba3f98869c930929707ba1dc97a",
+        "worktree_raw_matches_c0_payload": true
+      },
+      {
+        "path": "scripts/analyze_annual.py",
+        "worktree_status": "clean",
+        "worktree_raw_sha256": "43acc17ee815ad9b8fa9577c1df04554c8979d8c07d288574107f72fe80d45f0",
+        "c0_commit_git_payload_sha256": "43acc17ee815ad9b8fa9577c1df04554c8979d8c07d288574107f72fe80d45f0",
+        "c0_commit_git_blob_oid_sha1": "60955d8ff99ceecaf6a34d0468ef62645fb62ef9",
+        "worktree_raw_matches_c0_payload": true
+      },
+      {
+        "path": "frontend/src/pages/AnnualAnalysisPage.tsx",
+        "worktree_status": "clean",
+        "worktree_raw_sha256": "95c0ff0db24f1b30e351bd6be671e648c4830d4ea7cf56ebb30b7aa94ec58a52",
+        "c0_commit_git_payload_sha256": "95c0ff0db24f1b30e351bd6be671e648c4830d4ea7cf56ebb30b7aa94ec58a52",
+        "c0_commit_git_blob_oid_sha1": "7cd0b64dc23d4b645db8ee0e21764b6b0700db61",
+        "worktree_raw_matches_c0_payload": true
+      },
+      {
+        "path": "frontend/src/styles/app.css",
+        "worktree_status": "clean",
+        "worktree_raw_sha256": "8eb59eaafb1e343ca463be9e9de450ebf85c74a112052ca5409d008795095560",
+        "c0_commit_git_payload_sha256": "8eb59eaafb1e343ca463be9e9de450ebf85c74a112052ca5409d008795095560",
+        "c0_commit_git_blob_oid_sha1": "41ffdbe9f584027fcdfd2165e5a112b00b53180a",
+        "worktree_raw_matches_c0_payload": true
+      }
+    ]
+  },
+  "backend_full_suite": {
+    "command": "python -m pytest -c backend/pyproject.toml tests -q",
+    "result": "passed",
+    "passed": 576,
+    "failed": 0,
+    "skipped": 3,
+    "elapsed_seconds": 202.93,
+    "exit_code": 0,
+    "stdout_log": "artifacts/evaluations/annual-scan-latency-20261005/backend-full-suite.txt",
+    "exit_code_log": "artifacts/evaluations/annual-scan-latency-20261005/backend-full-suite.exitcode.txt"
+  },
+  "focused_concurrency_and_reader_suite": {
+    "result": "passed",
+    "passed": 127,
+    "failed": 0,
+    "elapsed_seconds": 16.48,
+    "exit_code": 0,
+    "stdout_log": "artifacts/evaluations/annual-scan-latency-20261005/target-tests-fallback-reads.stdout.txt",
+    "exit_code_log": "artifacts/evaluations/annual-scan-latency-20261005/target-tests-fallback-reads.exitcode.txt",
+    "scope": "有界并发、审计归属、预算与异常恢复、严格年度报告读取器目标用例。"
+  },
+  "historical_v2_evidence": {
+    "status": "historical_only_not_rerun_this_round",
+    "application_commit": "a24e6a4df46f365be9ef8a9bca03441733c017c6",
+    "discovery_backend_commit": "159d57dced233e434d50f15ad8ef045e06fccc2c",
+    "evidence_file": "annual-discovery-v2-software-checks.json",
+    "backend_passed": 553,
+    "backend_skipped": 3,
+    "ui_browser_checks_passed": 57,
+    "ui_browser_checks_total": 57,
+    "ui_fixture_class_count": 8,
+    "historical_replay_findings_accepted": 104,
+    "historical_replay_findings_rejected": 5,
+    "historical_replay_restored_whitespace_only_quotes": 9
+  },
+  "mock_23_batch_benchmark": {
+    "measurement": "同一固定输入、每批固定延迟的本地 mock 调度对比，不代表真实 provider 表现。",
+    "fixed_mock_delay_seconds_per_batch": 0.025,
+    "planned_batches_each": 23,
+    "serial": {
+      "max_concurrency": 1,
+      "wall_seconds": 0.6566389000508934,
+      "peak_in_flight": 1,
+      "attempts": 23,
+      "mock_responses": 23
+    },
+    "bounded_rolling_default_3": {
+      "max_concurrency": 3,
+      "wall_seconds": 0.23747849999926984,
+      "peak_in_flight": 3,
+      "attempts": 23,
+      "mock_responses": 23
+    },
+    "approximate_mock_speedup": 2.77,
+    "request_text_equal": true,
+    "findings_equal": true,
+    "coverage_equal": true,
+    "final_batch_result_order_preserved": true,
+    "provider_requests": 0,
+    "network_calls": 0,
+    "source_artifact": "artifacts/evaluations/annual-scan-latency-20261005/mock-23-batch-benchmark.json"
+  },
+  "local_pdf_parse_measurement": {
+    "measurement_scope": "离线本机 PDF 解析与 context 规划，不调用 provider。用户来源材料仅在本机审计；本摘要不披露其文件名、路径或哈希。",
+    "repeats_each": 3,
+    "page_count": 143,
+    "text_pages": 143,
+    "text_blocks": 3286,
+    "text_characters": 151314,
+    "parse_only_median_seconds": 0.19913169997744262,
+    "context_median_seconds_including_its_own_parse": 0.6171736000105739,
+    "timings_additive": false,
+    "provider_requests": 0,
+    "network_calls": 0,
+    "source_artifact": "artifacts/evaluations/annual-scan-latency-20261005/pdf-parse-context-timings.json"
+  },
+  "frontend_ui_this_round": {
+    "browser_matrix_rerun": false,
+    "new_ui_screenshots_created": false,
+    "source_raw_sha256_unchanged": {
+      "frontend/src/pages/AnnualAnalysisPage.tsx": "95c0ff0db24f1b30e351bd6be671e648c4830d4ea7cf56ebb30b7aa94ec58a52",
+      "frontend/src/styles/app.css": "8eb59eaafb1e343ca463be9e9de450ebf85c74a112052ca5409d008795095560"
+    },
+    "source_hash_scope_note": "上述是源文件 raw SHA256 指纹，不是浏览器页面图片哈希。"
+  },
+  "technical_report_pdf": {
+    "filename": "FINTRACE-决赛技术报告.pdf",
+    "sha256": "02c8e4cb75f241a84d3dbcea5d14ee3dbabdc53b1540a1ffbc78fbf560a60844",
+    "page_count": 9,
+    "render_dpi": 110,
+    "render_manifest": "artifacts/evaluations/latency-delivery-final-20261005/pdf-render-manifest.json"
+  },
+  "unverified": [
+    "新版真实 provider 的速度、费用、语义质量与超时恢复",
+    "跨公司语义人工复核及 C-01/C-02 真人财务复核",
+    "另一台 Windows 电脑干净安装与竞赛现场网络/API 条件",
+    "非金融用户 30 秒理解试验"
+  ]
+}
