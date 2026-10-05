@@ -32,17 +32,23 @@
 
 - [`architecture.svg`](architecture.svg)：根据当前架构契约由本项目绘制，SHA256 为 `10a6f4a9a505cee22c6cdf9ac5260e2bb5ed538ac84f4d68750733be5253a775`。图中年度走 Web/API、季度同比环比走独立 CLI；PDF 来源进入基础核验、固定候选与全文发现分支，最终评审只读基础报告和有限发现、不重读全文，M3 不输入 AI。PDF 中以 ReportLab 原生矢量重绘相同数据流，不是运行截图。 最终 SVG 的 Edge 1320×650 原尺寸检查截图留在 `artifacts/tmp/annual-discovery-final-20261005/architecture-svg-browser-1320x650.png`，主控已查看并接受最终评审节点行距与小箭头。
 
-## 年报开放式发现 mock 展示与软件检查
+## 年报开放式发现 v1 mock 展示与软件检查（历史快照）
 
-当前应用软件基线为 `07cb4e97e7b43327aa35ed7d6db260ec28fb1c59`（10/05）。[`annual-discovery-software-checks.json`](annual-discovery-software-checks.json) 是本轮脱敏软件检查摘要，汇总后端完整套件、两份构造 PDF 的 CLI→本地 mock→归档 GET/页图/三格式导出，以及分开运行的前端 17 场景和旧终态 job 单场景、typecheck/build。后端首轮失败日志及修复后最终日志均保留；`.invalid` dummy connector 的尝试次数无法精确确认，不能概括所有检查均由全局网络哨兵阻断。上述都是构造数据、本地替身和指定机器上的软件检查，不是在线 provider 输出或全文语义准确性验收。
+本节记录 v2 接受前的软件快照 `07cb4e97e7b43327aa35ed7d6db260ec28fb1c59`（10/05）；它不是当前应用软件基线。 [`annual-discovery-software-checks.json`](annual-discovery-software-checks.json) 是该快照的脱敏软件检查摘要，汇总后端完整套件、两份构造 PDF 的 CLI→本地 mock→归档 GET/页图/三格式导出，以及分开运行的前端 17 场景和旧终态 job 单场景、typecheck/build。后端首轮失败日志及修复后最终日志均保留；`.invalid` dummy connector 的尝试次数无法精确确认，不能概括所有检查均由全局网络哨兵阻断。上述都是构造数据、本地替身和指定机器上的软件检查，不是在线 provider 输出或全文语义准确性验收。
 
 下列普通视口截图逐字节复制自已审阅的前端 mock QA 截图，没有裁切或图像加工；页面中的公司/PDF 文本和动态发现均为构造数据，不能当成真实公司分析。桌面截图为 1366×768，手机截图为 390×844。浏览器 mock 使用 1×1 PNG 仅检查抽屉交互与来源协议；这里的页面截图不证明生产 PDF 页图的视觉定位。mock 下载文件也不验证导出内容，导出字段边界由后端合成 PDF E2E 测试检查。
 
 - [桌面 mock 首屏，1366×768](annual-discovery-mock-desktop-1366x768.png)（SHA256 `95338f6a8f40e215489edbf105f860014bad3f7b4f06c1e0072b6d23d4697b91`）
 - [手机 mock 首屏，390×844](annual-discovery-mock-mobile-390x844.png)（SHA256 `84d1531f077fd29a3b049e57e4493d01581ba6bd63736636a33023973bbefcf7`）
 
-版本代码原字节与 Git LF 规范化字节指纹见 [`annual-discovery-code-fingerprint.json`](annual-discovery-code-fingerprint.json)。PDF 页面输出、检查命令与报告日期记录见[验收历史](../../../docs/verification-history.md#2026-10-05-年报开放式发现软件阶段验收与决赛文档装配)。当前决赛技术报告 PDF SHA256 为 `0971e763370e55cf4253a5e10c6f0b18130aed66affbf28398376090a3dcd302`，共 9 页；逐页 110 dpi PNG 尺寸和 SHA256 见[渲染清单](../../../artifacts/evaluations/annual-discovery-final-20261005/pdf-render-manifest.json)。修正 Markdown 硬换行后重建，新版与此前已接受 PDF（SHA256 `4e0d8ba8459e3ae3ca7b6852a76e75495d819f5a12b242770f43d51fd7e7318b`）的 9 页 PNG 均逐字节一致，主控已复核并接受当前 PDF。真实 provider 长任务耗时/发现质量、跨公司语义人审、OCR/图像文字（当前不支持）尚未验收；其他决赛外部关卡也未因本地 mock 通过而完成。
+版本代码原字节与 Git LF 规范化字节指纹见 [`annual-discovery-code-fingerprint.json`](annual-discovery-code-fingerprint.json)。该版 PDF 页面输出、检查命令与报告日期记录见[验收历史](../../../docs/verification-history.md#2026-10-05-年报开放式发现软件阶段验收与决赛文档装配)。此前决赛技术报告 PDF SHA256 为 `0971e763370e55cf4253a5e10c6f0b18130aed66affbf28398376090a3dcd302`，共 9 页；其逐页 110 dpi PNG 尺寸和 SHA256 见[历史渲染清单](../../../artifacts/evaluations/annual-discovery-final-20261005/pdf-render-manifest.json)。此前已接受版 SHA256 `4e0d8ba8459e3ae3ca7b6852a76e75495d819f5a12b242770f43d51fd7e7318b` 的 9 页 PNG 与当时修订版逐字节一致。当前决赛技术报告 PDF 的页数、SHA 与逐页渲染清单见下方 v2 检查摘要；历史文件与证据仍保留原样。真实 provider 长任务耗时/发现质量、跨公司语义人审、OCR/图像文字（当前不支持）尚未验收；其他决赛外部关卡也未因本地 mock 通过而完成。
+
+## 年报开放式发现 v2 离线重放、界面检查与代码指纹
+
+当前接受的软件基线为应用提交 `a24e6a4df46f365be9ef8a9bca03441733c017c6` / tree `1c73a6cdb20e538d77410f4a9228d39aaff84fb3`，年报发现 v2 后端提交 `159d57dced233e434d50f15ad8ef045e06fccc2c` / tree `003cd191e8956f6c1709a434340fe425c269c530`。脱敏的[软件检查与指纹摘要](annual-discovery-v2-software-checks.json)记录后端完整套件 553 passed、3 skipped；只读历史响应离线重放 23 批中 15 个完整、5 个部分、3 个既有超时，104 项通过结构/字段/引用校验、5 项拒绝、9 项仅因 Unicode 空白差异恢复，原 58 个归档文件前后保持不变。该重放没有发起新 provider 调用，也不代表模型观点已通过独立语义核验。
+
+前端 Chrome 本地 mock 检查 57/57 通过，`npm run typecheck` 与 `npm run build` 均通过；这两条命令没有单独保留 stdout 日志。视口为桌面 1366×768 与手机 390×844；结果页首屏紧凑呈现，搜索/优先级筛选可用，扫描明细和原文引用可折叠。大列表展示 fixture 的 104 项由 28 项历史发现和 76 项构造数据组成，不是 104 项真实模型输出。浏览器检查使用 API mock，但本地页面截图来自私有真实历史回放；截图文件与其 SHA 仅保留在本机，未纳入 Git、提交件或源码包。本地 `artifacts/evaluations/discovery-usability-ui-20261005/metadata-checkpoint.json` 和 `browser-qa-trace.json` 仅用于本机审计，不随源码包提供。当前报告 PDF 的 SHA、页数和逐页渲染指纹见本轮本地[PDF 渲染清单](../../../artifacts/evaluations/delivery-refresh-discovery-v2-20261005/pdf-render-manifest.json)。
 
 ## 验收状态
 
-本索引是决赛成品装配中的审计入口，不代表整体决赛验收完成。软件冻结 `a0b5b3bc26b3004afcd359df48544adb9cba4a13`、完整后端/前端检查、年度白名单导出和报告/PDF逐页视觉检查已接受。最终源码 ZIP 从含本报告与正式证据的文档交付 commit/tree 构建；确切 package ID、source commit/tree、ZIP SHA256 和构建校验结果以 ZIP 同目录包外 manifest、`.sha256` sidecar 与独立验收记录为准，不在报告内自引。C-01 真人复核、C-02 真实季度完整人工复核、另一台 Windows 电脑干净安装、组委会现场网络/API 规则和非金融用户理解试验仍按产品路线与验收记录跟踪。计划书 PDF、视频 MP4 与平台上传由独立材料负责人完成。
+本索引是决赛成品装配中的审计入口，不代表整体决赛验收完成。当前软件基线 `a24e6a4df46f365be9ef8a9bca03441733c017c6`、后端完整套件、前端本地 mock 检查、年度白名单导出和当前报告/PDF逐页视觉检查已接受；旧冻结 `a0b5b3bc26b3004afcd359df48544adb9cba4a13` 与此前报告仍保留历史身份。最终源码 ZIP 从包含本报告与正式证据索引的文档交付 commit/tree 构建；确切 package ID、source commit/tree、ZIP SHA256 和构建校验结果以 ZIP 同目录包外 manifest、`.sha256` sidecar 与独立验收记录为准，不在报告内自引。C-01 真人复核、C-02 真实季度完整人工复核、另一台 Windows 电脑干净安装、组委会现场网络/API 规则和非金融用户理解试验仍按产品路线与验收记录跟踪。计划书 PDF、视频 MP4 与平台上传由独立材料负责人完成。
