@@ -417,7 +417,16 @@ def _patch_local_audit(monkeypatch, runs_root: Path, responder):
     monkeypatch.setattr(audited_chat, "complete_chat", mocked_complete)
 
 
-def _run(path: Path, digest: str, runs_root: Path, report, record, callback=None):
+def _run(
+    path: Path,
+    digest: str,
+    runs_root: Path,
+    report,
+    record,
+    callback=None,
+    *,
+    max_concurrency: int | None = None,
+):
     run_dir = runs_root / str(report["run_id"])
     run_dir.mkdir(parents=True, exist_ok=True)
     settings = ModelSettings("https://model.invalid/v1", "unit-test-secret", "local-mock")
@@ -428,6 +437,7 @@ def _run(path: Path, digest: str, runs_root: Path, report, record, callback=None
         settings,
         run_dir=run_dir,
         progress_callback=callback,
+        max_concurrency=max_concurrency,
     )
     return result, run_dir
 
@@ -580,17 +590,19 @@ def test_wall_clock_budget_preserves_success_and_marks_unattempted_pages(
     report, record = _inputs(path, digest, run_id="annual-discovery-budget")
     runs_root = tmp_path / "artifacts" / "runs"
     seen: list[int] = []
+    clock = {"now": 100.0}
 
     def responder(messages, settings):
         user = json.loads(messages[1].content)
         seen.append(user["batch_index"])
         fragment = user["fragments"][0]
-        return _valid_response(fragment["evidence_id"], fragment["raw_text"].strip()[:14])
+        response = _valid_response(fragment["evidence_id"], fragment["raw_text"].strip()[:14])
+        clock["now"] = 1901.0
+        return response
 
     _patch_local_audit(monkeypatch, runs_root, responder)
-    ticks = iter([100.0, 100.1, 1901.0])
-    monkeypatch.setattr(annual_discovery, "_monotonic_clock", lambda: next(ticks))
-    result, _ = _run(path, digest, runs_root, report, record)
+    monkeypatch.setattr(annual_discovery, "_monotonic_clock", lambda: clock["now"])
+    result, _ = _run(path, digest, runs_root, report, record, max_concurrency=1)
     payload = result.to_dict()
 
     assert seen == [1]
@@ -617,16 +629,17 @@ def test_first_batch_failure_then_budget_end_is_failed_and_keeps_unread_pages(
     report, record = _inputs(path, digest, run_id="annual-discovery-failed-budget")
     runs_root = tmp_path / "artifacts" / "runs"
     seen: list[int] = []
+    clock = {"now": 50.0}
 
     def responder(messages, settings):
         user = json.loads(messages[1].content)
         seen.append(user["batch_index"])
+        clock["now"] = 1851.0
         raise ModelResponseError("safe first-batch failure")
 
     _patch_local_audit(monkeypatch, runs_root, responder)
-    ticks = iter([50.0, 50.1, 1851.0])
-    monkeypatch.setattr(annual_discovery, "_monotonic_clock", lambda: next(ticks))
-    result, _ = _run(path, digest, runs_root, report, record)
+    monkeypatch.setattr(annual_discovery, "_monotonic_clock", lambda: clock["now"])
+    result, _ = _run(path, digest, runs_root, report, record, max_concurrency=1)
     payload = result.to_dict()
 
     assert seen == [1]

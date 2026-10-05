@@ -356,6 +356,114 @@ def test_pre_request_failure_is_not_reported_as_an_actual_model_call(
     assert investigation["model_called"] is True
 
 
+@pytest.mark.parametrize(
+    ("with_response", "extra_user_field"),
+    [(False, False), (True, False), (False, True)],
+)
+def test_discovery_exception_recovers_v2_audit_counts_without_inventing_coverage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    with_response: bool,
+    extra_user_field: bool,
+) -> None:
+    _repository, artifacts_root, run_dir, source_pdf, _record_path, report = _fixture(tmp_path)
+    audit_id = str(uuid.uuid4())
+
+    class _FailingDiscoveryAgent:
+        @staticmethod
+        def run_annual_discovery(*_args: Any, run_dir: Path, **_kwargs: Any) -> Any:
+            audit_dir = run_dir / audit_id
+            audit_dir.mkdir()
+            request_batch = {
+                "company_id": report["company_id"],
+                "report_year": report["report_year"],
+                "source_document_id": report["source_document_id"],
+                "source_sha256": report["source_sha256"],
+                "batch_index": 1,
+                "fragments": [],
+            }
+            if extra_user_field:
+                request_batch["unexpected"] = "fail closed"
+            (audit_dir / "request.json").write_text(
+                json.dumps({
+                    "status": "started",
+                    "prompt_version": "annual_discovery_v2",
+                    "messages": [
+                        {"role": "system", "content": "synthetic prompt"},
+                        {"role": "user", "content": json.dumps(request_batch)},
+                    ],
+                }),
+                encoding="utf-8",
+            )
+            if with_response:
+                (audit_dir / "response.json").write_text(
+                    json.dumps({"status": "succeeded", "text": "{}"}),
+                    encoding="utf-8",
+                )
+            else:
+                (audit_dir / "failure.json").write_text(
+                    json.dumps({"category": "timeout"}), encoding="utf-8"
+                )
+            raise RuntimeError("synthetic local failure after request audit")
+
+    original_import = appendix.importlib.import_module
+
+    def import_agent(name: str) -> Any:
+        if name == "finagent.agents.annual_discovery":
+            return _FailingDiscoveryAgent
+        return original_import(name)
+
+    monkeypatch.setattr(appendix.importlib, "import_module", import_agent)
+
+    discovery = appendix._invoke_discovery(
+        report,
+        source_pdf_path=source_pdf,
+        source_record={"document_id": "mock-document"},
+        settings=_settings(),
+        run_dir=run_dir,
+        artifacts_root=artifacts_root,
+        progress_callback=None,
+    )
+
+    assert discovery["status"] == "failed"
+    assert discovery["prompt_version"] == "annual_discovery_v2"
+    assert discovery["model_call_attempt_count"] == 1
+    assert discovery["model_call_count"] == int(with_response)
+    assert discovery["model_called"] is True
+    assert discovery["coverage"]["source_status"] == "unavailable"
+    assert discovery["coverage"]["content_status"] == "unavailable"
+    assert discovery["coverage"]["planned_batches"] == 0
+    assert discovery["coverage"]["batch_results"] == []
+    if extra_user_field:
+        assert discovery["audit_artifacts"] == []
+        assert any("未编造批次审计记录" in item for item in discovery["limitations"])
+    else:
+        relative_audit_dir = f"artifacts/runs/{report['run_id']}/{audit_id}"
+        assert discovery["audit_artifacts"] == [
+            {
+                "batch_index": 1,
+                "audit_dir": relative_audit_dir,
+                "request_path": f"{relative_audit_dir}/request.json",
+                "response_path": f"{relative_audit_dir}/response.json" if with_response else None,
+                "failure_path": None if with_response else f"{relative_audit_dir}/failure.json",
+                "status": "succeeded" if with_response else "failed",
+                "prompt_version": "annual_discovery_v2",
+            }
+        ]
+
+
+def test_not_called_discovery_uses_current_v2_prompt_identity(
+    tmp_path: Path,
+) -> None:
+    _repository, _artifacts_root, _run_dir, _source_pdf, _record_path, report = _fixture(tmp_path)
+
+    result = appendix._not_called_discovery(appendix._report_identity(report), "not_started")
+
+    assert result["prompt_version"] == "annual_discovery_v2"
+    assert result["model_call_attempt_count"] == result["model_call_count"] == 0
+    assert result["coverage"]["planned_batches"] == 0
+
+
 def test_report_appendix_updates_scope_and_model_flag_without_moving_verified_sections(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

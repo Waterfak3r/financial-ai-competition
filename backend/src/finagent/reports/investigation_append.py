@@ -247,8 +247,8 @@ def _invoke_discovery(
         _validate_discovery_identity(payload, identity)
         return payload
     except Exception:
-        audits, attempts, responses = _discover_new_audits(
-            run_dir, before, artifacts_root, prompt_version="annual_discovery_v1"
+        audits, attempts, responses, unmapped = _discover_new_discovery_audits(
+            run_dir, before, artifacts_root, identity
         )
         status = "failed" if attempts else "not_called"
         result = _not_called_discovery(
@@ -269,6 +269,10 @@ def _invoke_discovery(
             "开放式发现流程发生内部错误；已从安全审计目录恢复实际请求与响应计数。",
             "无法从失败流程恢复完整批次覆盖；不得解释为已完成全文扫描。",
         ]
+        if unmapped:
+            result["limitations"].append(
+                "部分审计目录缺少可验证的当前来源批次索引；已保留调用计数，但未编造批次审计记录。"
+            )
         return result
 
 
@@ -284,7 +288,7 @@ def _not_called_discovery(
         "kind": "fintrace_annual_discovery",
         **dict(identity),
         "status": status,
-        "prompt_version": "annual_discovery_v1",
+        "prompt_version": "annual_discovery_v2",
         "model_called": False,
         "model_call_count": 0,
         "model_call_attempt_count": 0,
@@ -704,6 +708,101 @@ def _discover_new_audits(
     # A request record proves an attempt; a response record proves a returned
     # model response. Keep the two counters distinct even on workflow errors.
     return audits, persisted_attempts, persisted_responses
+
+
+def _discover_new_discovery_audits(
+    run_dir: Path,
+    before: set[str],
+    artifacts_root: Path,
+    identity: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], int, int, int]:
+    candidates: list[tuple[int, dict[str, Any]]] = []
+    persisted_attempts = 0
+    persisted_responses = 0
+    unmapped = 0
+    for child in _new_uuid_children(run_dir, before):
+        request = child / "request.json"
+        response = child / "response.json"
+        failure = child / "failure.json"
+        if request.is_file():
+            persisted_attempts += 1
+        if response.is_file():
+            persisted_responses += 1
+        batch_index = _discovery_batch_index(request, identity) if request.is_file() else None
+        audit_dir = _discovery_audit_relative_path(child, artifacts_root)
+        if batch_index is None or audit_dir is None:
+            unmapped += 1
+            continue
+        status = "succeeded" if response.is_file() else ("failed" if failure.is_file() else "started")
+        candidates.append(
+            (
+                batch_index,
+                {
+                    "batch_index": batch_index,
+                    "audit_dir": audit_dir,
+                    "request_path": f"{audit_dir}/request.json" if request.is_file() else None,
+                    "response_path": f"{audit_dir}/response.json" if response.is_file() else None,
+                    "failure_path": f"{audit_dir}/failure.json" if failure.is_file() else None,
+                    "status": status,
+                    "prompt_version": "annual_discovery_v2",
+                },
+            )
+        )
+
+    counts: dict[int, int] = {}
+    for batch_index, _artifact in candidates:
+        counts[batch_index] = counts.get(batch_index, 0) + 1
+    audits = [
+        artifact
+        for batch_index, artifact in candidates
+        if counts[batch_index] == 1
+    ]
+    unmapped += len(candidates) - len(audits)
+    audits.sort(key=lambda artifact: artifact["batch_index"])
+    return audits, persisted_attempts, persisted_responses, unmapped
+
+
+def _discovery_batch_index(request_path: Path, identity: Mapping[str, Any]) -> int | None:
+    try:
+        if request_path.stat().st_size > 2 * 1024 * 1024:
+            return None
+        request = json.loads(request_path.read_text(encoding="utf-8"))
+        if not isinstance(request, Mapping) or request.get("prompt_version") != "annual_discovery_v2":
+            return None
+        messages = request.get("messages")
+        if not isinstance(messages, list) or len(messages) != 2:
+            return None
+        user_message = messages[1]
+        if not isinstance(user_message, Mapping) or user_message.get("role") != "user":
+            return None
+        user_content = user_message.get("content")
+        if not isinstance(user_content, str) or len(user_content) > 120_000:
+            return None
+        payload = json.loads(user_content)
+    except (OSError, UnicodeError, ValueError, TypeError, RecursionError):
+        return None
+    if not isinstance(payload, Mapping) or set(payload) != {
+        "company_id", "report_year", "source_document_id", "source_sha256", "batch_index", "fragments"
+    }:
+        return None
+    if any(payload.get(key) != identity[key] for key in (
+        "company_id", "report_year", "source_document_id", "source_sha256"
+    )):
+        return None
+    batch_index = payload.get("batch_index")
+    if type(batch_index) is not int or not 1 <= batch_index <= 128:
+        return None
+    return batch_index
+
+
+def _discovery_audit_relative_path(child: Path, artifacts_root: Path) -> str | None:
+    try:
+        relative = child.resolve().relative_to(artifacts_root.resolve()).as_posix()
+    except (OSError, ValueError):
+        return None
+    if not relative.startswith("runs/") or "\\" in relative:
+        return None
+    return f"artifacts/{relative}"
 
 
 def _new_uuid_children(run_dir: Path, before: set[str]) -> list[Path]:

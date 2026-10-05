@@ -10,9 +10,11 @@
 
 ## 批次和覆盖范围
 
-默认每批原始正文不超过 12000 字，按实际 Chat Completions 请求 JSON 体计算的序列化输入不超过 24000 字符；全文最多 128 批、120 万字符。所有上限都不可由调用方调高。遇到限制时保留已规划批次，并在 coverage 中明确遗漏字符、页面和 `truncated`，不把前段扫描描述为全文完成。每次只对一批调用一次 `audited_complete_chat`，单批调用或解析失败后继续后续批次。
+默认每批原始正文不超过 12000 字，按实际 Chat Completions 请求 JSON 体计算的序列化输入不超过 24000 字符；全文最多 128 批、120 万字符。所有内容上限都不可由调用方调高。遇到限制时保留已规划批次，并在 coverage 中明确遗漏字符、页面和 `truncated`，不把前段扫描描述为全文完成。批次仍按原文顺序规划；扫描使用有界滚动调度，默认最多 3 个在途请求。某请求结束后才从待处理队列补入下一批，不要求整组三批都结束才继续，因此慢批不会阻塞其他已完成请求的补位。LangGraph 仍是唯一编排层；其扫描节点内部使用有界 I/O 执行器，并发只用于模型请求，解析、进度协调和最终归并由协调线程执行。连接器准入按批次顺序受门控，但线程调度不保证连接器实际开始时严格按序。
 
-coverage 区分原始 PDF 页数、含可提取文字的页数、原始文字块数、文字字符数、规划批次和已结束批次。v2 的 `processed_batches` 等于 `successful_batches + partial_batches + failed_batches`；预算耗尽后未尝试的批次另列为 `unattempted_batches`。`batch_results` 为每批记录安全状态、固定失败类别、页码和字符数，并在 v2 记录 `accepted_findings`、`rejected_findings` 与 `restored_quotes`，不含正文。`succeeded` 表示本批所有 finding 均通过（空 findings 合法），`partial` 表示有接受项也有拒绝项，`failed` 表示没有接受项或调用/容器失败。旧 v1 归档按严格 v1 规则读取，缺少 `partial_batches` 时按零处理；未知提示词版本拒绝读取。`processed_chars` 只计整批通过的批次；`attempted_chars` 计实际送入模型的正文，`unattempted_chars` 表示尚未尝试的字符，`unread_pages` 表示未完整处理的页面。失败批次页面列入 `failed_pages` 与 `unread_pages`；部分批次页面列入 `unread_pages`，但不标成整批失败页。两者都不能视为完整处理。
+可通过进程环境变量 `FINTRACE_DISCOVERY_CONCURRENCY` 设置并发上限，合法值为 1、2 或 3，默认 3；设为 1 可供需要串行请求的限流环境使用。非法值会明确拒绝，而不静默改成其他并发数。此设置只控制扫描请求并发，不改变文字范围、批次规划、响应规则、调用重试或其他模型阶段；本次运行的实际调度类型和并发数写入 `artifacts/runs/<run_id>/discovery-execution.json`，不含正文或密钥，也不扩展公开 `discovery`、report、coverage 或 progress 字段。
+
+coverage 区分原始 PDF 页数、含可提取文字的页数、原始文字块数、文字字符数、规划批次和已结束批次。v2 的 `processed_batches` 等于 `successful_batches + partial_batches + failed_batches`；预算到期后停止派发新批次，未尝试的批次另列为 `unattempted_batches`，已准入或正在调用的批次保留其完成结果。`batch_results` 为每批记录安全状态、固定失败类别、页码和字符数，并在 v2 记录 `accepted_findings`、`rejected_findings` 与 `restored_quotes`，不含正文。`succeeded` 表示本批所有 finding 均通过（空 findings 合法），`partial` 表示有接受项也有拒绝项，`failed` 表示没有接受项或调用/容器失败。旧 v1 归档按严格 v1 规则读取，缺少 `partial_batches` 时按零处理；未知提示词版本拒绝读取。`processed_chars` 只计整批通过的批次；`attempted_chars` 计实际送入模型的正文，`unattempted_chars` 表示尚未尝试的字符，`unread_pages` 表示未完整处理的页面。失败批次页面列入 `failed_pages` 与 `unread_pages`；部分批次页面列入 `unread_pages`，但不标成整批失败页。两者都不能视为完整处理。
 
 `no_text_pages` 记录没有可提取文字的页；`image_pages` 记录存在图片块的页；`unread_image_pages` 只记录没有文字且有图片的页。带正文和 logo/插图的页面仍可完整处理其中全部可提取文字。`text_only_scope` 明确本模块不执行 OCR，图片本身和图片中的文字不在范围内。`complete` 仅表示至少有可提取文字，且全部可提取文字均在上限内由完整成功批次处理、`partial_batches` 与 `failed_batches` 均为零、没有未尝试字符或未读图片页；零文字来源不能因零字符等于零计划字符而标为完整。它不表示没有风险，也不证明模型发现正确。空白 PDF 状态为 `not_called`。
 
@@ -24,9 +26,9 @@ v2 每条 finding 最多四个 citation、每条 quote 不超过三百字符；�
 
 程序为每条发现生成 `disc:<sha摘要>` ID，固定写入 `classification=unverified_model_finding`、`verification_status=unverified`，并将 `fraud_conclusion` 固定为 null。完全重复的发现去重；不同批次成功发现会保留。`evidences` 只返回实际被 findings 引用的原文片段。模型可返回空 findings；这表示本批没有提出可引用线索，不代表年报没有风险。v2 部分接受的 finding 与完整成功批次中的 finding 一样可读，但其所在批次不算完整成功、字符不计入 `processed_chars`、所涉页仍为未完整处理。
 
-状态为 `completed`（完整覆盖且没有 partial/failed/unattempted 批次）、`partial`（存在部分接受、失败批次、超时或覆盖缺口；即使 `successful_batches=0`，只要 partial 批次保留了有效 finding 仍可有可读结果）、`failed`（没有任何可用 finding 且已尝试批次失败）或 `not_called`（没有进入任何模型调用）。调用失败与输出解析失败使用不同安全类别；可识别的超时归入 `model_call_timeout`，不伪装成 JSON 错误，报告不保存异常原文。总墙钟预算为三十分钟；每次连接器超时不超过该预算剩余时间，预算耗尽时未尝试批次/字符/页面显式记录并保留此前成功发现；全部已尝试批次失败且没有可用发现时仍为 `failed`。`model_call_count` 统计返回模型响应的审计调用；`model_call_attempt_count` 统计实际进入审计连接器的尝试。Progress callback 只收计数、序号和状态，不传入正文、quote、模型设置或路径；新进度事件明确给出 successful/partial/failed 三类计数，旧进度记录缺少 partial 时按零处理；回调异常作为安全 limitation 记录，不中断发现流程。
+状态为 `completed`（完整覆盖且没有 partial/failed/unattempted 批次）、`partial`（存在部分接受、失败批次、超时或覆盖缺口；即使 `successful_batches=0`，只要 partial 批次保留了有效 finding 仍可有可读结果）、`failed`（没有任何可用 finding 且已尝试批次失败）或 `not_called`（没有进入任何模型调用）。调用失败与输出解析失败使用不同安全类别；可识别的超时归入 `model_call_timeout`，不伪装成 JSON 错误，报告不保存异常原文。总墙钟预算为三十分钟；到期后不再准入新请求，已准入或正在调用的批次继续保留结果。连接器收到的 timeout 参数不构成 urllib/socket 的硬墙钟保证，实际调用可能晚于该预算返回；全部已尝试批次失败且没有可用发现时仍为 `failed`。`model_call_count` 统计返回模型响应的审计调用；`model_call_attempt_count` 统计实际进入审计连接器的尝试。Progress callback 只收计数、序号和状态，不传入正文、quote、模型设置或路径；新进度事件明确给出 successful/partial/failed 三类计数，旧进度记录缺少 partial 时按零处理；回调异常作为安全 limitation 记录，不中断发现流程。请求完成进度按完成顺序更新；最终 findings、去重、coverage 和 `batch_results` 仍按原批次顺序稳定归并。并发不增加规划批次数或自动重试，但在相同预算内可能完成更多批次，实际供应方调用费用可能因此增加。
 
-每批请求和响应通过现有审计连接器归档至运行目录的 UUID 子目录。发现结果本身不复制凭据、服务地址或异常原文；审计连接器记录请求前先脱敏，调用失败只记录安全类别。不得将调用审计文件当作公开分发内容。
+每批请求和响应通过现有审计连接器归档至运行目录的 UUID 子目录。并发扫描会在请求前为每批分配独立 UUID audit ID，使成功和失败审计都明确关联至对应批次；既有调用方不传 ID 时仍由连接器自行生成。发现结果本身不复制凭据、服务地址或异常原文；审计连接器记录请求前先脱敏，调用失败只记录安全类别。不得将调用审计文件当作公开分发内容。
 
 ## 年度 CLI、API 与导出接入
 
@@ -38,7 +40,7 @@ v2 每条 finding 最多四个 citation、每条 quote 不超过三百字符；�
 
 任务进度写入当前 job 专属的 `discovery-progress.json`，GET 只在 job 正运行年度 CLI 阶段读取；路径、job ID 和来源身份必须匹配，未知字段、链接文件或不安全计数均被丢弃。响应只给状态、批次数、页数、全文字符计数与时间，不含原文或密钥。`annual-analysis-capabilities` 的 `model_investigation.annual_discovery_supported` 表示当前后端代码具备此接入能力；旧后端缺少该字段时客户端不应把旧两条规则能力说明成全文发现。
 
-Web job 启动的 CLI 子进程默认和最大超时均为 3600 秒（60 分钟）；独立 CLI 没有该 job 外部超时。发现引擎自身有 1800 秒（30 分钟）预算，会在批次边界结束任务并保留已通过检查的发现。进度文件只代表已结束批次事件，不代表最终报告完成。操作系统或 job runner 在引擎完成归档前硬中断进程时，不能据进度推断存在完整发现结果；以正式 run manifest 与 report 为准。
+Web job 启动的 CLI 子进程默认和最大超时均为 3600 秒（60 分钟）；独立 CLI 没有该 job 外部超时。发现引擎自身有 1800 秒（30 分钟）预算；预算到期后停止准入新请求，并等待已准入或正在调用的批次返回、保留其结果。连接器的 timeout 参数不保证 socket 调用在引擎预算内返回，因此不能把预算视作硬墙钟中断。进度文件只代表已结束批次事件，不代表最终报告完成。操作系统或 job runner 在引擎完成归档前硬中断进程时，不能据进度推断存在完整发现结果；以正式 run manifest 与 report 为准。
 
 ## 页面、旧归档与任务阶段
 

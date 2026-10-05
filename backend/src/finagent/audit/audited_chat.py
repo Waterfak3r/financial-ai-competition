@@ -62,6 +62,7 @@ def audited_complete_chat(
     evidence_refs: Sequence[EvidenceRef | Mapping[str, object]],
     prompt_version: str,
     timeout_seconds: float | None = None,
+    audit_id: str | None = None,
 ) -> AuditedChatResult:
     """包装 complete_chat。started 落盘后才联网；响应落盘后才返回。"""
 
@@ -69,7 +70,8 @@ def audited_complete_chat(
     refs = _require_evidence_refs(evidence_refs)
     version = _require_prompt_version(prompt_version)
     started_at = _utc_now()
-    audit_dir = checked_run / str(uuid.uuid4())
+    identifier = _require_audit_id(audit_id)
+    audit_dir = checked_run / identifier
     audit_dir.mkdir(parents=False, exist_ok=False)
     secret = settings.api_key
     request_record = {
@@ -184,6 +186,20 @@ def _require_prompt_version(prompt_version: str) -> str:
     if not isinstance(prompt_version, str) or prompt_version.strip() == "":
         raise ValueError("prompt_version 必须是非空字符串。")
     return prompt_version
+
+
+def _require_audit_id(audit_id: str | None) -> str:
+    if audit_id is None:
+        return str(uuid.uuid4())
+    if not isinstance(audit_id, str):
+        raise ValueError("audit_id 必须是 UUID v4 字符串。")
+    try:
+        parsed = uuid.UUID(audit_id)
+    except (ValueError, AttributeError, TypeError):
+        raise ValueError("audit_id 必须是 UUID v4 字符串。") from None
+    if parsed.version != 4 or str(parsed) != audit_id:
+        raise ValueError("audit_id 必须是规范格式 UUID v4 字符串。")
+    return audit_id
 
 
 def _redact(value: object, secret: str) -> object:

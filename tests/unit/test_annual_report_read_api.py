@@ -13,6 +13,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from finagent.api.app import create_app
+from finagent.core.model_settings import ModelSettings
+import finagent.reports.investigation_append as investigation_append
 from finagent.retrieval.annual_discovery_context import (
     build_annual_discovery_context,
     coverage_is_complete,
@@ -323,6 +325,95 @@ def test_v2_read_api_keeps_findings_from_partial_batches_with_no_full_success(tm
     index = client.get(f"/v1/annual-analyses/{run_id}/discovery-evidences")
     assert index.status_code == 200, index.text
     assert index.json()["items"][0]["evidence_id"] == evidence_id
+
+
+def test_discovery_exception_fallback_is_accepted_by_strict_report_get(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = "synthetic-discovery-exception-fallback"
+    created = _make_archive(tmp_path, run_id)
+    run_dir = tmp_path / "artifacts" / "runs" / run_id
+    artifacts_root = tmp_path / "artifacts"
+    report = created["report"]
+    audit_id = "3f11c9d2-1f63-4f11-8bc8-63c87837c4ab"
+
+    class _FailingDiscoveryAgent:
+        @staticmethod
+        def run_annual_discovery(*_args, run_dir: Path, **_kwargs):
+            audit_dir = run_dir / audit_id
+            audit_dir.mkdir()
+            request_batch = {
+                "company_id": report["company_id"],
+                "report_year": report["report_year"],
+                "source_document_id": report["source_document_id"],
+                "source_sha256": report["source_sha256"],
+                "batch_index": 1,
+                "fragments": [],
+            }
+            (audit_dir / "request.json").write_text(
+                json.dumps({
+                    "status": "started",
+                    "prompt_version": "annual_discovery_v2",
+                    "messages": [
+                        {"role": "system", "content": "synthetic"},
+                        {"role": "user", "content": json.dumps(request_batch)},
+                    ],
+                }),
+                encoding="utf-8",
+            )
+            (audit_dir / "failure.json").write_text(
+                json.dumps({"status": "failed", "category": "timeout"}),
+                encoding="utf-8",
+            )
+            raise RuntimeError("synthetic post-audit failure")
+
+    original_import = investigation_append.importlib.import_module
+
+    def import_agent(name: str):
+        if name == "finagent.agents.annual_discovery":
+            return _FailingDiscoveryAgent
+        return original_import(name)
+
+    monkeypatch.setattr(investigation_append.importlib, "import_module", import_agent)
+    discovery = investigation_append._invoke_discovery(
+        report,
+        source_pdf_path=run_dir / "source.pdf",
+        source_record={
+            "company_id": report["company_id"],
+            "document_id": report["source_document_id"],
+            "report_period": "2024-12-31",
+            "sha256": report["source_sha256"],
+        },
+        settings=ModelSettings("https://example.invalid/v1", "local-test-secret", "test-model", 1),
+        run_dir=run_dir,
+        artifacts_root=artifacts_root,
+        progress_callback=None,
+    )
+
+    report["model_discovery"] = discovery
+    report_path = tmp_path / "artifacts" / "reports" / run_id / "report.json"
+    report_path.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+    response = TestClient(create_app(tmp_path)).get(f"/v1/annual-analyses/{run_id}")
+
+    assert response.status_code == 200, response.text
+    layer = response.json()["report"]["model_discovery"]
+    assert layer["status"] == "failed"
+    assert layer["model_call_attempt_count"] == 1
+    assert layer["model_call_count"] == 0
+    assert layer["coverage"]["source_status"] == "unavailable"
+    assert layer["coverage"]["batch_results"] == []
+    assert layer["audit_artifacts"] == [
+        {
+            "batch_index": 1,
+            "audit_dir": f"artifacts/runs/{run_id}/{audit_id}",
+            "request_path": f"artifacts/runs/{run_id}/{audit_id}/request.json",
+            "response_path": None,
+            "failure_path": f"artifacts/runs/{run_id}/{audit_id}/failure.json",
+            "status": "failed",
+            "prompt_version": "annual_discovery_v2",
+        }
+    ]
 
 
 @pytest.mark.parametrize("invalid_case", ["source_sha", "quote", "extra_field", "failed_with_findings", "unsafe_reason"])

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from pathlib import Path
 
 import pytest
@@ -258,6 +259,81 @@ def test_two_calls_use_distinct_directories(tmp_path: Path, monkeypatch: pytest.
     assert first.audit_dir.parent == run_dir.resolve()
     assert _read(first.audit_dir / "request.json")["messages"][0]["content"] == "一"
     assert _read(second.audit_dir / "request.json")["messages"][0]["content"] == "二"
+
+
+def test_explicit_uuid_v4_is_the_exact_audit_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _runs_root, run_dir = _run(tmp_path, monkeypatch)
+    _patch_chat(
+        monkeypatch,
+        lambda messages, settings, timeout_seconds: ChatCompletion("好", "m", "id-1"),
+    )
+    audit_id = str(uuid.uuid4())
+
+    result = audited_complete_chat(
+        [ChatMessage("user", "一")],
+        _settings(),
+        run_dir=run_dir,
+        evidence_refs=_refs(),
+        prompt_version="prompt-v1",
+        audit_id=audit_id,
+    )
+
+    assert result.audit_dir == run_dir.resolve() / audit_id
+    assert _read(result.audit_dir / "request.json")["status"] == "started"
+
+
+@pytest.mark.parametrize("audit_id", ["not-a-uuid", str(uuid.uuid1()), "{" + str(uuid.uuid4()) + "}"])
+def test_explicit_audit_id_must_be_canonical_uuid_v4_and_fail_before_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, audit_id: str
+) -> None:
+    _runs_root, run_dir = _run(tmp_path, monkeypatch)
+    calls = _patch_chat(
+        monkeypatch,
+        lambda messages, settings, timeout_seconds: ChatCompletion("好", "m", "id-1"),
+    )
+
+    with pytest.raises(ValueError, match="UUID v4"):
+        audited_complete_chat(
+            [ChatMessage("user", "一")],
+            _settings(),
+            run_dir=run_dir,
+            evidence_refs=_refs(),
+            prompt_version="prompt-v1",
+            audit_id=audit_id,
+        )
+
+    assert calls["n"] == 0
+    assert list(run_dir.iterdir()) == []
+
+
+def test_duplicate_explicit_audit_id_does_not_overwrite_or_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _runs_root, run_dir = _run(tmp_path, monkeypatch)
+    calls = _patch_chat(
+        monkeypatch,
+        lambda messages, settings, timeout_seconds: ChatCompletion("好", "m", "id-1"),
+    )
+    audit_id = str(uuid.uuid4())
+    existing = run_dir / audit_id
+    existing.mkdir()
+    marker = existing / "marker.txt"
+    marker.write_text("preserve", encoding="utf-8")
+
+    with pytest.raises(FileExistsError):
+        audited_complete_chat(
+            [ChatMessage("user", "一")],
+            _settings(),
+            run_dir=run_dir,
+            evidence_refs=_refs(),
+            prompt_version="prompt-v1",
+            audit_id=audit_id,
+        )
+
+    assert calls["n"] == 0
+    assert marker.read_text(encoding="utf-8") == "preserve"
 
 
 def test_rejects_paths_outside_direct_run_child(

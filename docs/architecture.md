@@ -31,7 +31,7 @@ flowchart TD
     Q2 --> Q3["analysis.json 与 Markdown 归档"]
 ```
 
-四种模式为 deterministic、m3_screening、model_investigation 与 integrated_analysis。两个 AI 模式均包含既有固定候选调查、独立的原 PDF 全文发现和最终评审；全文发现从来源 PDF 的全部可提取文字规划批次，不依赖固定候选、已核验指标或 M3。最终评审读取基础报告与有界发现项，不重新读取全文。集成模式在同一 run/report 中另行归档 M3 规则审计，M3 不进入 AI 输入。任一附加层失败或有缺口时，其他成功层和基础报告仍尽量保留，状态分别记录；操作系统或 job runner 在正式归档前硬中断时不保证存在最终报告。deterministic 与独立 M3 模式不调用模型；两个 AI 模式会调用模型。批次预算、覆盖含义和超时边界见[全文发现契约](annual-discovery.md)。
+四种模式为 deterministic、m3_screening、model_investigation 与 integrated_analysis。两个 AI 模式均包含既有固定候选调查、独立的原 PDF 全文发现和最终评审；全文发现从来源 PDF 的全部可提取文字按原文顺序规划批次，不依赖固定候选、已核验指标或 M3。LangGraph 是唯一智能体编排层；全文扫描节点内部可用有界 I/O 执行器滚动并发模型请求，默认最多 3 个在途请求，解析、进度协调和结果归并仍由该节点协调执行。最终 findings 和批次结果按原规划顺序归并，不受完成顺序影响。最终评审读取基础报告与有界发现项，不重新读取全文。集成模式在同一 run/report 中另行归档 M3 规则审计，M3 不进入 AI 输入。任一附加层失败或有缺口时，其他成功层和基础报告仍尽量保留，状态分别记录；操作系统或 job runner 在正式归档前硬中断时不保证存在最终报告。deterministic 与独立 M3 模式不调用模型；两个 AI 模式会调用模型。并发设置、预算语义、覆盖含义和超时边界见[全文发现契约](annual-discovery.md)。
 
 年度归档读取支持 JSON、Markdown 与离线 HTML 白名单导出：先校验归档 manifest、报告身份和来源 PDF SHA，再输出受控字段；不导出整份 PDF、整页图、原始模型请求/响应或密钥。新全文发现层不导出自己的 `raw_text` 和 `quote`；既有叙述层仍有受控原文片段投影。PDF 由用户在浏览器打印离线 HTML 产生，服务端没有 PDF 导出端点。导出具体边界见[年度报告下载](annual-report-export.md)。
 

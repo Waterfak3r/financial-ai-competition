@@ -6,9 +6,9 @@ import json
 import re
 import sys
 import urllib.request
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
-from uuid import uuid4
 
 import pymupdf
 import pytest
@@ -168,7 +168,9 @@ def test_synthetic_pdf_cli_mock_get_preview_and_three_exports(
 
     monkeypatch.setattr(investigation_append, "_invoke_agent", abstained_fixed_candidates)
 
-    def mock_audited_chat(messages, settings, *, run_dir, evidence_refs, prompt_version, **_kwargs):
+    def mock_audited_chat(
+        messages, settings, *, run_dir, evidence_refs, prompt_version, audit_id=None, **_kwargs
+    ):
         assert settings == _DUMMY_SETTINGS
         assert settings.api_key == "dummy-test-only-key-never-sent"
         user_content = messages[1].content
@@ -201,7 +203,7 @@ def test_synthetic_pdf_cli_mock_get_preview_and_three_exports(
         else:
             raise AssertionError(f"unexpected mock prompt version: {prompt_version}")
 
-        audit_dir = run_dir / str(uuid4())
+        audit_dir = run_dir / (audit_id or str(uuid.uuid4()))
         audit_dir.mkdir()
         refs = [
             {"document_id": item.document_id, "page": item.page}

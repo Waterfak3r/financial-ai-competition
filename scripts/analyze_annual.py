@@ -73,6 +73,7 @@ _PROVENANCE_FILES = (
     "config/prompts/annual_review_v1.md",
     "config/prompts/annual_review_v2.md",
     "config/prompts/annual_discovery_v1.md",
+    "config/prompts/annual_discovery_v2.md",
 )
 
 
