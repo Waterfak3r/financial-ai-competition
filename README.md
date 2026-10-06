@@ -49,7 +49,7 @@ npm ci
 python -m pip install -e ".\backend[test,agents]"
 ```
 
-Windows 可在根目录双击 `start.bat`。脚本优先使用已激活环境、根目录 `.venv`，再使用 PATH 中 Python；启动本机后端与前端并打开页面，日志进入 `artifacts/tmp/startup-<id>/`。它不读取模型凭据或调用模型。已识别的本项目服务可复用；未知端口占用会失败，不停止未知进程。后端 Uvicorn 不启用自动重载，因此浏览器刷新或再次双击启动脚本不会让已运行的 API 进程加载新后端代码；脚本输出当前 API 与前端 PID。切换后端代码后，先核对该项目当前 API PID，再停止该 PID 并重新运行启动脚本。Vite 可热更新前端文件。关闭启动窗口后，脚本启动的后台服务仍运行。
+Windows 可在根目录双击 `start.bat`。脚本优先使用已激活环境、根目录 `.venv`，再使用 PATH 中 Python；启动本机后端与前端并打开页面，日志进入 `artifacts/tmp/startup-<id>/`。它不读取模型凭据或调用模型。同版本的本项目服务可复用；旧版本只有在监听 PID、项目命令行及无活跃年度任务均确认后才重启，否则明确拒绝并说明更新路径。未知端口占用会失败，不停止未知进程。后端 Uvicorn 不启用自动重载；切换后端代码后重新运行启动脚本完成版本检查，浏览器刷新不会加载新后端代码。脚本输出当前 API 与前端 PID。Vite 可热更新前端文件。关闭启动窗口后，脚本启动的后台服务仍运行。
 
 无浏览器启动：
 
@@ -95,7 +95,7 @@ npm run dev
 - 已保存密钥不回显、不写浏览器存储。输入密钥只在表单中暂存，经本机代理交给后端。
 - 服务地址不变且已有有效密钥时，空密钥可沿用，并保存为完整本机副本；更换地址须重新填写。
 - 测试连接发送固定短消息，超时 8 秒；不发送年报、不保存草稿，会实际调用所填服务。配置完整不代表连接成功。
-- `GET /v1/annual-analysis-capabilities` 只报告就绪状态，并通过可选 `annual_discovery_supported` 标示当前后端是否包含全文发现。旧后端缺少或返回 false 时，新全文 AI 提交会禁用；加载新代码后需由操作者重启后端进程。`start.ps1` 会复用已识别的 8000 API，浏览器刷新、关闭启动 CMD 或再次运行 `start.bat` 都不会重启它。环境是否 ready 应当现场读取，不能照抄历史 not_configured 记录。
+- `GET /v1/annual-analysis-capabilities` 只报告就绪状态，并通过可选 `annual_discovery_supported` 标示当前后端是否包含全文发现。`GET /v1/runtime-identity` 分别报告启动时捕获的 API/CLI 身份和当前磁盘指纹；创建任务前及 CLI 执行前会拒绝版本不一致。旧 API 缺少该协议时，前端停止提交，提示重新运行项目启动脚本。环境是否 ready 应当现场读取，不能照抄历史 not_configured 记录。
 
 确定性与独立 M3 模式不调用模型。显式 AI 年度模式会以选中 PDF 的全部可提取文字为目标，在预算内将文本分批发往当前配置服务；默认最多 3 个在途全文发现请求，可通过进程环境变量 `FINTRACE_DISCOVERY_CONCURRENCY=1|2|3` 调低并发。v2 会逐条校验模型输出的结构、字段和原文引用，保留通过检查的项，但部分批次的字符不计入完整处理量，覆盖状态仍为部分。完整引用规则、并发调度、预算和导出边界见[全文发现说明](docs/annual-discovery.md)和[数据规则](docs/data-policy.md)。预算到期会停止准入新批次，已准入或正在调用的批次仍保留结果；连接器 timeout 不能保证 socket 调用在该墙钟时间内返回。并发不会增加规划批次数或自动重试，但同一预算内可能完成更多批次，供应方费用可能相应增加。发现仍是未经独立语义核验的模型观点。扫描件/OCR 不在范围内。原 PDF、运行归档和审计记录保存在本地，配置服务会收到批次文本及有限评审输入。现场联网是否允许应按组委会环境说明确认；离线历史响应回放不能替代新版在线验收，mock 验收也不代表真实供应方表现。具体路由边界见 [架构](docs/architecture.md)。
 
@@ -110,6 +110,8 @@ python scripts/analyze_annual.py --source-pdf data/raw/603288/2024/cninfo-122299
 在同一命令末尾添加 `--with-m3-screening` 可运行确定性四规则试行；添加 `--with-model --source-record data/raw/603288/2024/cninfo-1222994233/source.json` 可运行旧固定候选调查、独立全文发现与最终评审。二者同时添加即在同一个 run/report 中分别执行 M3 审计和完整 AI 模式；M3 不进入模型输入，最终评审只接收基础报告与有界发现项，不重新读取全文。模型选项需要完整模型环境变量和 agents 依赖，启用后会实际发送全文批次至配置服务。Web 对应模式为 `integrated_analysis`。
 
 运行记录与报告共享 run_id，分别位于 `artifacts/runs/<run_id>/` 和 `artifacts/reports/<run_id>/`；任务状态位于 `artifacts/annual-analysis-jobs/<job_id>/`。CLI 归档含输入 PDF 副本，原文未确认再分发许可，不能直接作为公开演示包上传。
+
+原任务失败但关联归档通过当前严格来源、结构和引用校验时，job 页面与历史列表提供只读报告入口，并保留原失败状态。查看已保存报告不创建任务、不调用模型；重新提交会创建另一项分析。实现契约见[架构](docs/architecture.md)，恢复验收状态见[验收记录](docs/verification-history.md)。
 
 运行原创季度样例的 Q2 同比/环比：
 

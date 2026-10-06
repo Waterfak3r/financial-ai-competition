@@ -83,6 +83,7 @@ flowchart TD
 | GET /v1/annual-analyses/{run_id}/discovery-evidences | 读取被全文发现引用的原文片段索引 |
 | GET /v1/annual-analyses/{run_id}/discovery-evidences/{evidence_id}/preview.png | 预览已校验引用所在 PDF 页图 |
 | GET /v1/annual-analysis-capabilities | 返回模型模式就绪状态；`model_investigation.annual_discovery_supported` 标记当前后端是否包含全文发现接入 |
+| GET /v1/runtime-identity | 返回启动时捕获的 API/CLI 协议与加载代码指纹、当前磁盘源码指纹及活跃任务数；不读取模型配置、不调用模型 |
 | GET / PUT / DELETE /v1/model-settings | 读取非密钥状态、保存完整本机配置、清除配置 |
 | POST /v1/model-settings/test | 按草稿真实测试连接，不保存草稿、不发送年报 |
 
@@ -90,15 +91,19 @@ flowchart TD
 
 有界队列为单进程最多一个运行任务、三个排队任务。job.json 写入 `artifacts/annual-analysis-jobs/<job_id>/`；服务重启时遗留 queued/running 转为 interrupted。状态为 queued、running、completed、completed_with_issues、failed、interrupted。模型配置或 LangGraph 未就绪时创建模型任务返回 503。
 
+API 在应用创建时捕获实际加载函数代码、对应源码清单与协议身份，同时用只读 CLI 探针记录启动身份。诊断分别返回不可变的启动快照和当前磁盘指纹。创建任务和开始执行时核对两者及当前 CLI；Web CLI 必须携带预期指纹，并在读取来源或模型设置前验证。前端提交前也要求该协议，旧 API 缺少端点时拒绝提交。启动脚本仅在监听 PID、项目命令行和无活跃任务均确认时重启本项目旧 API；未知进程或无法确认的状态拒绝处理。
+
+failed/interrupted job 的 GET 可附带 `result_availability` 只读投影，状态为 available/unavailable，含安全类别、说明及可用时的报告 URL。available 要求严格年度读取器通过，并与原请求公司、报告期、文档和 SHA 一致；不改写原 job 的状态、错误或 result_url。结构不兼容与来源校验失败分别表达，恢复读取不触发 CLI 或模型调用。
+
 Web 模型任务（model_investigation 与 integrated_analysis）按 README 的本机文件优先/环境回退规则注入配置；deterministic 与独立 M3 子进程移除 MODEL_*。集成模式的 M3 计算不使用模型配置；固定候选调查、全文发现与最终评审均属于显式 AI 流程。Web job 超时和全文发现内部预算见[全文发现契约](annual-discovery.md)。CLI 仍只读环境。设置读取 API 不回显密钥并禁止缓存；设置路由检查 loopback Host，修改与测试还检查本机 Origin。这些是设置路由的约束，不代表所有 API 有相同防护。应用不全局强制 host，按启动命令绑定 127.0.0.1。
 
 `GET /v1/annual-analysis-history` 的 `limit` 默认 20、允许 1–50；`offset` 默认 0、须为非负整数。HTTP 查询值越界或无法解析返回 422。响应顶层为 `{items, total, limit, offset}`；每项主要包含 `item_id`、公司代码/年报年份/类型、来源文档编号和文件名、总状态、独立的 `job_status` 与 `run_status`、任务 `mode` 与归档 `run_mode`、`created_at`、`job_id`/`run_id`、`replay`、`result_available` 和 `{code, message}` 形式的 `issues`。缺失或无效的创建时间排在有效时间之后；有效时间按新到旧排序，同时间以条目标识稳定排序。
 
 索引同时收集持久化 job 与成功的 CLI run。job 和其 run 只有在公司、报告年度、来源文档编号及 PDF SHA256 完全相同时才关联为一个条目；校验不符时不误关联，CLI 归档仍可单独列出。任务状态与运行状态分别展示，模式冲突会记入 issues。本机历史页数和条数取决于当时合法归档；`total` 是该次索引读取发现的合格归档总数，不是固定额度。
 
-扫描限制和路径保护：job JSON 最大 512 KiB、run manifest 最大 2 MiB、report JSON 最大 32 MiB；来源 `source.pdf` 只做安全路径/文件类型与文件大小元数据检查（上限 256 MiB），不打开或重算其内容哈希。归档 JSON 读取要求其路径位于项目根目录内、拒绝符号链接/Windows reparse point，并在打开前后复核文件身份；缺损或不安全的单项不会拖垮整张索引。
+扫描限制和路径保护：job JSON 最大 512 KiB、run manifest 最大 2 MiB、report JSON 最大 32 MiB；通常对来源 `source.pdf` 只做安全路径/文件类型与文件大小元数据检查（上限 256 MiB）。failed/interrupted job 的恢复可用性另经严格年度读取器校验，包括原 PDF SHA 和引用；每次索引请求内部复用同一 run 的校验结果。归档 JSON 读取要求其路径位于项目根目录内、拒绝符号链接/Windows reparse point，并在打开前后复核文件身份；缺损或不安全的单项不会拖垮整张索引。
 
-`result_available=true` 仅表示关联的运行归档状态为 `completed` 或 `completed_with_issues`、所需归档文件可安全读取，且 report JSON 的 run/company/year/document/source SHA 与 manifest 对得上；job 自身状态仍单独展示。它不表示 PDF 内容已经重核、金额/原文证据核验通过、AI 评审状态正确，也不保证之后单独读取报告、证据索引或页图的 GET 一定成功。该路由只读 `job.json`、`manifest.json` 和当前页的 `report.json`，不读取 `source.json`、PDF 正文、模型设置或调用审计响应。
+对于成功 job 或独立 CLI run，`result_available=true` 表示关联归档状态为 `completed` 或 `completed_with_issues`、所需文件可安全读取，且 report JSON 的 run/company/year/document/source SHA 与 manifest 对得上；这条索引路径不重核 PDF 正文。对于 failed/interrupted job，还要求严格读取通过；issues 明示原失败事实与恢复可读性。两者都不表示 AI 语义或金融判断经过独立复核，也不保证文件之后变化时 GET 仍成功。索引不读取 `source.json`、模型设置或调用审计响应，job 与 run 状态分别展示。
 
 上传失败且无可提取文字时返回 422，只撤回该次新建文件。原始文件名、绝对路径或密钥不得进入处理说明。旧资料与归档不可回写。
 

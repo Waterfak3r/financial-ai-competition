@@ -4,9 +4,11 @@ import type {
   AnnualAnalysisJobMode,
   AnnualAnalysisJobRequest,
   AnnualAnalysisJobStatus,
+  AnnualAnalysisResultAvailability,
 } from "../types/annualAnalysisJob";
 
 const JOBS_PATH = "/api/v1/annual-analysis-jobs";
+const RUNTIME_IDENTITY_PATH = "/api/v1/runtime-identity";
 const JOB_ID_PATTERN = /^annual-job-[0-9a-f]{32}$/;
 const RUN_ID_PATTERN = /^annual-analysis-[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/i;
@@ -41,6 +43,7 @@ export async function createAnnualAnalysisJob(
   request: AnnualAnalysisJobRequest,
 ): Promise<AnnualAnalysisJob> {
   validateRequest(request);
+  await assertAnnualRuntimeCompatible();
   const response = await fetch(JOBS_PATH, {
     method: "POST",
     headers: {
@@ -59,6 +62,62 @@ export async function createAnnualAnalysisJob(
     throw new AnnualAnalysisJobApiError(failure.message, response.status, failure.code);
   }
   return readJob(payload, undefined, request);
+}
+
+async function assertAnnualRuntimeCompatible(): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(RUNTIME_IDENTITY_PATH, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+      credentials: "omit",
+    });
+  } catch {
+    throw runtimeMismatchError();
+  }
+  if (!response.ok) throw runtimeMismatchError();
+  let payload: unknown;
+  try {
+    payload = await readJson(response);
+  } catch {
+    throw runtimeMismatchError();
+  }
+  const runtime = asRecord(payload);
+  const api = asRecord(runtime?.api);
+  const cli = asRecord(runtime?.cli_at_startup);
+  const diskFingerprint = runtime?.disk_source_manifest_sha256;
+  const sha = (value: unknown) => typeof value === "string" && SHA256_PATTERN.test(value);
+  const identityIsCurrent = (identity: Record<string, unknown> | null, role: "api" | "cli") =>
+    identity !== null &&
+    identity.role === role &&
+    identity.protocol_version === "annual-analysis-cli-v1" &&
+    identity.loaded_source_match === true &&
+    identity.model_calls === 0 &&
+    Number.isInteger(identity.source_file_count) &&
+    Number(identity.source_file_count) > 0 &&
+    sha(identity.fingerprint) &&
+    sha(identity.source_manifest_sha256) &&
+    identity.source_manifest_sha256 === diskFingerprint;
+  if (
+    runtime?.kind !== "fintrace_annual_runtime_identity_v1" ||
+    runtime.protocol_version !== "annual-analysis-cli-v1" ||
+    runtime.source_changed_since_api_start !== false ||
+    !sha(diskFingerprint) ||
+    !identityIsCurrent(api, "api") ||
+    !identityIsCurrent(cli, "cli") ||
+    api?.source_manifest_sha256 !== cli?.source_manifest_sha256
+  ) {
+    throw runtimeMismatchError();
+  }
+}
+
+function runtimeMismatchError(): AnnualAnalysisJobApiError {
+  return new AnnualAnalysisJobApiError(
+    "本机 API 或年度分析 CLI 版本过旧或与当前源码不一致，未创建任务。请重新运行项目 start.bat 检查并更新本机服务后重试。",
+    409,
+    "runtime_version_mismatch",
+  );
 }
 
 export async function loadAnnualAnalysisJob(jobId: string): Promise<AnnualAnalysisJob> {
@@ -171,6 +230,9 @@ function readJob(value: unknown, expectedJobId?: string, expectedRequest?: Annua
   const errorValue = record.error;
   const error = errorValue === null ? null : readError(errorValue);
   const successful = status === "completed" || status === "completed_with_issues";
+  const resultAvailability = record.result_availability === undefined
+    ? undefined
+    : readResultAvailability(record.result_availability, status, runId, error);
   if (
     !JOB_ID_PATTERN.test(jobId) ||
     (expectedJobId !== undefined && jobId !== expectedJobId) ||
@@ -201,7 +263,51 @@ function readJob(value: unknown, expectedJobId?: string, expectedRequest?: Annua
     run_id: runId,
     result_url: resultUrl,
     error,
+    ...(resultAvailability === undefined ? {} : { result_availability: resultAvailability }),
     ...(discoveryProgress === undefined ? {} : { discovery_progress: discoveryProgress }),
+  };
+}
+
+function readResultAvailability(
+  value: unknown,
+  status: AnnualAnalysisJobStatus,
+  runId: string | null,
+  error: AnnualAnalysisJob["error"],
+): AnnualAnalysisResultAvailability {
+  const record = asRecord(value);
+  const availabilityStatus = record?.status;
+  const category = record?.category;
+  const resultUrl = nullableStringField(record ?? {}, "result_url");
+  const message = nullableStringField(record ?? {}, "message");
+  const categories = new Set<AnnualAnalysisResultAvailability["category"]>([
+    "archive_readable_after_failure",
+    "source_validation_failed",
+    "archive_incompatible",
+    "no_recovery_projection",
+  ]);
+  if (
+    record === null ||
+    Object.keys(record).length !== 4 ||
+    (availabilityStatus !== "available" && availabilityStatus !== "unavailable") ||
+    typeof category !== "string" || !categories.has(category as AnnualAnalysisResultAvailability["category"]) ||
+    (message !== null && message.length > 500) ||
+    (availabilityStatus === "available" && (
+      category !== "archive_readable_after_failure" ||
+      (status !== "failed" && status !== "interrupted") ||
+      error === null ||
+      runId === null ||
+      resultUrl !== "/v1/annual-analyses/" + runId ||
+      message === null
+    )) ||
+    (availabilityStatus === "unavailable" && resultUrl !== null)
+  ) {
+    throw invalidResponse("报告可读状态字段不一致");
+  }
+  return {
+    status: availabilityStatus,
+    category: category as AnnualAnalysisResultAvailability["category"],
+    result_url: resultUrl,
+    message,
   };
 }
 

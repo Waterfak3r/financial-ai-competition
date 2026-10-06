@@ -165,11 +165,13 @@ def test_job_and_cli_run_are_deduplicated_and_statuses_stay_independent(tmp_path
     assert failed_job["status"] == "failed"
     assert failed_job["job_status"] == "failed"
     assert failed_job["run_status"] == "completed"
-    assert failed_job["result_available"] is True
+    assert failed_job["result_available"] is False
     assert failed_job["mode"] == "model_investigation"
     assert failed_job["run_mode"] == "m3_screening"
     assert failed_job["replay"] is True
-    assert {item["code"] for item in failed_job["issues"]} == {"job_failed", "mode_mismatch"}
+    failed_issue_codes = {item["code"] for item in failed_job["issues"]}
+    assert {"job_failed", "mode_mismatch"}.issubset(failed_issue_codes)
+    assert any(code.startswith("failed_result_") for code in failed_issue_codes)
     duplicate_job = rows["annual-job-" + "3" * 32]
     assert duplicate_job["run_id"] == successful_run
     assert duplicate_job["mode"] == "m3_screening"

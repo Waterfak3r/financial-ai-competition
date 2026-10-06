@@ -48,11 +48,144 @@ function Test-FintraceApi {
         if ($schema.info.title -ne 'finagent annual precheck') { return $null }
         $paths = @($schema.paths.PSObject.Properties | ForEach-Object { $_.Name })
         if ($paths -notcontains '/v1/annual-analysis-jobs' -or $paths -notcontains '/v1/model-settings') { return $null }
-        return $true
+        $runtime = $null
+        try {
+            $runtime = Invoke-RestMethod -Uri "$apiUrl/v1/runtime-identity" -TimeoutSec 2
+        }
+        catch {
+            # Older project APIs do not expose an identity endpoint. The caller
+            # may restart one only after independently confirming its process.
+        }
+        return [pscustomobject]@{
+            Recognized = $true
+            Runtime = $runtime
+            IdentityAvailable = ($null -ne $runtime)
+            Compatible = (Test-AnnualRuntimeIdentity -Runtime $runtime)
+        }
     }
     catch {
         return $null
     }
+}
+
+function Test-AnnualRuntimeIdentity {
+    param([object]$Runtime)
+
+    if ($null -eq $Runtime) { return $false }
+    $apiIdentity = $Runtime.api
+    $cliIdentity = $Runtime.cli_at_startup
+    $shaPattern = '^[0-9a-f]{64}$'
+    return (
+        $Runtime.kind -eq 'fintrace_annual_runtime_identity_v1' -and
+        $Runtime.protocol_version -eq 'annual-analysis-cli-v1' -and
+        $Runtime.source_changed_since_api_start -eq $false -and
+        $apiIdentity.role -eq 'api' -and
+        $cliIdentity.role -eq 'cli' -and
+        $apiIdentity.protocol_version -eq 'annual-analysis-cli-v1' -and
+        $cliIdentity.protocol_version -eq 'annual-analysis-cli-v1' -and
+        $apiIdentity.loaded_source_match -eq $true -and
+        $cliIdentity.loaded_source_match -eq $true -and
+        $apiIdentity.model_calls -eq 0 -and
+        $cliIdentity.model_calls -eq 0 -and
+        $apiIdentity.fingerprint -match $shaPattern -and
+        $cliIdentity.fingerprint -match $shaPattern -and
+        $apiIdentity.source_manifest_sha256 -match $shaPattern -and
+        $cliIdentity.source_manifest_sha256 -match $shaPattern -and
+        $Runtime.disk_source_manifest_sha256 -match $shaPattern -and
+        $apiIdentity.source_manifest_sha256 -eq $cliIdentity.source_manifest_sha256 -and
+        $apiIdentity.source_manifest_sha256 -eq $Runtime.disk_source_manifest_sha256 -and
+        $apiIdentity.source_file_count -gt 0 -and
+        $cliIdentity.source_file_count -gt 0 -and
+        $Runtime.disk_source_file_count -gt 0
+    )
+}
+
+function Test-ProjectApiProcess {
+    param([Parameter(Mandatory = $true)][int]$TargetPid)
+
+    try {
+        $process = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $TargetPid" -ErrorAction Stop
+    }
+    catch {
+        return $null
+    }
+    if ($null -eq $process -or [string]::IsNullOrWhiteSpace($process.CommandLine)) { return $null }
+    if (-not (Test-ProjectApiCommandLine -CommandLine $process.CommandLine)) {
+        return $null
+    }
+    return $process
+}
+
+function Test-ProjectApiCommandLine {
+    param([Parameter(Mandatory = $true)][string]$CommandLine)
+
+    $expectedBackend = [System.IO.Path]::GetFullPath($backendSource).TrimEnd('\')
+    $modulePattern = '(?i)(?:^|\s)-m\s+uvicorn\s+finagent\.api\.app:app(?:\s|$)'
+    $escapedBackend = [regex]::Escape($expectedBackend)
+    $quotedAppDirectoryPattern = '(?i)(?:^|\s)--app-dir\s+"' + $escapedBackend + '"(?=\s|$)'
+    $unquotedAppDirectoryPattern = '(?i)(?:^|\s)--app-dir\s+' + $escapedBackend + '(?=\s|$)'
+    return (
+        [regex]::IsMatch($CommandLine, $modulePattern) -and
+        (
+            [regex]::IsMatch($CommandLine, $quotedAppDirectoryPattern) -or
+            [regex]::IsMatch($CommandLine, $unquotedAppDirectoryPattern)
+        )
+    )
+}
+
+function Test-NoActiveAnnualJobs {
+    param([object]$Runtime)
+
+    if ($null -ne $Runtime -and $Runtime.kind -eq 'fintrace_annual_runtime_identity_v1') {
+        $activeJobCount = $Runtime.active_job_count
+        if (($activeJobCount -isnot [int] -and $activeJobCount -isnot [long]) -or [long]$activeJobCount -lt 0 -or [long]$activeJobCount -ne 0) { return $false }
+    }
+    $jobsRoot = Join-Path $projectRoot 'artifacts\annual-analysis-jobs'
+    if (-not (Test-Path -LiteralPath $jobsRoot -PathType Container)) { return $true }
+    try {
+        $jobsRootItem = Get-Item -LiteralPath $jobsRoot -ErrorAction Stop
+        if (($jobsRootItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { return $false }
+        $directories = @(Get-ChildItem -LiteralPath $jobsRoot -Directory -Force -ErrorAction Stop)
+        if ($directories.Count -gt 1000) { return $false }
+        foreach ($directory in $directories) {
+            if (($directory.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { return $false }
+            $statePath = Join-Path $directory.FullName 'job.json'
+            $stateFile = Get-Item -LiteralPath $statePath -ErrorAction Stop
+            if (($stateFile.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or $stateFile.Length -gt 512KB) { return $false }
+            $state = Get-Content -LiteralPath $statePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            if ($state.status -in @('queued', 'running')) { return $false }
+        }
+    }
+    catch {
+        return $false
+    }
+    return $true
+}
+
+function Stop-VerifiedStaleApi {
+    param(
+        [Parameter(Mandatory = $true)][int[]]$ListenerPids,
+        [object]$Runtime
+    )
+
+    if ($ListenerPids.Count -ne 1) {
+        throw 'API 版本过旧或已变更，但 8000 端口对应多个进程；未停止任何进程。'
+    }
+    $targetPid = $ListenerPids[0]
+    $process = Test-ProjectApiProcess -TargetPid $targetPid
+    if ($null -eq $process) {
+        throw "API 版本过旧或已变更，但 PID $targetPid 的命令行无法确认属于本项目；未停止任何进程。请手动检查后更新服务。"
+    }
+    if (-not (Test-NoActiveAnnualJobs -Runtime $Runtime)) {
+        throw 'API 版本过旧或已变更，且检测到活动任务或无法确认任务状态；未停止服务。请等待任务结束后重新启动。'
+    }
+    $current = Test-ProjectApiProcess -TargetPid $targetPid
+    if ($null -eq $current -or $current.CreationDate -ne $process.CreationDate) {
+        throw 'API 进程在身份核对期间发生变化；未停止任何进程。请重新运行启动脚本。'
+    }
+    Stop-Process -Id $targetPid -Force -ErrorAction Stop
+    Wait-Process -Id $targetPid -Timeout 10 -ErrorAction SilentlyContinue
+    Write-Host "已确认并停止本项目的陈旧 API（PID $targetPid）；无活动任务，将启动当前源码版本。" -ForegroundColor Yellow
 }
 
 function Test-FintraceVite {
@@ -135,9 +268,19 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Node.js 无法启动：$nodeVersion" }
 
     $apiPids = @(Get-ListeningPids -Port 8000)
-    $apiRecognized = [bool](Test-FintraceApi)
+    $apiCheck = Test-FintraceApi
+    $apiRecognized = $null -ne $apiCheck -and $apiCheck.Recognized
+    $apiCompatible = $apiRecognized -and $apiCheck.Compatible
     if ($apiRecognized -and $apiPids.Count -eq 0) {
         throw '8000 端口响应为本项目 API，但无法读取其进程 PID；为避免不完整复用，已停止启动。'
+    }
+    if ($apiCompatible -and ($apiPids -notcontains [int]$apiCheck.Runtime.api.process_id)) {
+        $apiCompatible = $false
+    }
+    if ($apiRecognized -and -not $apiCompatible) {
+        Stop-VerifiedStaleApi -ListenerPids $apiPids -Runtime $apiCheck.Runtime
+        $apiPids = @(Get-ListeningPids -Port 8000)
+        $apiRecognized = $false
     }
     if (-not $apiRecognized -and $apiPids.Count -gt 0) {
         throw "8000 端口已被未知服务占用（PID $($apiPids -join ', ')），未启动或停止任何服务。"
@@ -177,10 +320,22 @@ try {
     }
 
     $deadline = (Get-Date).AddSeconds(45)
-    $apiReady = $apiRecognized
+    $apiReady = $apiRecognized -and $apiCompatible
     $frontendReady = $frontendRecognized
     while ((-not $apiReady -or -not $frontendReady) -and (Get-Date) -lt $deadline) {
-        if (-not $apiReady) { $apiReady = [bool](Test-FintraceApi) }
+        if (-not $apiReady) {
+            $apiCheck = Test-FintraceApi
+            if ($null -ne $apiCheck -and $apiCheck.Recognized) {
+                $apiPids = @(Get-ListeningPids -Port 8000)
+                $apiReady = $apiCheck.Compatible -and $apiPids -contains [int]$apiCheck.Runtime.api.process_id
+                if ($apiCheck.Compatible -and -not $apiReady) {
+                    throw 'API runtime identity 与 8000 端口进程不一致；未复用该 API。'
+                }
+                if (-not $apiCheck.Compatible) {
+                    throw '新启动 API 的源码身份不兼容或无法确认；请检查本次 API 日志后重试。'
+                }
+            }
+        }
         if (-not $frontendReady) { $frontendReady = [bool](Test-FintraceVite) }
         if ($apiReady -and $frontendReady) { break }
         foreach ($service in $startedServices) {

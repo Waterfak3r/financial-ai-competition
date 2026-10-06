@@ -276,3 +276,37 @@ C-02 独立季度 CLI 已以 `af13785d9ba9d635ea79e670c42beb54415d9bbd` 提交�
 生成 exit-code 文本时，一条 PowerShell `Set-Content -NoNewline <目标路径> 0` 命令使用位置参数，意外在仓库根目录写出名为 `0` 的 87 字节文件，文件内容只是原拟写入的相对目标路径。已将该文件原样移动到 `artifacts/tmp/latency-delivery-final-20261005/powershell-positional-binding-artifact-0.txt` 留存，没有删除或暂存；之后命令改用显式 `-Path` 与 `-Value` 参数。此日志记录问题没有触及源码或用户材料，也未触发额外业务测试。
 
 源码 ZIP 将从包含本报告、运行指南和正式证据的文档交付 commit/tree 独立构建；准确 package ID、source commit/tree、ZIP SHA256、manifest 和同机中文空格路径副本演练结果应以包外清单与独立验收记录为准。该同机检查不替代另一台 Windows 电脑干净安装、现场网络/API 或真人财务复核。
+
+<a id="annual-analysis-recovery-r1-intermediate"></a>
+
+## 2026-10-06 恢复 goal 开工与 R1 中间状态审阅
+
+本次用户实际启动恢复 goal，并授权两份指定年报有限在线验收，累计真实 provider 请求尝试上限为 80 次。主控读取 AGENTS、README、恢复任务书及相关契约，核对工作区 HEAD 仍为 `b3c418ce4566b2161a9d86571c353f891e978d56`。开始时已有的产品路线/本验收文档修改、未跟踪任务书、计划书 Word 删除及另名文件、用户茅台 PDF 均保留；原始工作区差异和文档快照留在 `artifacts/tmp/annual-recovery-controller-20261006/`，不作为正式功能依赖。
+
+R1 通过当前会话子代理机制显式配置 `model=gpt-6-luna`、`reasoning_effort=max`、`fork_turns=none` 派发。执行子代理首次回合因工具报告会话用量限制而终止；已要求同一子代理恢复本阶段，未换型号、未转派、未由主控代写业务代码。当前落盘内容仅包括新增 `core/annual_runtime_identity.py` 及 API、任务服务、年度 CLI 的部分身份握手/只读报告可用性改动。
+
+主控实际审阅上述差异，尚不接受 R1：执行端回报正常 CLI 探测的 `loaded_source_match=false`，动态生成的 dataclass 方法被错误纳入源码比较；`_invoke_cli` 无期望身份时会传入空 fingerprint，且临时项目测试夹具的 CLI 身份探测兼容还未验证；只读投影的错误类别还需对齐读取器的实际身份错误码。启动器、历史索引、前端和对应测试尚未完成。修正清单已交回同一 R1 执行端，不能将这些中间改动当作已恢复版本或建议启动在线分析。
+
+主控另做只读文件核对：三份既有归档的 manifest、report、source PDF 共 9 个 SHA256 均与前节审阅证据一致；旧任务仍分别为 failed、failed、completed_with_issues。结构化[中间审阅记录](../artifacts/evaluations/annual-recovery-controller-20261006/r1-intermediate-review.json)保留当前哈希、任务状态和检查范围。这只是文件与代码审阅，不是新的运行、归档 API 或浏览器验收。
+
+截至本段记录，真实 provider 请求为 **0/80**，剩余 **80**；没有读取或显示模型密钥，没有新在线结果。首次处理预算暂分配两份各 30 次，另预留 20 次续跑/补证，须在 R3 用实际离线计划核对后才能联网。R1 自动化验收、启动演练、浏览器矩阵、R2–R6 均尚未通过；没有阶段 commit，没有 push。历史测试通过与执行端的一次失败探测不计作本轮修复通过。
+
+<a id="annual-analysis-recovery-r1"></a>
+
+## 2026-10-06 R1 版本一致性与历史报告恢复验收
+
+R1 由本会话明确配置的 `gpt-6-luna`、`max` 执行子代理实施代码及运行验证，主控审阅实际差异、原始证据和页面，并维护文档。此前中间状态中的身份误判、空指纹和测试夹具问题已修正；中间记录保留其当时状态。本阶段只接受版本握手及历史报告恢复，未接受 R2–R6 或新的在线年报分析。
+
+API/CLI 启动时捕获加载代码身份，并分别核对磁盘源码；新任务及 Web CLI 在开始分析前拒绝版本不一致。启动器仅对确认属于本项目且无活动任务的陈旧 API 执行重启；未知进程或无法确认的状态拒绝处理。failed/interrupted job 通过严格归档读取器提供只读可用性投影，原状态、错误和归档均不回写。历史列表、刷新后的 job 和按 run 查看均有保存报告入口，页面将旧错误明确标为原任务记录。
+
+正式证据位于 [`annual-recovery-r1-20261006`](../artifacts/evaluations/annual-recovery-r1-20261006/)。实际检查及范围如下：
+
+- 针对性后端套件的 [JUnit](../artifacts/evaluations/annual-recovery-r1-20261006/r1-targeted-pytest.xml) 为 **85 passed、2 skipped**，suite wall time 44.794 秒；跳过项分别为历史索引 reparse-point 和来源文件 symlink 检查，原因是本机未启用测试所需的符号链接创建权限。新增的失败 job 源 PDF 篡改拒绝测试另跑 **1 passed**，suite time 1.767 秒，见 [独立 JUnit](../artifacts/evaluations/annual-recovery-r1-20261006/source-tamper-projection.xml)。这两轮不是完整后端套件。
+- [同版本 CLI](../artifacts/evaluations/annual-recovery-r1-20261006/same-version-cli.json) 实际执行身份探针和原创单页 PDF 的确定性分析，退出码为 0、模型调用为零。它证明协议和 CLI 可用，不作为真实财报结果或性能验收。
+- [启动器未知进程演练](../artifacts/evaluations/annual-recovery-r1-20261006/startup-handshake-unknown-process.json) 使用本次自建的隔离 API；实际启动脚本退出码 1 并拒绝停止无法确认为项目入口的进程，原 PID 保留且历史接口继续响应。[活动任务保护](../artifacts/evaluations/annual-recovery-r1-20261006/startup-active-job-protection.json) 提取真实启动函数 AST，以模拟 Win32 进程和停止操作哨兵验证：JSON 解码活动计数 0 允许安全检查，1 拒绝重启，Stop-Process 调用为 0。后者是故障模拟，不写成实际杀停或重启演练。
+- [最终浏览器回放](../artifacts/evaluations/annual-recovery-r1-20261006/browser-history-recovery-final.json) 通过已有 Python Playwright 与系统 Chrome，使用三份历史归档的逐字节隔离副本、当前后端和本地前端。历史入口、失败 job 路由刷新和保存报告操作可达；海天集成报告显示 **102 条待核查线索**及既有评审，另两份报告 HTTP 200，分别保留发现层 failed/0 条、partial/28 条及原评审状态。模拟旧 runtime 端点 404 后，前端报 `runtime_version_mismatch`，年度任务 POST 为 0。最终无 React 重复 key、无未预期控制台错误、无 page error；唯一 404 是该受控兼容性检查。主控查看了最终失败任务页面截图。三张最终截图在同一目录，初轮存在重复 key 的回放和截图另留 `*-initial`，不以初轮作为最终通过证据。
+- 最终前端 `npm run build`（TypeScript + Vite）退出码 0，仅有既有大 chunk 提示；构建输出、退出码和运行命令由执行端归档在同一证据目录。没有自行安装依赖。
+
+历史原件及隔离副本的 job、manifest、report、source PDF 共 12 项前后哈希均一致；三份原 job 仍为 failed、failed、completed_with_issues。上述 102/28 条和评审均来自历史运行，没有记作本 goal 新在线生成。自建浏览器服务已收尾，未停止用户服务、未清理 tmp 内容。
+
+本阶段真实 provider 请求为 **0/80**，剩余 **80**；没有读取本机真实模型配置、没有外发年报。取消、部分报告、硬截止、跨进程累计额度和续跑尚属 R2；全局归并、入口收敛及两份新在线 Web/API 验收尚未通过。本阶段实施提交在任务书进度表登记，不 push；用户原有文档与比赛材料改动保持未暂存。

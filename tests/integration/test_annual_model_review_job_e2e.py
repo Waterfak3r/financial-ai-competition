@@ -24,12 +24,25 @@ import finagent.reports.investigation_append as investigation_append
 import finagent.api.annual_analysis_jobs as jobs_module
 from finagent.api.annual_analysis_jobs import CliResult
 from finagent.api.app import create_app
+from finagent.core.annual_runtime_identity import capture_cli_runtime_identity
 from finagent.retrieval.annual_context import (
     AnnualContextResult,
     NarrativeSnippet,
     SignalContextResult,
 )
 from scripts import analyze_annual as annual_cli
+
+
+@pytest.fixture(autouse=True)
+def _inject_test_cli_runtime_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The isolated test project uses the imported production CLI as its runner.
+    identity = capture_cli_runtime_identity()
+    monkeypatch.setattr(jobs_module, "_probe_cli_runtime_identity", lambda _root: identity)
+    # The test patches downstream FINTRACE modules with local deterministic
+    # fixtures. Keep the in-process CLI handshake pinned to the same immutable
+    # startup identity used by the service; the subprocess gate is covered by
+    # the separate real-CLI mismatch test.
+    monkeypatch.setattr(annual_cli, "capture_cli_runtime_identity", lambda _root=None: identity)
 
 
 class _MockProvider:
@@ -313,6 +326,8 @@ def test_model_job_runs_cli_and_final_review_then_returns_archived_report(
     _install_mock_analysis(monkeypatch, source)
     _install_mock_retrieval(monkeypatch)
 
+    cli_results: list[CliResult] = []
+
     def invoke_cli(project_root: Path, artifacts_root: Path, request: dict[str, Any]) -> CliResult:
         pdf_path = project_root / "data" / "raw" / Path(*request["source_pdf_path"].split("/"))
         source_record = pdf_path.parent / "source.json"
@@ -323,13 +338,16 @@ def test_model_job_runs_cli_and_final_review_then_returns_archived_report(
             "--document-id", str(request["document_id"]),
             "--expected-sha256", str(request["sha256"]),
             "--artifacts-root", str(artifacts_root),
+            "--expected-runtime-fingerprint", str(request["_expected_runtime_fingerprint"]),
         ]
         assert request["mode"] == "model_investigation"
         argv.extend(["--with-model", "--source-record", str(source_record)])
         stdout, stderr = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             return_code = annual_cli.main(argv)
-        return CliResult(return_code, stdout.getvalue(), stderr.getvalue())
+        result = CliResult(return_code, stdout.getvalue(), stderr.getvalue())
+        cli_results.append(result)
+        return result
 
     monkeypatch.setattr(jobs_module, "_invoke_cli", invoke_cli)
 
@@ -341,7 +359,14 @@ def test_model_job_runs_cli_and_final_review_then_returns_archived_report(
         created = client.post("/v1/annual-analysis-jobs", json=source)
         assert created.status_code == 202, created.text
         state = _wait_terminal(client, created.json()["job_id"], timeout=10)
-        assert state["status"] == "completed", json.dumps({"state": state, "requests": provider.requests}, ensure_ascii=False)
+        assert state["status"] == "completed", json.dumps({
+            "state": state,
+            "requests": provider.requests,
+            "cli_results": [
+                {"returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
+                for result in cli_results
+            ],
+        }, ensure_ascii=False)
         assert len(provider.requests) == 4
 
         response = client.get(state["result_url"])

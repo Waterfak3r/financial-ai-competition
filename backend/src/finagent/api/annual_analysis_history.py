@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from finagent.api.annual_report_read import AnnualReportReadError, load_annual_report
+
 _COMPANY_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,64}$")
 _DOCUMENT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _JOB_ID = re.compile(r"^annual-job-[0-9a-f]{32}$")
@@ -53,9 +55,10 @@ def list_annual_analysis_history(
 ) -> dict[str, Any]:
     """Index persisted jobs plus successful standalone CLI archives.
 
-    This function only reads job.json, manifest.json, and a bounded report.json
-    to decide whether an archived result is available. It never opens a PDF,
-    source record, environment file, or model-audit JSON.
+    The index reads bounded job, manifest, and report records. For a failed job
+    whose report appears available, it additionally invokes the strict report
+    reader, which reads the archived source PDF. It never opens source.json,
+    environment files, or model-audit JSON.
     """
 
     _validate_pagination(limit, offset)
@@ -135,6 +138,7 @@ def list_annual_analysis_history(
     total = len(rows)
     page = rows[offset : offset + limit]
     result_cache: dict[str, bool] = {}
+    strict_failed_result_cache: dict[str, tuple[bool, str | None]] = {}
     for item in page:
         record = item.pop("_run_record", None)
         if isinstance(record, Mapping):
@@ -149,6 +153,33 @@ def list_annual_analysis_history(
                 )
             item["result_available"] = result_cache[run_id]
             if (
+                item["result_available"]
+                and item["job_status"] in {"failed", "interrupted"}
+            ):
+                if run_id not in strict_failed_result_cache:
+                    strict_failed_result_cache[run_id] = _strict_failed_result_available(root, run_id, item)
+                strict_match, category = strict_failed_result_cache[run_id]
+                if category is not None:
+                    _add_issue(
+                        item,
+                        f"failed_result_{category}",
+                        "原任务失败；关联报告未通过当前来源或归档校验，暂不可只读查看。",
+                    )
+                if strict_match:
+                    _add_issue(
+                        item,
+                        "failed_job_archive_readable",
+                        "原任务仍为失败状态；关联报告已通过当前严格校验，可只读查看。",
+                    )
+                else:
+                    item["result_available"] = False
+                    if category is None:
+                        _add_issue(
+                            item,
+                            "failed_result_identity_mismatch",
+                            "原任务失败；关联报告与任务来源身份不一致，暂不可只读查看。",
+                        )
+            if (
                 item["run_status"] in {"completed", "completed_with_issues"}
                 and not item["result_available"]
             ):
@@ -161,6 +192,40 @@ def list_annual_analysis_history(
         "limit": limit,
         "offset": offset,
     }
+
+
+def _strict_failed_result_available(
+    root: Path,
+    run_id: str,
+    item: Mapping[str, Any],
+) -> tuple[bool, str | None]:
+    try:
+        archive = load_annual_report(root, run_id)
+    except AnnualReportReadError as exc:
+        return False, _report_read_error_category(exc.code)
+    summary = archive.manifest_summary
+    matches = (
+        summary.get("company_id") == item.get("company_code")
+        and summary.get("report_year") == item.get("year")
+        and summary.get("document_id") == item.get("source_document_id")
+        and str(summary.get("source_pdf_sha256", "")).lower()
+        == str(item.get("_source_sha256", "")).lower()
+    )
+    return matches, None if matches else "identity_mismatch"
+
+
+def _report_read_error_category(code: str) -> str:
+    source_codes = {
+        "source_sha256_mismatch",
+        "source_pdf_invalid",
+        "archive_identity_mismatch",
+        "report_identity_mismatch",
+        "evidence_source_mismatch",
+        "annual_discovery_evidence_mismatch",
+        "annual_discovery_quote_mismatch",
+        "narrative_evidence_source_mismatch",
+    }
+    return "source_validation_failed" if code in source_codes else "archive_incompatible"
 
 
 def _validate_pagination(limit: int, offset: int) -> None:

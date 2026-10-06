@@ -26,6 +26,17 @@ export interface AnnualAnalysisJobErrorDetail {
   message: string;
 }
 
+export interface AnnualAnalysisResultAvailability {
+  status: "available" | "unavailable";
+  category:
+    | "archive_readable_after_failure"
+    | "source_validation_failed"
+    | "archive_incompatible"
+    | "no_recovery_projection";
+  result_url: string | null;
+  message: string | null;
+}
+
 export interface AnnualAnalysisDiscoveryProgress {
   event: "planned" | "batch_started" | "batch_finished" | "budget_exhausted";
   status: "not_called" | "running" | "completed" | "partial" | "failed" | "budget_exhausted";
@@ -50,5 +61,6 @@ export interface AnnualAnalysisJob {
   run_id: string | null;
   result_url: string | null;
   error: AnnualAnalysisJobErrorDetail | null;
+  result_availability?: AnnualAnalysisResultAvailability;
   discovery_progress?: AnnualAnalysisDiscoveryProgress;
 }

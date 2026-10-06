@@ -40,6 +40,7 @@ from finagent.api.annual_analysis_jobs import (
     get_annual_analysis_capabilities,
     get_annual_analysis_job_service,
 )
+from finagent.core.annual_runtime_identity import capture_api_runtime_identity
 from finagent.audit import AuditPersistError, EvidenceRef, audited_complete_chat
 from finagent.core.model_settings_store import (
     ModelSettingsStoreError,
@@ -80,7 +81,11 @@ def create_app(project_root: Path | None = None) -> FastAPI:
     root = Path(project_root).resolve() if project_root is not None else Path(__file__).resolve().parents[4]
     app = FastAPI(title="finagent annual precheck", version="0.1.0")
     app.state.project_root = root
-    app.state.annual_analysis_jobs = get_annual_analysis_job_service(root)
+    app.state.api_runtime_identity = capture_api_runtime_identity(root)
+    app.state.annual_analysis_jobs = get_annual_analysis_job_service(
+        root,
+        api_runtime_identity=app.state.api_runtime_identity,
+    )
 
     @app.post("/v1/text-pdf-uploads", status_code=201)
     def post_text_pdf_upload(
@@ -153,6 +158,10 @@ def create_app(project_root: Path | None = None) -> FastAPI:
     @app.get("/v1/annual-analysis-capabilities")
     def get_annual_analysis_capabilities_route() -> dict:
         return get_annual_analysis_capabilities(app.state.project_root)
+
+    @app.get("/v1/runtime-identity")
+    def get_runtime_identity_route() -> dict:
+        return app.state.annual_analysis_jobs.runtime_diagnostics()
 
     @app.get("/v1/model-settings")
     def get_model_settings_route(request: Request) -> Response:

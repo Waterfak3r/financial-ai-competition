@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 import finagent.api.annual_analysis_jobs as jobs_module
 from finagent.api.annual_analysis_jobs import CliResult
 from finagent.api.app import create_app
+from finagent.core.annual_runtime_identity import capture_cli_runtime_identity
 from finagent.core.model_settings_store import save_local_settings
 from scripts import analyze_annual
 
@@ -133,6 +134,209 @@ def _wait_terminal(client: TestClient, job_id: str, *, timeout: float = 5.0) -> 
             return state
         time.sleep(0.01)
     raise AssertionError(f"任务 {job_id} 未在 {timeout} 秒内结束。")
+
+
+@pytest.fixture(autouse=True)
+def _inject_test_cli_runtime_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    # These API tests use isolated artifact roots without a scripts/ checkout.
+    # Inject a real, validated identity snapshot instead of weakening production gating.
+    identity = capture_cli_runtime_identity()
+    monkeypatch.setattr(jobs_module, "_probe_cli_runtime_identity", lambda _root: identity)
+
+
+def test_runtime_version_mismatch_is_rejected_before_queue_creation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _make_source(tmp_path)
+    app = create_app(tmp_path)
+    service = app.state.annual_analysis_jobs
+    service.api_runtime_identity = {
+        **service.api_runtime_identity,
+        "source_manifest_sha256": "0" * 64,
+    }
+    invoked = False
+
+    def unexpected_runner(*_args, **_kwargs):
+        nonlocal invoked
+        invoked = True
+        raise AssertionError("version mismatch must be rejected before CLI execution")
+
+    monkeypatch.setattr(jobs_module, "_invoke_cli", unexpected_runner)
+    response = TestClient(app).post("/v1/annual-analysis-jobs", json=_request(source))
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "runtime_version_mismatch"
+    assert invoked is False
+    assert not (tmp_path / "artifacts" / "annual-analysis-jobs").exists()
+
+
+def test_runtime_diagnostics_keeps_loaded_identity_separate_from_disk(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = create_app(tmp_path)
+    startup_fingerprint = app.state.annual_analysis_jobs.api_runtime_identity["source_manifest_sha256"]
+    monkeypatch.setattr(jobs_module, "source_manifest_fingerprint", lambda _root: ("f" * 64, 68))
+
+    response = TestClient(app).get("/v1/runtime-identity")
+
+    assert response.status_code == 200
+    diagnostics = response.json()
+    assert diagnostics["api"]["source_manifest_sha256"] == startup_fingerprint
+    assert diagnostics["disk_source_manifest_sha256"] == "f" * 64
+    assert diagnostics["source_changed_since_api_start"] is True
+
+
+def test_failed_job_exposes_only_a_read_only_strictly_valid_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _make_source(tmp_path)
+    request = _request(source)
+    run_id = _write_success_archive(tmp_path, request)
+    job_id = "annual-job-" + "b" * 32
+    job_dir = tmp_path / "artifacts" / "annual-analysis-jobs" / job_id
+    job_dir.mkdir(parents=True)
+    state_path = job_dir / "job.json"
+    state_path.write_text(json.dumps({
+        "job_id": job_id,
+        "status": "failed",
+        "stage": "failed",
+        "created_at": "2026-10-01T00:00:00+00:00",
+        "updated_at": "2026-10-01T00:00:01+00:00",
+        "request": {key: request[key] for key in (
+            "company_id", "report_year", "document_id", "source_pdf_path", "sha256", "mode",
+        )},
+        "run_id": run_id,
+        "result_url": None,
+        "error": {"code": "analysis_archive_invalid", "message": "Historical failure."},
+    }), encoding="utf-8")
+    paths = [
+        state_path,
+        tmp_path / "artifacts" / "runs" / run_id / "manifest.json",
+        tmp_path / "artifacts" / "runs" / run_id / "source.pdf",
+        tmp_path / "artifacts" / "reports" / run_id / "report.json",
+    ]
+    before = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
+    monkeypatch.setattr(jobs_module, "_invoke_cli", lambda *_args, **_kwargs: pytest.fail("GET must not execute CLI"))
+    client = TestClient(create_app(tmp_path))
+
+    job = client.get(f"/v1/annual-analysis-jobs/{job_id}")
+    history = client.get("/v1/annual-analysis-history")
+
+    assert job.status_code == history.status_code == 200
+    job_payload = job.json()
+    assert job_payload["status"] == "failed"
+    assert job_payload["result_url"] is None
+    assert job_payload["result_availability"]["status"] == "available"
+    assert job_payload["result_availability"]["result_url"] == f"/v1/annual-analyses/{run_id}"
+    row = next(item for item in history.json()["items"] if item["job_id"] == job_id)
+    assert row["job_status"] == "failed"
+    assert row["result_available"] is True
+    assert "failed_job_archive_readable" in {issue["code"] for issue in row["issues"]}
+    assert client.get(job_payload["result_availability"]["result_url"]).status_code == 200
+    after = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
+    assert after == before
+
+
+def test_failed_job_projection_rejects_tampered_archived_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _make_source(tmp_path)
+    request = _request(source)
+    run_id = _write_success_archive(tmp_path, request)
+    job_id = "annual-job-" + "c" * 32
+    job_dir = tmp_path / "artifacts" / "annual-analysis-jobs" / job_id
+    job_dir.mkdir(parents=True)
+    state_path = job_dir / "job.json"
+    state_path.write_text(json.dumps({
+        "job_id": job_id,
+        "status": "failed",
+        "stage": "failed",
+        "created_at": "2026-10-01T00:00:00+00:00",
+        "updated_at": "2026-10-01T00:00:01+00:00",
+        "request": {key: request[key] for key in (
+            "company_id", "report_year", "document_id", "source_pdf_path", "sha256", "mode",
+        )},
+        "run_id": run_id,
+        "result_url": None,
+        "error": {"code": "analysis_archive_invalid", "message": "Historical failure."},
+    }), encoding="utf-8")
+    archived_source = tmp_path / "artifacts" / "runs" / run_id / "source.pdf"
+    archived_source.write_bytes(archived_source.read_bytes() + b"tampered")
+    monkeypatch.setattr(jobs_module, "_invoke_cli", lambda *_args, **_kwargs: pytest.fail("GET must not execute CLI"))
+
+    client = TestClient(create_app(tmp_path))
+    response = client.get(f"/v1/annual-analysis-jobs/{job_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "failed"
+    assert payload["result_url"] is None
+    assert payload["result_availability"] == {
+        "status": "unavailable",
+        "category": "source_validation_failed",
+        "result_url": None,
+        "message": "原文来源或引用校验未通过，报告不可用。",
+    }
+
+
+def test_invoke_cli_requires_expected_fingerprint_before_subprocess(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _make_source(tmp_path)
+    invoked = False
+
+    def unexpected_subprocess(*_args, **_kwargs):
+        nonlocal invoked
+        invoked = True
+        raise AssertionError("invalid runtime identity must not launch a child process")
+
+    monkeypatch.setattr(jobs_module.subprocess, "run", unexpected_subprocess)
+    with pytest.raises(RuntimeError, match="runtime fingerprint"):
+        jobs_module._invoke_cli(tmp_path, tmp_path / "artifacts", _request(source))
+
+    assert invoked is False
+
+
+def test_web_progress_cli_without_expected_fingerprint_stops_before_source_or_model(
+    tmp_path: Path,
+) -> None:
+    script = Path(analyze_annual.__file__).resolve()
+    artifacts = tmp_path / "artifacts"
+    run = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--source-pdf",
+            str(tmp_path / "missing.pdf"),
+            "--company-id",
+            "603288",
+            "--report-year",
+            "2024",
+            "--document-id",
+            "doc-1",
+            "--artifacts-root",
+            str(artifacts),
+            "--with-model",
+            "--source-record",
+            str(tmp_path / "missing-source.json"),
+            "--discovery-progress-job-id",
+            "annual-job-" + "a" * 32,
+        ],
+        cwd=script.parents[1],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert run.returncode == 3
+    assert "reason=runtime_version_mismatch" in run.stderr
+    assert not artifacts.exists()
 
 
 def test_successful_job_returns_existing_report_run_id(tmp_path: Path, monkeypatch) -> None:
@@ -386,7 +590,7 @@ def test_cli_timeout_is_capped_configurable_and_credentials_are_removed(tmp_path
     result = jobs_module._invoke_cli(
         tmp_path,
         tmp_path / "artifacts",
-        _request(source),
+        _request(source, _expected_runtime_fingerprint="a" * 64),
     )
 
     assert result.returncode == 0
@@ -417,7 +621,7 @@ def test_model_cli_receives_only_explicit_model_mode_and_adjacent_source_record(
     result = jobs_module._invoke_cli(
         tmp_path,
         tmp_path / "artifacts",
-        _request(source, mode="model_investigation"),
+        _request(source, mode="model_investigation", _expected_runtime_fingerprint="a" * 64),
     )
 
     command = observed["command"]
@@ -461,12 +665,12 @@ def test_model_cli_uses_saved_settings_snapshot_and_screening_drops_all_model_va
     model_result = jobs_module._invoke_cli(
         tmp_path,
         tmp_path / "artifacts",
-        _request(source, mode="model_investigation"),
+        _request(source, mode="model_investigation", _expected_runtime_fingerprint="a" * 64),
     )
     deterministic_result = jobs_module._invoke_cli(
         tmp_path,
         tmp_path / "artifacts",
-        _request(source, mode="deterministic"),
+        _request(source, mode="deterministic", _expected_runtime_fingerprint="a" * 64),
     )
 
     model_environment = observed[0]["env"]
@@ -499,9 +703,9 @@ def test_integrated_cli_combines_both_switches_and_injects_credentials_only_for_
 
     monkeypatch.setattr(jobs_module.subprocess, "run", fake_run)
 
-    jobs_module._invoke_cli(tmp_path, tmp_path / "artifacts", _request(source, mode="deterministic"))
-    jobs_module._invoke_cli(tmp_path, tmp_path / "artifacts", _request(source, mode="m3_screening"))
-    jobs_module._invoke_cli(tmp_path, tmp_path / "artifacts", _request(source, mode="integrated_analysis"))
+    jobs_module._invoke_cli(tmp_path, tmp_path / "artifacts", _request(source, mode="deterministic", _expected_runtime_fingerprint="a" * 64))
+    jobs_module._invoke_cli(tmp_path, tmp_path / "artifacts", _request(source, mode="m3_screening", _expected_runtime_fingerprint="a" * 64))
+    jobs_module._invoke_cli(tmp_path, tmp_path / "artifacts", _request(source, mode="integrated_analysis", _expected_runtime_fingerprint="a" * 64))
 
     deterministic_command, m3_command, integrated_command = [item["command"] for item in observed]
     deterministic_env, m3_env, integrated_env = [item["env"] for item in observed]

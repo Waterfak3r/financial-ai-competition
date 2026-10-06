@@ -18,6 +18,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend" / "src"))
 
 from finagent.api.annual_analysis import analyze_annual_pdf  # noqa: E402
+from finagent.core.annual_runtime_identity import (  # noqa: E402
+    capture_cli_runtime_identity,
+    runtime_identity_is_valid,
+)
 from finagent.core.sample_provenance import resolve_sample_provenance  # noqa: E402
 from finagent.api.m3_annual import (  # noqa: E402
     failed_m3_annual_screening,
@@ -78,8 +82,27 @@ _PROVENANCE_FILES = (
 
 
 def main(argv: list[str] | None = None) -> int:
+    raw_arguments = list(sys.argv[1:] if argv is None else argv)
+    if raw_arguments == ["--runtime-identity"]:
+        identity = capture_cli_runtime_identity(ROOT)
+        print(json.dumps(identity, ensure_ascii=True, sort_keys=True, separators=(",", ":")))
+        return 0
     parser = _parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(raw_arguments)
+    if args.discovery_progress_job_id is not None and (
+        not isinstance(args.expected_runtime_fingerprint, str)
+        or re.fullmatch(r"[0-9a-f]{64}", args.expected_runtime_fingerprint) is None
+    ):
+        print("status=failed reason=runtime_version_mismatch", file=sys.stderr)
+        return 3
+    if args.expected_runtime_fingerprint is not None:
+        identity = capture_cli_runtime_identity(ROOT)
+        if (
+            not runtime_identity_is_valid(identity)
+            or args.expected_runtime_fingerprint != identity["fingerprint"]
+        ):
+            print("status=failed reason=runtime_version_mismatch", file=sys.stderr)
+            return 3
     if args.with_model and args.source_record is None:
         parser.error("--with-model 需要同时提供 --source-record。")
     if args.source_record is not None and not args.with_model:
@@ -123,6 +146,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--discovery-progress-job-id",
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--expected-runtime-fingerprint",
         default=None,
         help=argparse.SUPPRESS,
     )

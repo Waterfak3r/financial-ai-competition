@@ -18,6 +18,14 @@ from typing import Any, Mapping
 from uuid import uuid4
 
 from finagent.api.annual_report_read import AnnualReportReadError, load_annual_report
+from finagent.core.annual_runtime_identity import (
+    ANNUAL_RUNTIME_PROTOCOL_VERSION,
+    RUNTIME_IDENTITY_KIND,
+    capture_api_runtime_identity,
+    resolve_source_root,
+    runtime_identity_is_valid,
+    source_manifest_fingerprint,
+)
 from finagent.core.model_settings import ModelConfigError
 from finagent.core.model_settings_store import ModelSettingsStoreError, resolve_model_settings
 
@@ -36,6 +44,7 @@ _DEFAULT_MODEL_CLI_TIMEOUT_SECONDS = 3600
 _MIN_CLI_TIMEOUT_SECONDS = 60
 _MAX_DETERMINISTIC_CLI_TIMEOUT_SECONDS = 900
 _MAX_MODEL_CLI_TIMEOUT_SECONDS = 3600
+_RUNTIME_PROBE_TIMEOUT_SECONDS = 15
 _SERVICE_REGISTRY_LOCK = threading.Lock()
 _SERVICE_REGISTRY: dict[str, "AnnualAnalysisJobService"] = {}
 
@@ -66,6 +75,7 @@ class AnnualAnalysisJobService:
         *,
         max_workers: int = _MAX_WORKERS,
         max_queued_jobs: int = _MAX_QUEUED_JOBS,
+        api_runtime_identity: Mapping[str, Any] | None = None,
     ) -> None:
         if max_workers < 1 or max_queued_jobs < 0:
             raise ValueError("任务并发和队列上限无效。")
@@ -78,6 +88,11 @@ class AnnualAnalysisJobService:
         )
         self._lock = threading.RLock()
         self._states: dict[str, dict[str, Any]] = {}
+        self.api_runtime_identity = dict(
+            api_runtime_identity or capture_api_runtime_identity(self.project_root)
+        )
+        self.cli_startup_identity = _probe_cli_runtime_identity(self.project_root)
+        self.cli_startup_error = None if self.cli_startup_identity is not None else "cli_identity_unavailable"
         self._recover_interrupted_jobs()
 
     @property
@@ -85,6 +100,7 @@ class AnnualAnalysisJobService:
         return self.project_root / "artifacts" / "annual-analysis-jobs"
 
     def create(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        self._ensure_runtime_compatible()
         normalized = validate_job_request(self.project_root, request)
         if normalized["mode"] in {"model_investigation", "integrated_analysis"}:
             capability = get_annual_analysis_capabilities(self.project_root)
@@ -176,21 +192,85 @@ class AnnualAnalysisJobService:
                 raise AnnualAnalysisJobError(404, "job_not_found", "找不到该年度分析任务。")
             self._states[checked] = state
             public = _public_state(state)
+            public["result_availability"] = _result_availability_projection(
+                self.project_root,
+                state,
+            )
             if state.get("status") == "running" and state.get("stage") == "annual_analysis_cli":
                 progress = _read_discovery_progress(job_dir, checked, state)
                 if progress is not None:
                     public["discovery_progress"] = progress
             return public
 
+    def runtime_diagnostics(self) -> dict[str, Any]:
+        current_source_fingerprint, current_source_file_count = source_manifest_fingerprint(self.project_root)
+        cli = self.cli_startup_identity
+        return {
+            "kind": RUNTIME_IDENTITY_KIND,
+            "protocol_version": ANNUAL_RUNTIME_PROTOCOL_VERSION,
+            "api": _public_runtime_identity(self.api_runtime_identity),
+            "cli_at_startup": _public_runtime_identity(cli) if cli is not None else None,
+            "disk_source_manifest_sha256": current_source_fingerprint,
+            "disk_source_file_count": current_source_file_count,
+            "source_changed_since_api_start": current_source_fingerprint
+            != self.api_runtime_identity.get("source_manifest_sha256"),
+            "active_job_count": self.active_job_count(),
+        }
+
+    def active_job_count(self) -> int:
+        with self._lock:
+            return sum(state.get("status") in {"queued", "running"} for state in self._states.values())
+
+    def _ensure_runtime_compatible(self) -> None:
+        if not runtime_identity_is_valid(self.api_runtime_identity):
+            raise AnnualAnalysisJobError(
+                503,
+                "runtime_identity_unverified",
+                "当前 API 无法确认启动时加载的年度分析代码身份。请安全重启本项目服务后重试。",
+            )
+        if self.cli_startup_identity is None or not runtime_identity_is_valid(self.cli_startup_identity):
+            raise AnnualAnalysisJobError(
+                503,
+                "runtime_version_mismatch",
+                "当前 API 启动时未能确认同版本年度分析 CLI。请先安全重启本项目 API 后重试。",
+            )
+        disk_fingerprint, _ = source_manifest_fingerprint(self.project_root)
+        if (
+            disk_fingerprint != self.api_runtime_identity.get("source_manifest_sha256")
+            or disk_fingerprint != self.cli_startup_identity.get("source_manifest_sha256")
+            or self.cli_startup_identity.get("protocol_version") != ANNUAL_RUNTIME_PROTOCOL_VERSION
+        ):
+            raise AnnualAnalysisJobError(
+                409,
+                "runtime_version_mismatch",
+                "API 内存版本与当前磁盘源码或年度分析 CLI 不一致，未创建任务。请使用启动脚本安全重启本项目服务。",
+            )
+        current_cli = _probe_cli_runtime_identity(self.project_root)
+        if (
+            current_cli is None
+            or not runtime_identity_is_valid(current_cli)
+            or current_cli.get("fingerprint") != self.cli_startup_identity.get("fingerprint")
+            or current_cli.get("source_manifest_sha256") != disk_fingerprint
+        ):
+            raise AnnualAnalysisJobError(
+                409,
+                "runtime_version_mismatch",
+                "年度分析 CLI 与 API 启动时记录的版本不一致，未创建任务。请使用启动脚本安全重启本项目服务。",
+            )
+
     def _execute(self, job_id: str) -> None:
         try:
             state = self._load_state(job_id)
+            self._ensure_runtime_compatible()
             self._update(job_id, status="running", stage="validating_source", error=None)
             normalized = validate_job_request(self.project_root, state["request"])
             self._update(job_id, stage="annual_analysis_cli")
             artifacts_root = self.project_root / "artifacts"
             runner_request = dict(normalized)
             runner_request["_internal_job_id"] = job_id
+            runner_request["_expected_runtime_fingerprint"] = str(
+                self.cli_startup_identity["fingerprint"]
+            )
             result = _invoke_cli(self.project_root, artifacts_root, runner_request)
             run_id = _run_id_from_output(result.stdout + "\n" + result.stderr)
             if run_id is None:
@@ -420,7 +500,11 @@ def validate_job_request(project_root: Path, request: Mapping[str, Any]) -> dict
     }
 
 
-def get_annual_analysis_job_service(project_root: Path) -> AnnualAnalysisJobService:
+def get_annual_analysis_job_service(
+    project_root: Path,
+    *,
+    api_runtime_identity: Mapping[str, Any] | None = None,
+) -> AnnualAnalysisJobService:
     """同一进程和项目根目录共用一个有界队列，避免多 app 实例重复启动。"""
 
     root = Path(project_root).resolve()
@@ -428,7 +512,7 @@ def get_annual_analysis_job_service(project_root: Path) -> AnnualAnalysisJobServ
     with _SERVICE_REGISTRY_LOCK:
         service = _SERVICE_REGISTRY.get(key)
         if service is None:
-            service = AnnualAnalysisJobService(root)
+            service = AnnualAnalysisJobService(root, api_runtime_identity=api_runtime_identity)
             _SERVICE_REGISTRY[key] = service
         return service
 
@@ -483,6 +567,9 @@ def _validate_source_record(
 
 
 def _invoke_cli(project_root: Path, artifacts_root: Path, request: Mapping[str, Any]) -> CliResult:
+    expected_runtime_fingerprint = request.get("_expected_runtime_fingerprint")
+    if not isinstance(expected_runtime_fingerprint, str) or _SHA256.fullmatch(expected_runtime_fingerprint) is None:
+        raise RuntimeError("年度分析 CLI 缺少有效的启动时 runtime fingerprint，未执行任务。")
     script_path = project_root / "scripts" / "analyze_annual.py"
     if not script_path.is_file():
         raise RuntimeError("年度分析 CLI 脚本不存在。")
@@ -502,6 +589,8 @@ def _invoke_cli(project_root: Path, artifacts_root: Path, request: Mapping[str, 
         str(request["sha256"]),
         "--artifacts-root",
         str(artifacts_root),
+        "--expected-runtime-fingerprint",
+        expected_runtime_fingerprint,
     ]
     if request["mode"] in {"m3_screening", "integrated_analysis"}:
         command.append("--with-m3-screening")
@@ -532,6 +621,116 @@ def _invoke_cli(project_root: Path, artifacts_root: Path, request: Mapping[str, 
         timeout=_configured_cli_timeout_seconds(str(request["mode"])),
     )
     return CliResult(completed.returncode, completed.stdout, completed.stderr)
+
+
+def _probe_cli_runtime_identity(project_root: Path) -> dict[str, Any] | None:
+    """Run a bounded no-model CLI handshake and accept only its exact identity payload."""
+
+    script_path = Path(project_root) / "scripts" / "analyze_annual.py"
+    if not script_path.is_file():
+        return None
+    try:
+        completed = subprocess.run(
+            [sys.executable, str(script_path), "--runtime-identity"],
+            cwd=project_root,
+            env=_cli_environment_without_credentials(),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=_RUNTIME_PROBE_TIMEOUT_SECONDS,
+        )
+        if completed.returncode != 0 or completed.stderr.strip() or len(completed.stdout) > 8 * 1024:
+            return None
+        payload = json.loads(completed.stdout)
+    except (OSError, subprocess.TimeoutExpired, ValueError, json.JSONDecodeError):
+        return None
+    expected_fields = {
+        "kind", "role", "protocol_version", "loaded_code_sha256", "source_manifest_sha256",
+        "source_file_count", "loaded_source_match", "fingerprint", "process_id",
+        "process_instance_id", "process_started_at", "model_calls",
+    }
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != expected_fields
+        or payload.get("role") != "cli"
+        or payload.get("model_calls") != 0
+        or not runtime_identity_is_valid(payload)
+        or type(payload.get("process_id")) is not int
+        or not isinstance(payload.get("process_instance_id"), str)
+        or not isinstance(payload.get("process_started_at"), str)
+    ):
+        return None
+    return payload
+
+
+def _public_runtime_identity(identity: Mapping[str, Any]) -> dict[str, Any]:
+    fields = (
+        "kind", "role", "protocol_version", "loaded_code_sha256", "source_manifest_sha256",
+        "source_file_count", "loaded_source_match", "fingerprint", "process_id",
+        "process_instance_id", "process_started_at", "model_calls",
+    )
+    return {field: identity.get(field) for field in fields}
+
+
+def _result_availability_projection(
+    project_root: Path,
+    state: Mapping[str, Any],
+) -> dict[str, Any]:
+    run_id = state.get("run_id")
+    if not isinstance(run_id, str) or state.get("status") not in {"failed", "interrupted"}:
+        return {"status": "unavailable", "category": "no_recovery_projection", "result_url": None, "message": None}
+    try:
+        archive = load_annual_report(project_root, run_id)
+    except AnnualReportReadError as exc:
+        source_codes = {
+            "source_sha256_mismatch", "source_pdf_invalid", "source_identity_mismatch",
+            "archive_identity_mismatch", "report_identity_mismatch", "evidence_source_mismatch",
+            "annual_discovery_evidence_mismatch", "annual_discovery_quote_mismatch",
+            "narrative_evidence_source_mismatch", "source_record_hash_mismatch",
+        }
+        category = "source_validation_failed" if exc.code in source_codes else "archive_incompatible"
+        message = (
+            "原文来源或引用校验未通过，报告不可用。"
+            if category == "source_validation_failed"
+            else "报告归档不兼容或无法安全读取。"
+        )
+        return {"status": "unavailable", "category": category, "result_url": None, "message": message}
+    except Exception:
+        return {
+            "status": "unavailable",
+            "category": "archive_incompatible",
+            "result_url": None,
+            "message": "报告归档无法安全读取，报告不可用。",
+        }
+    request = state.get("request")
+    if not isinstance(request, Mapping):
+        return {
+            "status": "unavailable",
+            "category": "source_validation_failed",
+            "result_url": None,
+            "message": "报告来源身份与原任务请求不一致，报告不可用。",
+        }
+    summary = archive.manifest_summary
+    if (
+        summary.get("company_id") != request.get("company_id")
+        or summary.get("report_year") != request.get("report_year")
+        or summary.get("document_id") != request.get("document_id")
+        or summary.get("source_pdf_sha256") != request.get("sha256")
+    ):
+        return {
+            "status": "unavailable",
+            "category": "source_validation_failed",
+            "result_url": None,
+            "message": "报告来源身份与原任务请求不一致，报告不可用。",
+        }
+    return {
+        "status": "available",
+        "category": "archive_readable_after_failure",
+        "result_url": f"/v1/annual-analyses/{run_id}",
+        "message": "原任务仍为失败状态，但现有报告通过当前归档校验，可以只读查看。",
+    }
 
 
 def _configured_cli_timeout_seconds(mode: str = "deterministic") -> int:

@@ -199,9 +199,11 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
   }, [refreshModelCapability]);
 
   const loadReportForJob = useCallback(async (completedJob: AnnualAnalysisJob, generation: number) => {
-    if (!isSuccessfulJob(completedJob) || completedJob.run_id === null) {
+    if (!isReadableResultJob(completedJob) || completedJob.run_id === null) {
       return;
     }
+    const recoveredAfterFailure = isFailedJob(completedJob);
+    const recoveredStatusText = completedJob.status === "interrupted" ? "原任务仍为中断状态" : "原任务仍为失败状态";
     const requestId = reportRequest.current + 1;
     reportRequest.current = requestId;
     requestLock.current = true;
@@ -223,12 +225,12 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
         createdJobIds.current.has(completedJob.job_id) || completedJob.discovery_progress !== undefined;
       const missingLayers = missingRequestedReportLayers(completedJob.request.mode, loaded.report, requiresDiscoveryLayer);
       if (missingLayers.length > 0) {
-        setJobError(`任务已完成，但报告缺少所选的${missingLayers.join("、")}；请核对归档后再重试。`);
+        setJobError(`${recoveredAfterFailure ? `${recoveredStatusText}，但现有报告可读` : "任务已完成"}；报告缺少所选的${missingLayers.join("、")}，请核对归档后再重试。`);
       }
     } catch (error) {
       if (taskGeneration.current === generation && reportRequest.current === requestId) {
         setLoadError(errorMessage(error));
-        setJobError("任务已完成，但同一 run_id 的报告读取失败。可重新读取报告或重试状态查询。");
+        setJobError(`${recoveredAfterFailure ? recoveredStatusText : "任务已完成"}，但同一 run_id 的报告读取失败。可重新读取报告或重试状态查询。`);
       }
     } finally {
       if (taskGeneration.current === generation && reportRequest.current === requestId) {
@@ -400,7 +402,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
         }
         setJob(current);
         setJobError(null);
-        if (isSuccessfulJob(current)) {
+        if (isReadableResultJob(current)) {
           void loadReportForJob(current, generation);
           return;
         }
@@ -590,7 +592,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
       if (refreshed.run_id !== null) {
         setRunId(refreshed.run_id);
       }
-      if (isSuccessfulJob(refreshed)) {
+      if (isReadableResultJob(refreshed)) {
         void loadReportForJob(refreshed, generation);
       }
     } catch (error) {
@@ -700,7 +702,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
       setResultOrigin("history");
       writeStoredJobId(restored.job_id);
       if (restored.run_id !== null) setRunId(restored.run_id);
-      if (isSuccessfulJob(restored)) void loadReportForJob(restored, generation);
+      if (isReadableResultJob(restored)) void loadReportForJob(restored, generation);
     } catch (error) {
       if (taskGeneration.current === generation) setRestoreError(errorMessage(error));
     } finally {
@@ -1697,6 +1699,12 @@ function JobStatusPanel({
   onDismissError: () => void;
 }) {
   const terminal = !isActiveJob(job);
+  const readableHistoricalResult = job.result_availability?.status === "available"
+    && (job.status === "failed" || job.status === "interrupted");
+  const historicalResultTitle = job.status === "interrupted"
+    ? "原任务中断，已保存报告可只读查看"
+    : "原任务失败，已保存报告可只读查看";
+  const historicalErrorPrefix = job.status === "interrupted" ? "原任务中断记录：" : "原任务失败记录：";
   const statusClass = "annual-job-status annual-job-status-" + job.status;
   return (
     <section className="panel annual-job-status-panel" aria-live="polite" aria-labelledby="annual-job-status-title">
@@ -1707,7 +1715,9 @@ function JobStatusPanel({
         </div>
         <span className={statusClass}>{jobStatusText(job.status)}</span>
       </div>
-      <p className="annual-job-stage">{jobStageText(job.stage, job.status)}</p>
+      <p className="annual-job-stage">
+        {readableHistoricalResult ? historicalResultTitle : jobStageText(job.stage, job.status)}
+      </p>
       <p className="annual-job-status-note">
         {job.request.mode === "m3_screening"
           ? "本次运行标准分析和四项试行筛查；规则只提示可继续核对的数据组合。"
@@ -1719,6 +1729,11 @@ function JobStatusPanel({
         {` 公司代码 ${job.request.company_id}，报告年份 ${job.request.report_year}。`}
         {terminal ? " 处理状态已稳定。" : " 页面会自动更新处理状态。"}
       </p>
+      {job.result_availability?.status === "available" ? (
+        <p className="annual-job-reanalysis-note" role="note">
+          {job.status === "interrupted" ? "原任务状态仍为中断" : "原任务状态仍为失败"}；关联报告已通过当前严格校验，可只读查看。读取保存报告不会创建新任务或调用模型。重新提交会创建新的分析任务，AI 模式可能产生费用。
+        </p>
+      ) : null}
       {job.status === "completed_with_issues" ? (
         <p className="annual-job-reanalysis-note" role="note">
           点击“重新分析这份报告”会用同一来源创建新任务，当前报告归档会保留；这不是续跑失败批次。AI 模式会重新发送整份年报中可提取的文字，并可能产生费用。
@@ -1738,7 +1753,7 @@ function JobStatusPanel({
       )}
       {job.error !== null ? (
         <div className="annual-job-error" role="alert">
-          <strong>{job.error.message}</strong>
+          <strong>{readableHistoricalResult ? historicalErrorPrefix : ""}{job.error.message}</strong>
           <details className="annual-technical-record">
             <summary>技术记录：错误编号</summary>
             <code>{job.error.code}</code>
@@ -1752,16 +1767,30 @@ function JobStatusPanel({
         </div>
       ) : null}
       <div className="annual-job-actions annual-job-status-actions">
-        {canReanalyzeJob(job) ? (
-          <button type="button" className="primary" disabled={action !== null} onClick={onRetry}>
-            {action === "retrying"
-              ? job.status === "completed_with_issues" ? "正在创建新分析任务…" : "正在重新提交…"
-              : job.status === "completed_with_issues" ? "重新分析这份报告" : "重新提交同一来源"}
-          </button>
+        {job.result_availability?.status === "available" ? (
+          <>
+            <button type="button" className="primary" disabled={action !== null} onClick={onRefresh}>
+              {action === "refreshing" ? "正在读取…" : "查看已保存报告"}
+            </button>
+            <button type="button" className="secondary" disabled={action !== null} onClick={onRetry}>
+              {action === "retrying" ? "正在重新提交…" : "重新提交同一来源"}
+            </button>
+          </>
         ) : null}
-        <button type="button" className="secondary" disabled={action !== null} onClick={onRefresh}>
-          {action === "refreshing" ? "正在读取…" : isActiveJob(job) ? "立即更新状态" : "重新读取任务与报告"}
-        </button>
+        {job.result_availability?.status === "available" ? null : (
+          <>
+            {canReanalyzeJob(job) ? (
+              <button type="button" className="primary" disabled={action !== null} onClick={onRetry}>
+                {action === "retrying"
+                  ? job.status === "completed_with_issues" ? "正在创建新分析任务…" : "正在重新提交…"
+                  : job.status === "completed_with_issues" ? "重新分析这份报告" : "重新提交同一来源"}
+              </button>
+            ) : null}
+            <button type="button" className="secondary" disabled={action !== null} onClick={onRefresh}>
+              {action === "refreshing" ? "正在读取…" : isActiveJob(job) ? "立即更新状态" : "重新读取任务与报告"}
+            </button>
+          </>
+        )}
       </div>
       <details className="annual-job-source-details">
         <summary>技术记录：来源文件与任务编号</summary>
@@ -2893,10 +2922,10 @@ function ModelReviewReferences({
                   {finding.title} · 定位待核查线索
                 </button>
                 <ul className="annual-review-discovery-pages">
-                  {finding.citations.slice(0, 2).map((citation) => {
+                  {finding.citations.slice(0, 2).map((citation, citationIndex) => {
                     const evidence = discoveryEvidenceById.get(citation.evidence_id);
                     return evidence === undefined ? null : (
-                      <li key={citation.evidence_id}>
+                      <li key={`${finding.finding_id}:${citation.evidence_id}:${citationIndex}`}>
                         <button
                           type="button"
                           className="secondary annual-review-discovery-action"
@@ -4853,6 +4882,12 @@ function missingRequestedReportLayers(
 
 function isSuccessfulJob(job: AnnualAnalysisJob): boolean {
   return job.status === "completed" || job.status === "completed_with_issues";
+}
+
+function isReadableResultJob(job: AnnualAnalysisJob): boolean {
+  return isSuccessfulJob(job) || (
+    isFailedJob(job) && job.result_availability?.status === "available"
+  );
 }
 
 function isFailedJob(job: AnnualAnalysisJob): boolean {
