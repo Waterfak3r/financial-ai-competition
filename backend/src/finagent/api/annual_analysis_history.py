@@ -32,6 +32,7 @@ _JOB_STATUSES = {
     "completed_with_issues",
     "failed",
     "interrupted",
+    "cancelled",
 }
 _RUN_STATUSES = {"running", "completed", "completed_with_issues", "failed", "interrupted"}
 _MODES = {"deterministic", "m3_screening", "model_investigation", "integrated_analysis"}
@@ -130,55 +131,64 @@ def list_annual_analysis_history(
     for run_id, record in run_records.items():
         if run_id in claimed_run_ids:
             continue
-        if record["run_status"] not in {"completed", "completed_with_issues"}:
+        if record["run_status"] not in {"completed", "completed_with_issues"} and not _has_checkpoint_pointer(root, run_id):
             continue
         rows.append(_standalone_run_item(record))
 
     rows.sort(key=_sort_key)
     total = len(rows)
     page = rows[offset : offset + limit]
-    result_cache: dict[str, bool] = {}
-    strict_failed_result_cache: dict[str, tuple[bool, str | None]] = {}
+    result_cache: dict[str, tuple[bool, str | None, dict[str, Any] | None]] = {}
     for item in page:
         record = item.pop("_run_record", None)
         if isinstance(record, Mapping):
             run_id = str(record["run_id"])
             if run_id not in result_cache:
-                manifest = record["_result_manifest"]
-                result_cache[run_id] = _result_archive_available(
-                    root,
-                    run_id,
-                    manifest,
-                    str(record["source_sha256"]),
-                )
-            item["result_available"] = result_cache[run_id]
+                if _has_checkpoint_pointer(root, run_id):
+                    result_cache[run_id] = _strict_archive_projection(
+                        root,
+                        run_id,
+                        company_code=str(record["company_code"]),
+                        year=int(record["year"]),
+                        document_id=str(record["source_document_id"]),
+                        source_sha256=str(record["source_sha256"]),
+                    )
+                else:
+                    # Keep the pre-R2 read-only projection for legacy finals.
+                    # Checkpoint-backed partials and sealed v3 finals always
+                    # take the strict reader path above.
+                    available = _result_archive_available(
+                        root,
+                        run_id,
+                        record["_result_manifest"],
+                        str(record["source_sha256"]),
+                    )
+                    category = None
+                    if available and item["job_status"] in {"failed", "interrupted"}:
+                        available, category = _strict_failed_result_available(root, run_id, item)
+                    result_cache[run_id] = (available, category, None)
+            available, category, snapshot = result_cache[run_id]
+            item["result_available"] = available
+            item["partial_checkpoint_available"] = bool(snapshot and snapshot.get("is_partial") is True)
+            item["snapshot_state"] = snapshot.get("state") if snapshot else None
+            item["snapshot_sequence"] = snapshot.get("sequence") if snapshot else None
+            item["is_partial"] = snapshot.get("is_partial") if snapshot else None
             if (
-                item["result_available"]
-                and item["job_status"] in {"failed", "interrupted"}
+                item["job_status"] in {"failed", "interrupted"}
             ):
-                if run_id not in strict_failed_result_cache:
-                    strict_failed_result_cache[run_id] = _strict_failed_result_available(root, run_id, item)
-                strict_match, category = strict_failed_result_cache[run_id]
                 if category is not None:
+                    item["result_available"] = False
                     _add_issue(
                         item,
                         f"failed_result_{category}",
                         "原任务失败；关联报告未通过当前来源或归档校验，暂不可只读查看。",
                     )
-                if strict_match:
+                elif item["result_available"]:
                     _add_issue(
                         item,
                         "failed_job_archive_readable",
                         "原任务仍为失败状态；关联报告已通过当前严格校验，可只读查看。",
                     )
-                else:
-                    item["result_available"] = False
-                    if category is None:
-                        _add_issue(
-                            item,
-                            "failed_result_identity_mismatch",
-                            "原任务失败；关联报告与任务来源身份不一致，暂不可只读查看。",
-                        )
             if (
                 item["run_status"] in {"completed", "completed_with_issues"}
                 and not item["result_available"]
@@ -212,6 +222,43 @@ def _strict_failed_result_available(
         == str(item.get("_source_sha256", "")).lower()
     )
     return matches, None if matches else "identity_mismatch"
+
+
+def _strict_archive_projection(
+    root: Path,
+    run_id: str,
+    *,
+    company_code: str,
+    year: int,
+    document_id: str,
+    source_sha256: str,
+) -> tuple[bool, str | None, dict[str, Any] | None]:
+    """Project only strict-reader identity and checkpoint metadata into history."""
+
+    try:
+        archive = load_annual_report(root, run_id)
+    except AnnualReportReadError as exc:
+        return False, _report_read_error_category(exc.code), None
+    summary = archive.manifest_summary
+    if (
+        summary.get("company_id") != company_code
+        or summary.get("report_year") != year
+        or summary.get("document_id") != document_id
+        or str(summary.get("source_pdf_sha256", "")).lower() != source_sha256.lower()
+    ):
+        return False, "identity_mismatch", None
+    return True, None, dict(archive.snapshot) if archive.snapshot is not None else None
+
+
+def _has_checkpoint_pointer(root: Path, run_id: str) -> bool:
+    """Use only the fixed regular pointer name to include standalone partial runs."""
+
+    path = root / "artifacts" / "runs" / run_id / "checkpoint-current.json"
+    try:
+        info = path.lstat()
+    except OSError:
+        return False
+    return not _is_reparse_point(info) and stat.S_ISREG(info.st_mode) and info.st_size <= 64 * 1024
 
 
 def _report_read_error_category(code: str) -> str:
@@ -375,6 +422,10 @@ def _job_item(job_id: str, payload: Mapping[str, Any]) -> dict[str, Any] | None:
         "job_id": job_id,
         "run_id": run_id,
         "result_available": False,
+        "partial_checkpoint_available": False,
+        "snapshot_state": None,
+        "snapshot_sequence": None,
+        "is_partial": None,
         "issues": issues,
         "_sort_created": created_key,
         "_source_sha256": source_sha256.lower(),
@@ -525,6 +576,10 @@ def _standalone_run_item(record: Mapping[str, Any]) -> dict[str, Any]:
         "job_id": None,
         "run_id": run_id,
         "result_available": False,
+        "partial_checkpoint_available": False,
+        "snapshot_state": None,
+        "snapshot_sequence": None,
+        "is_partial": None,
         "_run_record": record,
         "issues": issues,
         "_sort_created": record["_sort_created"],
@@ -537,6 +592,8 @@ def _add_job_status_issue(item: dict[str, Any]) -> None:
         _add_issue(item, "job_failed", "年度分析任务失败。")
     elif item["job_status"] == "interrupted":
         _add_issue(item, "job_interrupted", "服务中断前任务未完成，可重新提交。")
+    elif item["job_status"] == "cancelled":
+        _add_issue(item, "job_cancelled", "年度分析任务已取消；可查看取消前已保存的部分报告。")
 
 
 def _issue(code: str, message: str) -> dict[str, str]:

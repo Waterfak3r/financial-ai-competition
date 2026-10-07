@@ -12,6 +12,55 @@ export interface AnnualDiscoveryBatchResult {
   accepted_findings?: number;
   rejected_findings?: number;
   restored_quotes?: number;
+  inherited_findings?: number;
+  resolution?: "executed" | "reused" | "unattempted";
+}
+
+export interface AnnualDiscoveryExecutionAttempt {
+  attempt_index: number;
+  audit_id: string;
+  admission_id: string | null;
+  provider_admitted: boolean;
+  status: "succeeded" | "failed" | "rejected";
+  response_accepted: boolean;
+  accepted_findings: number;
+  reason: string | null;
+}
+
+export interface AnnualDiscoveryExecutionBatch {
+  batch_index: number;
+  state: "succeeded" | "partial" | "failed" | "unattempted";
+  resolution: "executed" | "reused" | "unattempted";
+  reason: string | null;
+  attempts: AnnualDiscoveryExecutionAttempt[];
+}
+
+export interface AnnualDiscoveryExecutionBinding {
+  source_sha256: string;
+  company_id: string;
+  report_year: number;
+  source_document_id: string;
+  analysis_mode: "model_investigation" | "integrated_analysis";
+  provider_model_fingerprint: string;
+  model: string;
+  prompts_sha256: string;
+  parser_version: string;
+  plan_sha256: string;
+  m3_binding_sha256: string | null;
+}
+
+export interface AnnualDiscoveryExecutionContract {
+  kind: "fintrace_annual_discovery_execution_v3";
+  plan_sha256: string;
+  identity_sha256: string;
+  binding: AnnualDiscoveryExecutionBinding;
+  parent_run_id: string | null;
+  provider_admission_count: number;
+  parent_provider_admission_count: number;
+  cumulative_provider_admission_count: number;
+  response_count: number;
+  reused_batches: number[];
+  batches: AnnualDiscoveryExecutionBatch[];
 }
 
 export interface AnnualDiscoveryCoverage {
@@ -51,6 +100,7 @@ export interface AnnualDiscoveryCitation {
 
 export interface AnnualDiscoveryFinding {
   finding_id: string;
+  batch_index?: number;
   title: string;
   observation: string;
   why_it_matters: string;
@@ -108,6 +158,7 @@ export interface AnnualModelDiscovery {
   limitations: string[];
   reason: string | null;
   fraud_conclusion: null;
+  execution_contract?: AnnualDiscoveryExecutionContract;
 }
 
 export interface AnnualDiscoveryAuditArtifact {

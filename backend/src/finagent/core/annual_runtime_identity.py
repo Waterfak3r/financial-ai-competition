@@ -15,6 +15,7 @@ from uuid import uuid4
 
 RUNTIME_IDENTITY_KIND = "fintrace_annual_runtime_identity_v1"
 ANNUAL_RUNTIME_PROTOCOL_VERSION = "annual-analysis-cli-v1"
+_CONTEXTMANAGER_WRAPPER_SUFFIX = ".__contextmanager_wrapper__"
 _PROCESS_INSTANCE_ID = uuid4().hex
 _PROCESS_STARTED_AT = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -180,8 +181,15 @@ def _loaded_modules_match_source(root: Path, *, include_main: bool) -> bool:
             qualname: code for qualname, code in loaded_codes.items() if qualname in source_codes
         }
         generated_codes = _generated_dataclass_code_names(module, source_codes)
+        verified_contextmanager_wrappers = {
+            qualname
+            for qualname in loaded_codes
+            if qualname.endswith(_CONTEXTMANAGER_WRAPPER_SUFFIX)
+        }
         if any(
-            qualname not in source_codes and qualname not in generated_codes
+            qualname not in source_codes
+            and qualname not in generated_codes
+            and qualname not in verified_contextmanager_wrappers
             for qualname in loaded_codes
         ):
             return False
@@ -239,8 +247,18 @@ def _module_function_codes(module: types.ModuleType) -> list[tuple[str, types.Co
             for candidate in (value.fget, value.fset, value.fdel):
                 add(candidate)
             return
-        if isinstance(value, types.FunctionType) and value.__module__ == module.__name__:
-            found[value.__qualname__] = value.__code__
+        if isinstance(value, types.FunctionType):
+            wrapped = getattr(value, "__wrapped__", None)
+            if (
+                value.__module__ == module.__name__
+                and isinstance(wrapped, types.FunctionType)
+                and wrapped.__module__ == module.__name__
+                and _is_standard_contextmanager_wrapper(value, wrapped)
+            ):
+                found[wrapped.__qualname__] = wrapped.__code__
+                found[wrapped.__qualname__ + _CONTEXTMANAGER_WRAPPER_SUFFIX] = value.__code__
+            elif value.__module__ == module.__name__:
+                found[value.__qualname__] = value.__code__
             return
         if isinstance(value, type) and value.__module__ == module.__name__:
             for member in vars(value).values():
@@ -251,6 +269,33 @@ def _module_function_codes(module: types.ModuleType) -> list[tuple[str, types.Co
     for value in vars(module).values():
         add(value)
     return sorted(found.items())
+
+
+def _is_standard_contextmanager_wrapper(
+    wrapper: types.FunctionType,
+    wrapped: types.FunctionType,
+) -> bool:
+    """Recognize only the stdlib wrapper with its original generator bound."""
+
+    if getattr(wrapper, "__wrapped__", None) is not wrapped:
+        return False
+    closure = wrapper.__closure__ or ()
+    # contextlib.contextmanager creates helper(*args, **kwds) with exactly one
+    # free variable named ``func``. Require that exact closure shape so a
+    # wrapper cannot pass by merely retaining a matching __wrapped__ attribute.
+    if (
+        wrapper.__code__.co_freevars != ("func",)
+        or len(closure) != 1
+        or closure[0].cell_contents is not wrapped
+    ):
+        return False
+    try:
+        from contextlib import contextmanager
+
+        expected = contextmanager(wrapped)
+    except Exception:
+        return False
+    return _code_signature(wrapper.__code__) == _code_signature(expected.__code__)
 
 
 def _compiled_code_map(code: types.CodeType) -> dict[str, types.CodeType]:

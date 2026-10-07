@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import hashlib
 import json
 import os
@@ -23,6 +24,11 @@ from finagent.core.annual_runtime_identity import (  # noqa: E402
     runtime_identity_is_valid,
 )
 from finagent.core.sample_provenance import resolve_sample_provenance  # noqa: E402
+from finagent.core.annual_checkpoints import (  # noqa: E402
+    replace_with_bounded_retry,
+    save_annual_checkpoint,
+)
+from finagent.core.annual_recovery import build_annual_recovery_binding  # noqa: E402
 from finagent.api.m3_annual import (  # noqa: E402
     failed_m3_annual_screening,
     run_m3_annual_screening,
@@ -30,6 +36,7 @@ from finagent.api.m3_annual import (  # noqa: E402
 from finagent.finance.m3_screening import RULE_VERSION as M3_RULE_VERSION  # noqa: E402
 from finagent.finance.v2_calculation import RULE_VERSION  # noqa: E402
 from finagent.reports.investigation_append import (  # noqa: E402
+    AnnualRecoveryRejectedError,
     attach_investigation_to_report,
     render_report_with_investigation,
     run_annual_investigation_appendix,
@@ -41,6 +48,7 @@ from finagent.reports.m3_annual_append import (  # noqa: E402
 
 _SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 _PROGRESS_JOB_ID = re.compile(r"^annual-job-[0-9a-f]{32}$")
+_RUN_ID_RE = re.compile(r"^annual-analysis-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 _REPARSE_POINT_ATTRIBUTE = 0x400
 _PROVENANCE_FILES = (
     "scripts/analyze_annual.py",
@@ -107,6 +115,26 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--with-model 需要同时提供 --source-record。")
     if args.source_record is not None and not args.with_model:
         parser.error("--source-record 仅能与 --with-model 一起使用。")
+    requested_mode = getattr(args, "request_mode", None)
+    if requested_mode is not None and requested_mode != _mode_from_args(args):
+        parser.error("--request-mode 与模型/M3 开关组合不一致。")
+    if getattr(args, "run_id", None) is not None and _RUN_ID_RE.fullmatch(args.run_id) is None:
+        parser.error("--run-id 格式无效。")
+    if getattr(args, "resume_parent_run_id", None) is not None:
+        if (
+            not args.with_model
+            or _RUN_ID_RE.fullmatch(args.resume_parent_run_id) is None
+            or requested_mode not in {"model_investigation", "integrated_analysis"}
+        ):
+            parser.error("--resume-parent-run-id 仅能用于有效的模型续跑运行。")
+    stopped_file = os.environ.get("FINTRACE_CALL_STOPPED_FILE")
+    if (
+        isinstance(stopped_file, str)
+        and stopped_file
+        and isinstance(getattr(args, "run_id", None), str)
+        and _RUN_ID_RE.fullmatch(args.run_id) is not None
+    ):
+        atexit.register(_write_call_stopped_marker, Path(stopped_file), args.run_id)
     try:
         return _run(args)
     except (OSError, ValueError) as exc:
@@ -154,6 +182,9 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help=argparse.SUPPRESS,
     )
+    parser.add_argument("--run-id", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--request-mode", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--resume-parent-run-id", default=None, help=argparse.SUPPRESS)
     parser.add_argument(
         "--with-m3-screening",
         action="store_true",
@@ -188,7 +219,9 @@ def _run(args: argparse.Namespace) -> int:
         else None
     )
     source_sha256 = _sha256(source_pdf)
-    run_id, run_dir, report_dir = _reserve_run_dirs(artifacts_root)
+    run_id, run_dir, report_dir = _reserve_run_dirs(
+        artifacts_root, getattr(args, "run_id", None)
+    )
     input_copy = run_dir / "source.pdf"
     created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     actual_copy_sha256: str | None = None
@@ -196,6 +229,8 @@ def _run(args: argparse.Namespace) -> int:
     investigation_started = False
     m3_screening: dict[str, object] | None = None
     result = None
+    publication_stage: str | None = None
+    terminal_checkpoint_published = False
     try:
         actual_copy_sha256 = _copy_and_hash_new(source_pdf, input_copy)
         if actual_copy_sha256 != source_sha256:
@@ -244,6 +279,57 @@ def _run(args: argparse.Namespace) -> int:
             analysis_payload["m3_screening"] = m3_screening
             report_payload = attach_m3_screening_to_report(report_payload, m3_screening)
 
+        source_provenance = resolve_sample_provenance(
+            actual_copy_sha256,
+            company_id=args.company_id,
+            report_year=args.report_year,
+            document_id=args.document_id,
+        )
+        report_payload["source_provenance"] = source_provenance
+        base_report_payload = dict(base_report_payload)
+        base_report_payload["source_provenance"] = source_provenance
+        notice = f"# 来源性质\n\n**{source_provenance['label']}**\n"
+        if source_provenance.get("use_conditions"):
+            notice += "\n" + str(source_provenance["use_conditions"]) + "\n"
+        markdown = notice + "\n" + markdown.lstrip()
+
+        # A durable deterministic report is published before any optional model
+        # stage. The first checkpoint contains no model claims or assumptions.
+        effective_request_mode = getattr(args, "request_mode", None) or _mode_from_args(args)
+        recovery_enabled = (
+            artifacts_root.resolve() == (ROOT / "artifacts").resolve()
+            and effective_request_mode in {"model_investigation", "integrated_analysis"}
+        )
+        if getattr(args, "resume_parent_run_id", None) and not recovery_enabled:
+            raise ValueError("annual_resume_requires_repository_artifacts_root")
+        if args.with_model:
+            _write_json_new(run_dir / "parsed_text_pdf.json", result.parsed_pdf.to_dict())
+            _write_json_new(run_dir / "analysis.json", analysis_payload)
+            _write_json_new(report_dir / "report.json", report_payload)
+            _write_text_new(report_dir / "report.md", markdown)
+            base_manifest = _manifest(
+                status="running",
+                run_id=run_id,
+                created_at=created_at,
+                args=args,
+                source_pdf=source_pdf,
+                source_sha256=actual_copy_sha256,
+                artifacts_root=artifacts_root,
+                run_dir=run_dir,
+                report_dir=report_dir,
+                rule_version=RULE_VERSION,
+                error=None,
+                m3_screening=m3_screening,
+            )
+            if m3_screening is not None:
+                _add_m3_manifest(base_manifest, m3_screening, artifacts_root=artifacts_root, run_dir=run_dir)
+            _write_json_new(run_dir / "manifest.json", base_manifest)
+            _save_checkpoint_if_repository_root(
+                artifacts_root, run_id, state="awaiting_model", is_partial=True,
+                parent_run_id=getattr(args, "resume_parent_run_id", None),
+                source_sha256=actual_copy_sha256, report=report_payload,
+            )
+
         if args.with_model:
             # The AI investigation sees only the standard, deterministically
             # verified report. M3 stays an independently archived audit layer.
@@ -265,6 +351,21 @@ def _run(args: argparse.Namespace) -> int:
                     source_sha256=actual_copy_sha256,
                     job_id=progress_job_id,
                 ),
+                request_mode=effective_request_mode if recovery_enabled else None,
+                m3_screening=m3_screening,
+                resume_parent_run_id=(getattr(args, "resume_parent_run_id", None) if recovery_enabled else None),
+                request_identity=({
+                    "company_id": args.company_id,
+                    "report_year": args.report_year,
+                    "document_id": args.document_id,
+                    "source_pdf_path": source_pdf.relative_to(ROOT / "data" / "raw").as_posix(),
+                    "sha256": actual_copy_sha256,
+                    "mode": effective_request_mode,
+                } if recovery_enabled else None),
+                checkpoint_callback=(lambda report, state, parent: _save_cli_checkpoint(
+                    report, state=state, parent_run_id=parent, run_id=run_id,
+                    source_sha256=actual_copy_sha256, artifacts_root=artifacts_root,
+                ) if recovery_enabled else None),
             )
             discovery = investigation.get("discovery")
             if isinstance(discovery, dict):
@@ -285,22 +386,17 @@ def _run(args: argparse.Namespace) -> int:
         if m3_screening is not None:
             markdown = render_report_with_m3_screening(markdown, m3_screening)
 
-        source_provenance = resolve_sample_provenance(
-            actual_copy_sha256,
-            company_id=args.company_id,
-            report_year=args.report_year,
-            document_id=args.document_id,
-        )
-        report_payload["source_provenance"] = source_provenance
-        notice = f"# 来源性质\n\n**{source_provenance['label']}**\n"
-        if source_provenance.get("use_conditions"):
-            notice += "\n" + str(source_provenance["use_conditions"]) + "\n"
-        markdown = notice + "\n" + markdown.lstrip()
-
-        _write_json_new(run_dir / "parsed_text_pdf.json", result.parsed_pdf.to_dict())
-        _write_json_new(run_dir / "analysis.json", analysis_payload)
-        _write_json_new(report_dir / "report.json", report_payload)
-        _write_text_new(report_dir / "report.md", markdown)
+        if not args.with_model:
+            _write_json_new(run_dir / "parsed_text_pdf.json", result.parsed_pdf.to_dict())
+            _write_json_new(run_dir / "analysis.json", analysis_payload)
+            _write_json_new(report_dir / "report.json", report_payload)
+            _write_text_new(report_dir / "report.md", markdown)
+        else:
+            publication_stage = "final_report"
+            _atomic_replace_json(run_dir / "analysis.json", analysis_payload)
+            _atomic_replace_json(report_dir / "report.json", report_payload)
+            _atomic_replace_text(report_dir / "report.md", markdown)
+            publication_stage = None
         completed_status = result.status
         if investigation is not None and _investigation_has_issue(investigation):
             completed_status = "completed_with_issues"
@@ -332,7 +428,25 @@ def _run(args: argparse.Namespace) -> int:
             )
         if m3_screening is not None:
             _add_m3_manifest(manifest, m3_screening, artifacts_root=artifacts_root, run_dir=run_dir)
-        _write_json_new(run_dir / "manifest.json", manifest)
+        if args.with_model and isinstance(report_payload.get("model_discovery"), dict) and "execution_contract" in report_payload["model_discovery"]:
+            # Publish the immutable final seal before moving the mutable
+            # manifest to a terminal state. If interrupted between these two
+            # writes, the strict reader can recover the fully written sealed
+            # checkpoint while the manifest still says running.
+            publication_stage = "terminal_checkpoint"
+            _save_checkpoint_if_repository_root(
+                artifacts_root, run_id, state=completed_status, is_partial=False,
+                parent_run_id=getattr(args, "resume_parent_run_id", None),
+                source_sha256=actual_copy_sha256, report=report_payload,
+            )
+            terminal_checkpoint_published = recovery_enabled
+            publication_stage = None
+        if (run_dir / "manifest.json").exists():
+            publication_stage = "terminal_manifest"
+            _atomic_replace_json(run_dir / "manifest.json", manifest)
+        else:
+            _write_json_new(run_dir / "manifest.json", manifest)
+        publication_stage = None
         confirmed_facts = len(result.report["confirmed"]["metrics"])
         confirmed_calculations = len(result.report["confirmed"]["analyses"])
         candidates = sum(item.get("status") == "candidate" for item in result.screening)
@@ -377,6 +491,43 @@ def _run(args: argparse.Namespace) -> int:
         deterministic_archived = (run_dir / "analysis.json").is_file() and (
             report_dir / "report.json"
         ).is_file()
+        recovery_rejected = isinstance(exc, AnnualRecoveryRejectedError)
+        if recovery_rejected:
+            # Parent binding rejection occurs before the discovery runner is
+            # entered. The appendix has already written this child’s own
+            # source-bound, zero-call failed checkpoint with parent_run_id=null.
+            investigation = dict(exc.investigation)
+            discovery = investigation.get("discovery")
+            if isinstance(discovery, dict):
+                try:
+                    _write_json_new(run_dir / "discovery.json", discovery)
+                except OSError:
+                    pass
+            try:
+                _write_json_new(run_dir / "investigation.json", investigation)
+            except OSError:
+                pass
+            if deterministic_archived and isinstance(getattr(exc, "snapshot_report", None), dict):
+                report_payload = dict(exc.snapshot_report)
+                _ignored_report, analysis_payload = attach_investigation_to_report(
+                    report_payload,
+                    analysis_payload,
+                    investigation,
+                    investigation_path=_relative_or_absolute(
+                        run_dir / "investigation.json", artifacts_root
+                    ),
+                )
+                markdown = render_report_with_investigation(report_payload, investigation)
+                if m3_screening is not None:
+                    markdown = render_report_with_m3_screening(markdown, m3_screening)
+                try:
+                    _atomic_replace_json(run_dir / "analysis.json", analysis_payload)
+                    _atomic_replace_json(report_dir / "report.json", report_payload)
+                    _atomic_replace_text(report_dir / "report.md", markdown)
+                except OSError:
+                    # Keep the immutable checkpoint as the authoritative
+                    # report if a mutable convenience artifact cannot update.
+                    pass
         if args.with_model and investigation is None and not investigation_started:
             investigation = {
                 "kind": "fintrace_annual_investigation",
@@ -474,6 +625,12 @@ def _run(args: argparse.Namespace) -> int:
             "source_sha256": actual_copy_sha256 or source_sha256,
             "expected_sha256": args.expected_sha256,
         }
+        if publication_stage is not None:
+            failure["publication_stage"] = publication_stage
+            failure["failure_code"] = "annual_report_publication_failed"
+        if recovery_rejected:
+            failure["requested_resume_parent_run_id"] = exc.requested_parent_run_id
+            failure["model_call_audit_status"] = "confirmed_zero_admissions_before_resume_validation"
         if model_called is None:
             failure["model_call_audit_status"] = "unknown"
             failure["limitations"] = [unknown_call_audit_limitation]
@@ -493,7 +650,13 @@ def _run(args: argparse.Namespace) -> int:
             _write_json_new(run_dir / "failure.json", failure)
             _write_json_new(report_dir / "failure.json", failure)
             failure_manifest = _manifest(
-                status=("completed_with_issues" if deterministic_archived and not call_audit_unknown else "failed"),
+                status=(
+                    "failed"
+                    if recovery_rejected
+                    or publication_stage in {"final_report", "terminal_checkpoint"}
+                    or publication_stage == "terminal_manifest" and terminal_checkpoint_published
+                    else "completed_with_issues" if deterministic_archived and not call_audit_unknown else "failed"
+                ),
                 run_id=run_id,
                 created_at=created_at,
                 args=args,
@@ -529,7 +692,20 @@ def _run(args: argparse.Namespace) -> int:
                 failure_manifest.pop("model_called", None)
             if m3_screening is not None:
                 _add_m3_manifest(failure_manifest, m3_screening, artifacts_root=artifacts_root, run_dir=run_dir)
-            _write_json_new(run_dir / "manifest.json", failure_manifest)
+            manifest_path = run_dir / "manifest.json"
+            # Once a final pointer has been sealed, a failed mutable-manifest
+            # replacement must leave the prior manifest intact. Rewriting it
+            # as failed would invalidate the already-published report under
+            # the strict archive reader's publication-window rules.
+            preserve_sealed_publication_window = (
+                publication_stage == "terminal_manifest" and terminal_checkpoint_published
+            )
+            if preserve_sealed_publication_window:
+                pass
+            elif manifest_path.is_file():
+                _atomic_replace_json(manifest_path, failure_manifest)
+            else:
+                _write_json_new(manifest_path, failure_manifest)
         except OSError as archive_exc:
             print(
                 f"status=failed run_id={run_id} reason={exc}; "
@@ -573,16 +749,52 @@ def _safe_artifacts_root(value: Path) -> Path:
     return resolved
 
 
-def _reserve_run_dirs(artifacts_root: Path) -> tuple[str, Path, Path]:
+def _write_call_stopped_marker(path: Path, run_id: str) -> None:
+    """Acknowledge graceful CLI shutdown after all workflow calls have returned."""
+    if (
+        not isinstance(path, Path)
+        or not path.is_absolute()
+        or not isinstance(run_id, str)
+        or _RUN_ID_RE.fullmatch(run_id) is None
+    ):
+        return
+    try:
+        if path.is_symlink() or not path.parent.is_dir():
+            return
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except (OSError, ValueError):
+        return
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(f"{run_id}\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+    except OSError:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+
+
+def _reserve_run_dirs(
+    artifacts_root: Path, requested_run_id: str | None = None
+) -> tuple[str, Path, Path]:
     runs_root = artifacts_root / "runs"
     reports_root = artifacts_root / "reports"
     runs_root.mkdir(parents=True, exist_ok=True)
     reports_root.mkdir(parents=True, exist_ok=True)
-    for _ in range(8):
-        run_id = f"annual-analysis-{uuid4()}"
+    if requested_run_id is not None and _RUN_ID_RE.fullmatch(requested_run_id) is None:
+        raise ValueError("预分配 run_id 格式无效。")
+    candidates = [requested_run_id] if requested_run_id is not None else [
+        f"annual-analysis-{uuid4()}" for _ in range(8)
+    ]
+    for run_id in candidates:
+        assert run_id is not None
         run_dir = runs_root / run_id
         report_dir = reports_root / run_id
         if run_dir.exists() or report_dir.exists():
+            if requested_run_id is not None:
+                raise FileExistsError("预分配 run_id 已存在，拒绝覆盖。")
             continue
         try:
             run_dir.mkdir(exist_ok=False)
@@ -595,6 +807,97 @@ def _reserve_run_dirs(artifacts_root: Path) -> tuple[str, Path, Path]:
         except FileExistsError:
             continue
     raise FileExistsError("连续生成的唯一 run_id 均已存在；未覆盖任何运行目录。")
+
+
+def _save_checkpoint_if_repository_root(
+    artifacts_root: Path,
+    run_id: str,
+    *,
+    state: str,
+    is_partial: bool,
+    parent_run_id: str | None,
+    source_sha256: str,
+    report: dict[str, object],
+) -> None:
+    if artifacts_root.resolve() != (ROOT / "artifacts").resolve():
+        # Custom artifact roots are used by isolated CLI unit tests and are not
+        # project-root checkpoint stores.
+        return
+    save_annual_checkpoint(
+        ROOT,
+        run_id,
+        {
+            "state": state,
+            "is_partial": is_partial,
+            "parent_run_id": parent_run_id,
+            "source_sha256": source_sha256,
+            "report": report,
+        },
+    )
+
+
+def _save_cli_checkpoint(
+    report: object,
+    *,
+    state: str,
+    parent_run_id: str | None,
+    run_id: str,
+    source_sha256: str,
+    artifacts_root: Path,
+) -> None:
+    """Persist each complete recoverable projection before another call."""
+    if not isinstance(report, dict):
+        raise TypeError("annual_checkpoint_report_invalid")
+    if (
+        report.get("kind") != "fintrace_annual_analysis_report"
+        or report.get("run_id") != run_id
+        or report.get("source_sha256") != source_sha256
+    ):
+        raise ValueError("annual_checkpoint_identity_mismatch")
+    _save_checkpoint_if_repository_root(
+        artifacts_root,
+        run_id,
+        state=state,
+        is_partial=True,
+        parent_run_id=parent_run_id,
+        source_sha256=source_sha256,
+        report=report,
+    )
+
+
+def _atomic_replace_json(path: Path, payload: object) -> None:
+    if not path.is_file() or path.is_symlink():
+        raise OSError("年度报告目标文件状态无效。")
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        with temporary.open("x", encoding="utf-8", newline="\n") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        replace_with_bounded_retry(temporary, path)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _atomic_replace_text(path: Path, value: str) -> None:
+    if not path.is_file() or path.is_symlink():
+        raise OSError("年度报告目标文件状态无效。")
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        with temporary.open("x", encoding="utf-8", newline="\n") as handle:
+            handle.write(value)
+            handle.flush()
+            os.fsync(handle.fileno())
+        replace_with_bounded_retry(temporary, path)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _copy_and_hash_new(source: Path, destination: Path) -> str:

@@ -11,13 +11,13 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Literal, TypedDict
 
-from finagent.audit import EvidenceRef, audited_complete_chat
+from finagent.audit import AuditPersistError, EvidenceRef, audited_complete_chat
 from finagent.audit.audited_chat import repository_runs_root
 from finagent.core.model_settings import ModelSettings
 from finagent.llm.chat_completion import ChatMessage
@@ -32,10 +32,26 @@ from finagent.retrieval.annual_context import (
 
 PROMPT_VERSION = "annual_investigation_v1"
 SUPPORTED_SIGNAL_IDS = frozenset({"profit_up_cash_down", "revenue_up_cash_down"})
+_SIGNAL_ORDER = ("profit_up_cash_down", "revenue_up_cash_down")
 MAX_MODEL_CALLS = 2
 INITIAL_MAX_SNIPPETS = 4
 INITIAL_MAX_SNIPPET_CHARS = 900
 INITIAL_MAX_TOTAL_CHARS = 2600
+
+_FATAL_MODEL_STOP_REASONS = frozenset({
+    "http_401",
+    "http_403",
+    "ledger_config_invalid",
+    "ledger_source_context_missing_or_unapproved",
+    "ledger_unavailable",
+    "ledger_provider_mismatch",
+    "ledger_budget_exhausted",
+    "ledger_policy_mismatch",
+    "call_gate_closed",
+    "call_deadline_exhausted",
+    "audit_write_failed",
+    "cancelled",
+})
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
@@ -210,10 +226,13 @@ class AnnualInvestigationState(TypedDict, total=False):
     response_text: str
     response_error: str | None
     pending_reason: str | None
+    stop_reason: str | None
     request_supplement: bool
     items: list[InvestigationItem]
     audit_artifacts: list[AuditArtifact]
     overall_reason: str | None
+    reusable_items: Mapping[str, InvestigationItem]
+    checkpoint_callback: Callable[[Mapping[str, object]], None] | None
 
 
 def run_annual_investigation(
@@ -223,6 +242,8 @@ def run_annual_investigation(
     settings: ModelSettings,
     *,
     run_dir: str | Path | None = None,
+    reusable_items: Sequence[Mapping[str, object]] = (),
+    checkpoint_callback: Callable[[Mapping[str, object]], None] | None = None,
 ) -> AnnualInvestigationResult:
     """Run the compiled LangGraph against one archived report and its source PDF.
 
@@ -237,6 +258,7 @@ def run_annual_investigation(
     _validate_run_dir(chosen_run_dir, identity["run_id"])
     if chosen_run_dir.resolve() != expected_run_dir.resolve():
         raise ValueError("run_dir 必须与 report.run_id 对应的 artifacts/runs 子目录一致。")
+    reusable = _normalize_reusable_items(reusable_items)
     prompt_text = _load_prompt()
     graph = build_annual_investigation_graph()
     state = graph.invoke(
@@ -256,10 +278,13 @@ def run_annual_investigation(
             "current_index": 0,
             "model_call_count": 0,
             "model_call_attempt_count": 0,
+            "stop_reason": None,
             "supplementary_retrieval_used": False,
             "context_snippets": [],
             "supplementary_evidence_ids": [],
-            "items": [],
+            "items": [reusable[key] for key in SUPPORTED_SIGNAL_IDS if key in reusable],
+            "reusable_items": reusable,
+            "checkpoint_callback": checkpoint_callback,
             "audit_artifacts": [],
         }
     )
@@ -308,8 +333,10 @@ def build_annual_investigation_graph():
 
 
 def _initial_retrieval_node(state: AnnualInvestigationState) -> dict[str, object]:
-    candidates = _candidate_signals(state["report"])
-    if not candidates:
+    all_candidates = _candidate_signals(state["report"])
+    reusable = state.get("reusable_items", {})
+    candidates = [item for item in all_candidates if item.get("signal_id") not in reusable]
+    if not all_candidates:
         return {
             "candidate_signals": [],
             "initial_context_result": None,
@@ -377,6 +404,8 @@ def _select_candidate_node(state: AnnualInvestigationState) -> dict[str, object]
 
 
 def _after_select_candidate(state: AnnualInvestigationState) -> str:
+    if state.get("stop_reason") is not None:
+        return "finish"
     if state.get("current_candidate") is None:
         return "finish"
     if state.get("pending_reason") is not None:
@@ -403,26 +432,37 @@ def _call_model_node(state: AnnualInvestigationState) -> dict[str, object]:
             run_dir=run_dir,
             evidence_refs=[EvidenceRef(state["source_document_id"], page) for page in pages],
             prompt_version=PROMPT_VERSION,
+            call_stage="annual_investigation",
         )
-    except Exception:
+    except Exception as exc:
+        failure_reason = _safe_model_failure_reason(exc)
+        stop_reason = (
+            failure_reason
+            if failure_reason in _FATAL_MODEL_STOP_REASONS
+            else state.get("stop_reason")
+        )
         new_artifacts = _audit_artifacts_for_new_children(run_dir, before)
         if not new_artifacts:
             new_artifacts = [
                 AuditArtifact(None, None, None, None, "audit_or_call_failed", PROMPT_VERSION)
             ]
         return {
-            "model_call_attempt_count": state.get("model_call_attempt_count", 0) + 1,
+            "model_call_attempt_count": state.get("model_call_attempt_count", 0)
+            + max(_safe_call_count(exc, "provider_admission_count"), 0),
             "model_call_count": state.get("model_call_count", 0)
-            + int(any(item.request_path is not None for item in new_artifacts)),
+            + max(_safe_call_count(exc, "response_count"), 0),
             "audit_artifacts": state.get("audit_artifacts", []) + new_artifacts,
-            "response_error": "model_call_failed",
-            "pending_reason": "model_call_failed",
+            "response_error": failure_reason,
+            "pending_reason": failure_reason,
+            "stop_reason": stop_reason,
+            "overall_reason": stop_reason or state.get("overall_reason"),
             "parsed_interpretation": None,
         }
     artifact = _audit_artifact_from_dir(result.audit_dir, "succeeded")
     return {
-        "model_call_attempt_count": state.get("model_call_attempt_count", 0) + 1,
-        "model_call_count": state.get("model_call_count", 0) + 1,
+        "model_call_attempt_count": state.get("model_call_attempt_count", 0)
+        + result.provider_admission_count,
+        "model_call_count": state.get("model_call_count", 0) + result.response_count,
         "audit_artifacts": state.get("audit_artifacts", []) + [artifact],
         "response_text": result.completion.text,
         "response_error": None,
@@ -430,6 +470,24 @@ def _call_model_node(state: AnnualInvestigationState) -> dict[str, object]:
         "parsed_interpretation": None,
         "request_supplement": False,
     }
+
+
+def _safe_call_count(value: object, field: str) -> int:
+    count = getattr(value, field, 0)
+    return count if type(count) is int and 0 <= count <= 64 else 0
+
+
+def _safe_model_failure_reason(exc: BaseException) -> str:
+    if isinstance(exc, AuditPersistError):
+        return "audit_write_failed"
+    status = getattr(exc, "status_code", None)
+    if type(status) is int and status in {401, 403}:
+        return f"http_{status}"
+    for name in ("category", "code"):
+        value = getattr(exc, name, None)
+        if isinstance(value, str) and value in _FATAL_MODEL_STOP_REASONS:
+            return value
+    return "model_call_failed"
 
 
 def _parse_response_node(state: AnnualInvestigationState) -> dict[str, object]:
@@ -626,9 +684,38 @@ def _advance_candidate_node(state: AnnualInvestigationState) -> dict[str, object
             narrative_evidence_ids=(),
             reason=reason or "insufficient_evidence",
         )
-    return {
-        "items": state.get("items", []) + [item],
-        "current_index": state.get("current_index", 0) + 1,
+    new_items = state.get("items", []) + [item]
+    next_index = state.get("current_index", 0) + 1
+    stop_reason = state.get("stop_reason")
+    candidates = state.get("candidate_signals", [])
+    if stop_reason is not None:
+        recorded = {value.signal_id for value in new_items}
+        for unattempted in candidates[next_index:]:
+            unattempted_id = str(unattempted["signal_id"])
+            if unattempted_id in recorded:
+                continue
+            new_items.append(
+                InvestigationItem(
+                    signal_id=unattempted_id,
+                    status="abstained",
+                    explanation=None,
+                    alternative_explanations=(),
+                    limitations=("前一候选遇到停止条件，此候选未发起模型调用。",),
+                    narrative_evidence_ids=(),
+                    reason=stop_reason,
+                )
+            )
+            recorded.add(unattempted_id)
+    ordered_items = sorted(
+        new_items,
+        key=lambda value: (
+            _SIGNAL_ORDER.index(value.signal_id)
+            if value.signal_id in _SIGNAL_ORDER else len(_SIGNAL_ORDER)
+        ),
+    )
+    update = {
+        "items": ordered_items,
+        "current_index": len(candidates) if stop_reason is not None else next_index,
         "current_candidate": None,
         "current_snippets": [],
         "current_citations_valid": False,
@@ -639,6 +726,16 @@ def _advance_candidate_node(state: AnnualInvestigationState) -> dict[str, object
         "request_supplement": False,
         "response_text": "",
     }
+    if stop_reason is not None:
+        update["overall_reason"] = stop_reason
+    callback = state.get("checkpoint_callback")
+    if callback is not None:
+        checkpoint_state = dict(state)
+        checkpoint_state.update(update)
+        checkpoint = _result_from_state(checkpoint_state).to_dict()
+        checkpoint["status"] = "running"
+        callback(checkpoint)
+    return update
 
 
 def _finish_node(state: AnnualInvestigationState) -> dict[str, object]:
@@ -655,7 +752,11 @@ def _finish_node(state: AnnualInvestigationState) -> dict[str, object]:
                     alternative_explanations=(),
                     limitations=("本次运行的模型调用预算已耗尽，未完成调查。",),
                     narrative_evidence_ids=(),
-                    reason=(state.get("pending_reason") or "model_call_budget_exhausted"),
+                    reason=(
+                        state.get("stop_reason")
+                        or state.get("pending_reason")
+                        or "model_call_budget_exhausted"
+                    ),
                 )
             )
             recorded.add(signal_id)
@@ -1148,10 +1249,91 @@ def _result_from_state(state: Mapping[str, object]) -> AnnualInvestigationResult
         model_call_count=int(state.get("model_call_count", 0)),
         model_call_attempt_count=int(state.get("model_call_attempt_count", 0)),
         supplementary_retrieval_used=bool(state.get("supplementary_retrieval_used", False)),
-        items=tuple(items),
+        items=tuple(sorted(
+            items,
+            key=lambda value: (
+                _SIGNAL_ORDER.index(value.signal_id)
+                if value.signal_id in _SIGNAL_ORDER else len(_SIGNAL_ORDER)
+            ),
+        )),
         narrative_evidences=tuple(
             item for item in state.get("context_snippets", []) if isinstance(item, NarrativeSnippet)
         ),
         audit_artifacts=tuple(audits),
         reason=state.get("overall_reason") if isinstance(state.get("overall_reason"), str) else None,
     )
+
+
+_RETRYABLE_REUSABLE_REASONS = frozenset({
+    "model_call_failed", "invalid_model_json", "invalid_model_response",
+    "prompt_build_failed", "model_call_budget_exhausted",
+    "model_call_budget_exhausted_before_supplement", "supplementary_retrieval_failed",
+    "supplementary_retrieval_exhausted", "no_valid_same_source_citation",
+})
+
+
+def _normalize_reusable_items(
+    values: Sequence[Mapping[str, object]],
+) -> dict[str, InvestigationItem]:
+    if not isinstance(values, Sequence) or isinstance(values, (str, bytes)) or len(values) > len(SUPPORTED_SIGNAL_IDS):
+        raise ValueError("annual_investigation_reusable_items_invalid")
+    result: dict[str, InvestigationItem] = {}
+    for raw in values:
+        if not isinstance(raw, Mapping):
+            raise ValueError("annual_investigation_reusable_item_invalid")
+        signal_id = raw.get("signal_id")
+        status = raw.get("status")
+        if not isinstance(signal_id, str) or signal_id not in SUPPORTED_SIGNAL_IDS or signal_id in result:
+            raise ValueError("annual_investigation_reusable_item_invalid")
+        if status == "interpretation":
+            required = {
+                "signal_id", "status", "explanation", "alternative_explanations",
+                "limitations", "narrative_evidence_ids", "claim_type", "verification_status",
+            }
+            if (
+                set(raw) != required
+                or raw.get("claim_type") != "interpretation"
+                or raw.get("verification_status") != "unverified"
+            ):
+                raise ValueError("annual_investigation_reusable_item_invalid")
+            parsed = parse_model_interpretation(
+                json.dumps({
+                    "signal_id": signal_id,
+                    "explanation": raw.get("explanation"),
+                    "alternative_explanations": raw.get("alternative_explanations"),
+                    "limitations": raw.get("limitations"),
+                    "narrative_evidence_ids": raw.get("narrative_evidence_ids"),
+                    "request_more_context": False,
+                }, ensure_ascii=False),
+                expected_signal_id=signal_id,
+            )
+            result[signal_id] = InvestigationItem(
+                signal_id=signal_id,
+                status="interpretation",
+                explanation=parsed.explanation,
+                alternative_explanations=parsed.alternative_explanations,
+                limitations=parsed.limitations,
+                narrative_evidence_ids=parsed.narrative_evidence_ids,
+            )
+            continue
+        if status == "abstained":
+            if set(raw) != {
+                "signal_id", "status", "explanation", "alternative_explanations",
+                "limitations", "narrative_evidence_ids", "reason",
+            }:
+                raise ValueError("annual_investigation_reusable_item_invalid")
+            reason = raw.get("reason")
+            if not isinstance(reason, str) or reason in _RETRYABLE_REUSABLE_REASONS:
+                raise ValueError("annual_investigation_reusable_item_invalid")
+            result[signal_id] = InvestigationItem(
+                signal_id=signal_id,
+                status="abstained",
+                explanation=None,
+                alternative_explanations=(),
+                limitations=("同源检索未提供足以形成解释的证据。",),
+                narrative_evidence_ids=(),
+                reason=reason,
+            )
+            continue
+        raise ValueError("annual_investigation_reusable_item_invalid")
+    return result

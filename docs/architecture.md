@@ -31,7 +31,7 @@ flowchart TD
     Q2 --> Q3["analysis.json 与 Markdown 归档"]
 ```
 
-四种模式为 deterministic、m3_screening、model_investigation 与 integrated_analysis。两个 AI 模式均包含既有固定候选调查、独立的原 PDF 全文发现和最终评审；全文发现从来源 PDF 的全部可提取文字按原文顺序规划批次，不依赖固定候选、已核验指标或 M3。LangGraph 是唯一智能体编排层；全文扫描节点内部可用有界 I/O 执行器滚动并发模型请求，默认最多 3 个在途请求，解析、进度协调和结果归并仍由该节点协调执行。最终 findings 和批次结果按原规划顺序归并，不受完成顺序影响。最终评审读取基础报告与有界发现项，不重新读取全文。集成模式在同一 run/report 中另行归档 M3 规则审计，M3 不进入 AI 输入。任一附加层失败或有缺口时，其他成功层和基础报告仍尽量保留，状态分别记录；操作系统或 job runner 在正式归档前硬中断时不保证存在最终报告。deterministic 与独立 M3 模式不调用模型；两个 AI 模式会调用模型。并发设置、预算语义、覆盖含义和超时边界见[全文发现契约](annual-discovery.md)。
+四种模式为 deterministic、m3_screening、model_investigation 与 integrated_analysis。两个 AI 模式均包含既有固定候选调查、独立的原 PDF 全文发现和最终评审；全文发现从来源 PDF 的全部可提取文字按原文顺序规划批次，不依赖固定候选、已核验指标或 M3。LangGraph 是唯一智能体编排层。标准 Web/CLI 的恢复执行路径按批次串行发布检查点；未传恢复绑定的兼容路径仍保留最多三个在途请求的滚动调度。最终 findings 和批次结果按原规划顺序归并。最终评审读取基础报告与有界发现项，不重新读取全文。集成模式在同一 run/report 中另行归档 M3 规则审计，M3 不进入 AI 输入。任一附加层失败或有缺口时，其他成功层和基础报告仍保留并分别记录；硬中断时不保证存在最终报告，严格读取器可读取已正式发布的部分快照。deterministic 与独立 M3 模式不调用模型；两个 AI 模式会调用模型。调度、预算、覆盖和超时边界见[全文发现契约](annual-discovery.md)。
 
 年度归档读取支持 JSON、Markdown 与离线 HTML 白名单导出：先校验归档 manifest、报告身份和来源 PDF SHA，再输出受控字段；不导出整份 PDF、整页图、原始模型请求/响应或密钥。新全文发现层不导出自己的 `raw_text` 和 `quote`；既有叙述层仍有受控原文片段投影。PDF 由用户在浏览器打印离线 HTML 产生，服务端没有 PDF 导出端点。导出具体边界见[年度报告下载](annual-report-export.md)。
 
@@ -55,11 +55,11 @@ flowchart TD
 | retrieval | `annual_context.py` 为固定候选调查检索同源 MD&A/财务附注片段；`annual_discovery_context.py` 规划本次 PDF 所有非空提取文字，逐块切片并按来源 SHA、页码和块内位置绑定 ID，不做章节/主题关键词过滤。叙述 `reading_context` 是 API 对已核验引用构造的页面展示补全，不属于全文发现规划 |
 | agents | LangGraph 执行固定候选调查、独立全文发现及最终结构化评审；最终评审仅接收基础报告和有界发现项，模型观点不升级为独立核验 |
 | tools | 将已有业务能力适配为工具，不复制解析、计算或核验实现 |
-| llm | 同步 Chat Completions 纯文本连接器；请求限共有字段，常规默认超时 60 秒 |
+| llm | 同步 Chat Completions 纯文本接口；实际 HTTP 在本连接器创建的可终止子进程中执行，父进程控制墙钟截止、取消和有限重试；请求限共有字段 |
 | audit | 模型请求与结果的脱敏调用记录、时间及状态；记录失败不能伪装为审计成功 |
 | reports | 组装 JSON/Markdown、读取归档并按年度白名单投影 JSON/Markdown/HTML；来源错误或新发现层校验失败时 fail closed；保留失败/缺口、来源与可选模型层 |
 | quarterly | `ingestion/quarterly.py`、`finance/quarterly.py`、`verification/quarterly.py` 与 `reports/quarterly_analysis.py` 承载季度层，不改变年度 FinancialFactV2 |
-| core | 公共路径、配置、异常等基础能力 |
+| core | 公共路径、配置与异常；`annual_checkpoints` 管不可变快照、原子指针和最终封存，`annual_recovery` 管恢复绑定及能力，`model_call_ledger` 管跨进程请求准入、计数与关闭门控 |
 
 前端 `pages` 组织年度分析、设置和旧预检；`components` 承载公共组件；`api` 处理请求及错误；`types` 定义读取类型；`styles` 管展示。财务计算和模型调用不在浏览器执行。未来拆分页面应保留现有报告读取、任务恢复与旧归档兼容。
 
@@ -74,8 +74,10 @@ flowchart TD
 | GET /v1/annual-prechecks/{run_id} | 读取旧预检归档 |
 | POST /v1/annual-analysis-jobs | 以已存来源创建 deterministic / m3_screening / model_investigation / integrated_analysis 任务 |
 | GET /v1/annual-analysis-jobs/{job_id} | 查询阶段、状态、结果 run_id / result_url；运行中的年度 CLI 阶段可附带来源绑定的安全批次进度，发现层分别统计 successful/partial/failed |
+| POST /v1/annual-analysis-jobs/{job_id}/cancel | 幂等取消排队或活动任务；先关闭请求准入，再收束本服务实际拥有的 CLI，保留可信部分报告；已封存最终报告不降级 |
+| POST /v1/annual-analysis-jobs/{job_id}/resume | 仅接受 `parent_run_id`，严格校验父报告与当前恢复绑定，按原请求创建一个新的子任务；同一父运行只允许一个活动子任务 |
 | GET /v1/annual-analysis-history?limit=20&offset=0 | 只读本机年度任务与报告索引，按创建时间分页并报告总条数 |
-| GET /v1/annual-analyses/{run_id} | 只读已归档的 v2 报告，并分开返回已核验、narrative 与全文发现来源索引 |
+| GET /v1/annual-analyses/{run_id} | 严格读取已归档最终报告或已发布部分快照，返回快照状态、序号、父运行关系，并分开返回已核验、narrative 与全文发现来源索引 |
 | GET /v1/annual-analyses/{run_id}/export?format=json\|markdown\|html | 验证既有年度归档及来源绑定后按白名单导出；不重跑分析、不导出整份 PDF/整页图、密钥或原始模型请求/响应 |
 | GET /v1/annual-analyses/{run_id}/evidence/{evidence_id}/preview.png | 已核验证据白名单页图 |
 | GET /v1/annual-analyses/{run_id}/narrative-evidences | 读取归档且被模型解释引用的年报原文片段索引 |
@@ -89,11 +91,21 @@ flowchart TD
 
 任务校验 `source_pdf_path` 相对 data/raw 的范围、符号链接、公司/年度/文档目录、source.json 身份及 SHA256；同时接收 company_id、report_year、document_id、sha256、mode。上传请求中的公司/年度不等于已从 PDF 独立确认的身份。
 
-有界队列为单进程最多一个运行任务、三个排队任务。job.json 写入 `artifacts/annual-analysis-jobs/<job_id>/`；服务重启时遗留 queued/running 转为 interrupted。状态为 queued、running、completed、completed_with_issues、failed、interrupted。模型配置或 LangGraph 未就绪时创建模型任务返回 503。
+有界队列为单进程最多一个运行任务、三个排队任务。job.json 写入 `artifacts/annual-analysis-jobs/<job_id>/`；状态为 queued、running、completed、completed_with_issues、failed、interrupted、cancelled。模型配置或 LangGraph 未就绪时创建模型任务返回 503。执行时预分配 run_id，排队取消不启动 CLI。服务重启先关闭遗留任务的准入并写取消标记，再有界确认旧 CLI 停止；仅观察本服务保存的 PID 与创建身份或读取精确停止确认，不按裸 PID 终止进程。确认前允许可信部分读取，续跑能力为 `parent_active`；确认后保存中断状态，已封存最终报告及已有失败事实保留。
 
 API 在应用创建时捕获实际加载函数代码、对应源码清单与协议身份，同时用只读 CLI 探针记录启动身份。诊断分别返回不可变的启动快照和当前磁盘指纹。创建任务和开始执行时核对两者及当前 CLI；Web CLI 必须携带预期指纹，并在读取来源或模型设置前验证。前端提交前也要求该协议，旧 API 缺少端点时拒绝提交。启动脚本仅在监听 PID、项目命令行和无活跃任务均确认时重启本项目旧 API；未知进程或无法确认的状态拒绝处理。
 
-failed/interrupted job 的 GET 可附带 `result_availability` 只读投影，状态为 available/unavailable，含安全类别、说明及可用时的报告 URL。available 要求严格年度读取器通过，并与原请求公司、报告期、文档和 SHA 一致；不改写原 job 的状态、错误或 result_url。结构不兼容与来源校验失败分别表达，恢复读取不触发 CLI 或模型调用。
+job 的 GET 可附带 `result_availability` 只读投影，状态为 available/unavailable，含安全类别、报告 URL 和快照状态、序号、是否部分结果及父 run_id。available 要求严格年度读取器通过，并与原请求公司、报告期、文档和 SHA 一致；只读查询不把历史失败改成成功。结构不兼容与来源校验失败分别表达，恢复读取不触发 CLI 或模型调用。`recovery_capability` 给出能否续跑及安全原因；`recovery_progress` 分开报告本次、父链与累计的全部模型阶段准入，扫描层只计自身批次，两者均不代表整个 goal 的共同额度。
+
+CLI 先发布正式基础快照；显式 AI 流程在首个模型请求前建立完整恢复绑定与待处理计划，先做全文发现，再做固定候选调查和最终评审。基础、逐批与阶段结果使用 `artifacts/reports/<run_id>/checkpoints/` 下的不可变快照及运行目录中的 `checkpoint-current.json` 原子指针；最终封存后禁止追加。发布中断时，只读取通过来源和结构检查的已发布快照，未封存结果仍是部分结果。恢复绑定包含源 SHA、原完整 mode、模型与供应方指纹、提示词、解析器、计划及稳定 M3 语义输入；旧归档缺少绑定时只能只读，不能推定可续跑。子任务复用成功批次和独立完成的调查，失败批次重试返回空或再失败时仍保留父运行合格发现；父记录不回写。
+
+正式报告、检查点指针和 manifest 的原子替换仅对 Windows 指定占用错误做有界重试。报告或最终指针持续发布失败时写失败记录与 failed manifest，保留最后可信部分快照；最终 seal 已发布后，若终态 manifest 替换失败，则保留旧 manifest 和 sealed 指针，CLI 退出失败但不损坏已封存结果的严格读取窗口。模型阶段完成不能替代最终耐久发布确认。
+
+取消、超时和执行异常收尾先关闭准入，再确认所属 CLI 停止，才追加终态快照；无法确认时保留可信报告只读并暂缓续跑。心跳更新通过普通文件身份检查和 Windows 文件句柄或 POSIX 文件描述符完成，失败会停止后续准入。已封存报告不被取消收尾降级。
+
+已完成评审仅在实际请求白名单中的语义输入与完整恢复绑定一致时复用，使用明确原因 `review_reused_for_matching_inputs`，本次响应与尝试均为零。子运行保留原成功审计索引；严格读取沿有界父链检查原请求、逐次准入、耐久响应及解析结果，不凭复用标记放行。新运行的核验时间不进入评审输入；事实、发现、调查解释、覆盖或缺口变化会使复用失效。对应实测与阶段状态仍以恢复任务书及验收记录为准。
+
+模型连接器在每次实际联网前持久化准入，自动重试分别计数；耐久响应、合格发现及复用批次分别记录。普通任务使用隔离 gate，启用 `FINTRACE_MODEL_CALL_LEDGER_CONFIG` 时所有调用入口共用指定账本及已核对来源策略。共同账本仅首次显式初始化；已使用账本缺失、损坏或表结构不全时拒绝外发，不修复成零计数。策略文件、进程确认与计账不含密钥。更细执行契约见[全文发现说明](annual-discovery.md)，阶段验收状态见[恢复任务书](annual-analysis-recovery-plan.md)。
 
 Web 模型任务（model_investigation 与 integrated_analysis）按 README 的本机文件优先/环境回退规则注入配置；deterministic 与独立 M3 子进程移除 MODEL_*。集成模式的 M3 计算不使用模型配置；固定候选调查、全文发现与最终评审均属于显式 AI 流程。Web job 超时和全文发现内部预算见[全文发现契约](annual-discovery.md)。CLI 仍只读环境。设置读取 API 不回显密钥并禁止缓存；设置路由检查 loopback Host，修改与测试还检查本机 Origin。这些是设置路由的约束，不代表所有 API 有相同防护。应用不全局强制 host，按启动命令绑定 127.0.0.1。
 

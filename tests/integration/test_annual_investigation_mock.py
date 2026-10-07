@@ -203,7 +203,17 @@ def _run(
     server: _MockServer,
     *,
     report: dict[str, Any] = REPORT,
+    checkpoint_callback: Any | None = None,
 ) -> tuple[annual_investigation.AnnualInvestigationResult, Path]:
+    for name in (
+        "FINTRACE_MODEL_CALL_LEDGER_CONFIG",
+        "FINTRACE_CALL_GATE_DB",
+        "FINTRACE_CALL_GATE_KEY",
+        "FINTRACE_CALL_CANCEL_FILE",
+        "FINTRACE_CALL_LIVENESS_FILE",
+        "FINTRACE_ACTIVE_SOURCE_SHA256",
+    ):
+        monkeypatch.delenv(name, raising=False)
     runs_root = tmp_path / "artifacts" / "runs"
     run_dir = runs_root / RUN_ID
     run_dir.mkdir(parents=True)
@@ -221,6 +231,7 @@ def _run(
         SOURCE_RECORD,
         settings,
         run_dir=run_dir,
+        checkpoint_callback=checkpoint_callback,
     )
     return result, run_dir
 
@@ -262,6 +273,37 @@ def test_graph_uses_local_http_and_audits_two_candidate_interpretations(
         assert (audit_dir / "request.json").is_file()
         assert (audit_dir / "response.json").is_file()
         assert "test-local-secret" not in (audit_dir / "request.json").read_text(encoding="utf-8")
+
+
+def test_authentication_failure_stops_later_candidates_and_checkpoints_them_unattempted(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_retrieval(monkeypatch)
+    checkpoints: list[dict[str, object]] = []
+    with _MockServer([(401, {"error": "unauthorized"})]) as server:
+        result, _run_dir = _run(
+            monkeypatch,
+            tmp_path,
+            server,
+            checkpoint_callback=checkpoints.append,
+        )
+
+    payload = result.to_dict()
+    assert len(server.requests) == 1
+    assert payload["model_call_attempt_count"] == 1
+    assert payload["model_call_count"] == 0
+    assert payload["reason"] == "http_401"
+    assert [item["signal_id"] for item in payload["items"]] == [
+        "profit_up_cash_down",
+        "revenue_up_cash_down",
+    ]
+    assert [item["reason"] for item in payload["items"]] == ["http_401", "http_401"]
+    assert checkpoints
+    assert [item["reason"] for item in checkpoints[-1]["items"]] == [
+        "http_401",
+        "http_401",
+    ]
 
 
 def test_graph_reserves_one_call_for_each_candidate_before_supplementary_context(
@@ -379,21 +421,23 @@ def test_graph_accepts_valid_same_source_citation_after_supplement_without_new_i
     assert payload["items"][0]["verification_status"] == "unverified"
 
 
-def test_graph_keeps_audited_http_failure_path_and_can_continue_to_next_candidate(
+def test_graph_stops_after_transport_retries_consume_actual_attempt_budget(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     _install_retrieval(monkeypatch)
-    with _MockServer([(503, "ignored"), (200, _answer_from_request)]) as server:
+    with _MockServer([(503, "ignored")] * 3) as server:
         result, run_dir = _run(monkeypatch, tmp_path, server)
 
     payload = result.to_dict()
-    assert result.model_call_count == 2
-    assert result.model_call_attempt_count == 2
-    assert [item["status"] for item in payload["items"]] == ["abstained", "interpretation"]
+    # Retried provider failures each consume the run's admission budget; none is a ChatCompletion.
+    assert result.model_call_count == 0
+    assert result.model_call_attempt_count == 3
+    assert len(server.requests) == 3
+    assert [item["status"] for item in payload["items"]] == ["abstained", "abstained"]
     failed = next(item for item in payload["audit_artifacts"] if item["status"] == "failed")
     audit_dir = run_dir / Path(failed["audit_dir"]).name
     failure = json.loads((audit_dir / "failure.json").read_text(encoding="utf-8"))
     assert failed["request_path"].endswith("request.json")
     assert failed["failure_path"].endswith("failure.json")
-    assert failure["category"] == "http_error"
+    assert failure["category"] == "http_5xx"

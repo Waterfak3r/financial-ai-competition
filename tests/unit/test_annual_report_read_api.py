@@ -343,6 +343,10 @@ def test_discovery_exception_fallback_is_accepted_by_strict_report_get(
         def run_annual_discovery(*_args, run_dir: Path, **_kwargs):
             audit_dir = run_dir / audit_id
             audit_dir.mkdir()
+            attempt_dir = audit_dir / "attempt-01"
+            attempt_dir.mkdir()
+            attempt_audit_id = "4f11c9d2-1f63-4f11-8bc8-63c87837c4ab"
+            admission_id = "5f11c9d2-1f63-4f11-8bc8-63c87837c4ab"
             request_batch = {
                 "company_id": report["company_id"],
                 "report_year": report["report_year"],
@@ -353,6 +357,7 @@ def test_discovery_exception_fallback_is_accepted_by_strict_report_get(
             }
             (audit_dir / "request.json").write_text(
                 json.dumps({
+                    "audit_id": audit_id,
                     "status": "started",
                     "prompt_version": "annual_discovery_v2",
                     "messages": [
@@ -362,8 +367,43 @@ def test_discovery_exception_fallback_is_accepted_by_strict_report_get(
                 }),
                 encoding="utf-8",
             )
+            (attempt_dir / "request.json").write_text(
+                json.dumps({
+                    "status": "started",
+                    "attempt_index": 1,
+                    "audit_id": attempt_audit_id,
+                    "prompt_version": "annual_discovery_v2",
+                    "model": "test-model",
+                }),
+                encoding="utf-8",
+            )
+            (attempt_dir / "failure.json").write_text(
+                json.dumps({
+                    "status": "failed",
+                    "attempt_index": 1,
+                    "audit_id": attempt_audit_id,
+                    "category": "timeout",
+                    "provider_admitted": True,
+                }),
+                encoding="utf-8",
+            )
             (audit_dir / "failure.json").write_text(
-                json.dumps({"status": "failed", "category": "timeout"}),
+                json.dumps({
+                    "status": "failed",
+                    "category": "timeout",
+                    "provider_admission_count": 1,
+                    "response_count": 0,
+                    "attempt_records": [{
+                        "attempt_index": 1,
+                        "audit_id": attempt_audit_id,
+                        "admission_id": admission_id,
+                        "provider_admitted": True,
+                        "response_accepted": False,
+                        "accepted_findings": 0,
+                        "status": "failed",
+                        "reason": "timeout",
+                    }],
+                }),
                 encoding="utf-8",
             )
             raise RuntimeError("synthetic post-audit failure")
@@ -849,3 +889,42 @@ def test_run_directory_symlink_is_rejected(tmp_path: Path) -> None:
 
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "archive_path_invalid"
+
+
+def test_report_api_projects_strict_archive_snapshot_metadata(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from dataclasses import replace
+
+    import finagent.api.app as app_module
+    from finagent.api.annual_report_read import load_annual_report
+
+    run_id = "synthetic-api-snapshot-001"
+    _make_archive(tmp_path, run_id)
+    archive = load_annual_report(tmp_path, run_id)
+    expected_snapshot = {
+        "state": "running",
+        "sequence": 2,
+        "is_partial": True,
+        "parent_run_id": "annual-analysis-parent-001",
+    }
+    monkeypatch.setattr(
+        app_module,
+        "load_annual_report",
+        lambda _root, _run: replace(archive, snapshot=expected_snapshot),
+    )
+
+    response = TestClient(create_app(tmp_path)).get(f"/v1/annual-analyses/{run_id}")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["snapshot"] == expected_snapshot
+
+
+def test_legacy_report_api_does_not_invent_snapshot_metadata(tmp_path: Path) -> None:
+    run_id = "synthetic-api-legacy-001"
+    _make_archive(tmp_path, run_id)
+
+    response = TestClient(create_app(tmp_path)).get(f"/v1/annual-analyses/{run_id}")
+
+    assert response.status_code == 200, response.text
+    assert "snapshot" not in response.json()

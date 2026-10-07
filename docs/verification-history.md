@@ -310,3 +310,40 @@ API/CLI 启动时捕获加载代码身份，并分别核对磁盘源码；新任
 历史原件及隔离副本的 job、manifest、report、source PDF 共 12 项前后哈希均一致；三份原 job 仍为 failed、failed、completed_with_issues。上述 102/28 条和评审均来自历史运行，没有记作本 goal 新在线生成。自建浏览器服务已收尾，未停止用户服务、未清理 tmp 内容。
 
 本阶段真实 provider 请求为 **0/80**，剩余 **80**；没有读取本机真实模型配置、没有外发年报。取消、部分报告、硬截止、跨进程累计额度和续跑尚属 R2；全局归并、入口收敛及两份新在线 Web/API 验收尚未通过。本阶段实施提交在任务书进度表登记，不 push；用户原有文档与比赛材料改动保持未暂存。
+
+<a id="annual-analysis-recovery-r2"></a>
+
+## 2026-10-06–07 R2 部分结果、故障恢复与请求准入验收
+
+R2 由本会话明确配置的 `gpt-6-luna`、`max` 子代理实施代码及运行验证，主控负责方案、文档和实际差异、原始证据及页面审阅。此前失败与各轮源码身份保留。此处接受持久化、故障恢复及请求准入的软件关卡；不接受 R3 性能、R4 公司问题归并、R5 入口收敛或 R6 新在线结果。能力和接口见[架构](architecture.md)、[发现契约](annual-discovery.md)及[导出契约](annual-report-export.md)，阶段标准见[恢复任务书](annual-analysis-recovery-plan.md)。
+
+正式基础报告在首个模型请求前保存完整恢复绑定和待处理阶段；批次与独立阶段结果经校验后发布不可变检查点，最终封存与部分可读明确区分。取消、硬截止和服务重启先关闭准入，再确认所属写入进程停止；无法确认时保留只读并暂缓续跑，不按裸 PID 终止未知进程。续跑创建新 job/run，复用成功批次及语义输入一致的已完成独立阶段，保留父归档和继承合格发现。每次实际联网尝试在持久账本准入，重试分别计数；已用账本缺失、损坏或结构不完整时拒绝外发。
+
+### 检查范围与原始证据
+
+以下均为离线、故障注入或本机 localhost HTTP。本机模拟 HTTP 有实际请求，真实配置服务请求为零。不同冻结版的定向检查不合并为最终完整套件计数。
+
+- 归档/检查点专项为 **110 passed、1 skipped**，JUnit 17.597 秒；跳过为 Windows 目录符号链接条件。覆盖双写者序号、最终封存、发布窗口、严格来源/引用、重试审计及旧归档兼容。后续读取器改动另经相关定向检查和实际 CLI 复核。[范围、命令与结果](../artifacts/evaluations/annual-recovery-r2-20261006/archive-final.json)、[JUnit](../artifacts/evaluations/annual-recovery-r2-20261006/archive-final.xml)。
+- 连接器/准入专项分别为 **46、15、9** 项通过，另有阻塞和滴流两项通过。12 个实际独立进程争用五次额度，仅允许五次 HTTP；重启保留计数，耗尽、旧 gate、账本缺失或损坏均拒绝。请求子进程有界退出，实际 Popen/PID 退出已核对。[核心 JUnit](../artifacts/evaluations/annual-recovery-r2-20261006/provider-runtime-20261006T205000-postfix-core-unit-03/core-unit-junit.xml)、[进程/HTTP JUnit](../artifacts/evaluations/annual-recovery-r2-20261006/provider-runtime-20261006T213000-postfix-integration-04/integration-junit.xml)、[最终边界证据](../artifacts/evaluations/annual-recovery-r2-20261006/provider-runtime-20261006T223000-postfix-final-boundaries-01/)。
+- `71a9eac…` 冻结版 **八个实际 CLI 场景通过**：鉴权停止、连续连接故障、首请求取消、非法响应、固定候选鉴权停止、候选阶段取消/续跑、绑定漂移及部分父链多代续跑。每项有实际 argv、源码/加载身份、JUnit、退出码、本机 HTTP 与严格读取记录。partial child/grandchild 均只请求批次 3/4，固定调查和评审没有新 HTTP，原成功评审审计仍可读；新增语义输入触发新评审，sealed completed parent 被零请求拒绝，原父链不变。最后一项 JUnit 79.978 秒。[主控八场景审阅与逐项入口](../artifacts/evaluations/annual-recovery-controller-20261006/r2-eight-cli-review-20261007T124043.json)。
+- 所属进程停止/超时定向检查为 **8 passed、42 deselected**，JUnit 11.275 秒；compile 与前端 typecheck/build exit 0。最终页面源码 SHA 为 `6dc526caf569999f8b4db132af74836425fda5a56103b4caf47441a7e3cb0b9d`。构建有既有单块大于 500 KB 的提示，未扩大范围拆包。[进程定向证据](../artifacts/evaluations/annual-recovery-r2-20261006/frontend-owner-stop-timeout-attempt-20261007T0342Z-95b8ac0ee7d24d89b68451729e50d2c1/)、[最终文案与构建证据](../artifacts/evaluations/annual-recovery-r2-20261006/frontend-queued-cancel-copy-9d577de0da4145aa89b4d513da8b16e7/)。
+
+实际 API 轮询曾发现 Windows 正式报告原子替换失败（WinError 5）：AI 阶段已完成，指针仍为 running/partial sequence 16，而 manifest/job 被错误描述为 completed_with_issues。该原始失败及 partial 读取保留，不能记作最终封存通过。[缺陷独立核对](../artifacts/evaluations/annual-recovery-controller-20261006/r2-final-publication-failure-20261007T125451.json)。修复仅对指定 Windows 错误码最多六次有界重试；持续报告或最终指针发布失败写失败记录、failed manifest 与 exit 2，保留最后可信 partial。seal 已发布后的终态 manifest 替换失败则保留旧 manifest 和 sealed 指针，不破坏严格发布窗口。
+
+发布修复为 **24 passed、0 failed/error/skipped**，JUnit 32.636 秒、exit 0；另有 sealed→manifest 窗口一项通过（JUnit 0.260 秒）和严格 failed-manifest/partial-reader probe。该 fault suite 的 AI 行为为注入，新 API/浏览器另行实际验证。[发布故障证据](../artifacts/evaluations/annual-recovery-r2-20261006/report-publication-fault-20261007T0501Z/)、[主控修复审阅](../artifacts/evaluations/annual-recovery-controller-20261006/r2-publication-repair-review-20261007T131013.json)。最终后端源码 manifest SHA 为 `a09bef320bcc2f6c58a5108bcdbeb06d0aa8eaf8db520bd8176503d0d7fe0477`，CLI fingerprint 为 `b13bf43078d9903928648f44212d91cd34bc50a9264cebca6156d2662e0252c9`；主控确认 72/72 实际文件一致，API/CLI 加载身份匹配。此前八场景所用扫描、连接器、账本和严格读取源码未被这次发布修复改变，修复后的实际业务发布则由下面两个浏览器场景验证。[最终源码独立核对](../artifacts/evaluations/annual-recovery-controller-20261006/r2-source-freeze-review-20261007T130433.json)。
+
+### 实际 API、浏览器与失败恢复
+
+先前实际 API/Vite/system Chrome 验证了受阻请求期间基础报告可读、下一请求受阻期间合格发现可见、排队取消无 CLI/无保存报告误称、运行取消的 partial 刷新及三导出、同一模型服务绑定重启后的严格只读与可续跑。各次错误 harness 期望、旧读取包装遗漏与 Windows 心跳失败均保留当时失败结果，修正后再核对，未放宽生产绑定。原始失败目录和审阅入口集中于[阶段审阅记录](../artifacts/evaluations/annual-recovery-controller-20261006/r2-intermediate-review.json)。
+
+**60 秒 owner deadline / 90 秒受阻 HTTP：** 64.318 秒内记录 analysis_timeout，保留首个合格 finding、failed/partial sequence 4，gate 关闭且仅两次准入，无第三请求。截止前记录所属 CLI 与请求 worker 的创建身份；原脚本执行到页面检查前的停止断言，随后因不存在的“分析超时”标签失败，原浏览器尝试仍为 failed。后续只读审计严格重载报告并核对落盘状态；进程复核在脚本清理后执行，其范围未冒称为截止后完整变量原始记录。[原尝试](../artifacts/evaluations/annual-recovery-r2-20261006/browser-owner-timeout-fb64efded17447409d867e427b8bfa16/browser-evidence.json)、[只读状态审计](../artifacts/evaluations/annual-recovery-r2-20261006/browser-owner-timeout-state-audit-a81aa3a962b646c2ab3eb94464915fb4/stdout.json)。
+
+**新版实际续跑、刷新、历史与三导出：** 在新冻结版隔离副本复用上述超时父任务，无须重跑 60 秒故障。新 child `annual-job-d2a4232f20304ef3a97a9f835580ac25` / `annual-analysis-9a01ee93-e1c7-4802-bbf6-0da8774c2241` 最终 completed、sealed sequence 17、is_partial=false。父批次 1 复用且零新 HTTP，只请求批次 2–9；发现 8 次、固定调查 2 次、评审 1 次，共 11 次，与 gate admission 相同，父链累计 13 次。页面路由/刷新、API 历史和 JSON/Markdown/HTML 的正文与响应头同为 completed/17/false/同一父 run。主控核对三文件实际字节数/SHA、两张截图、72 个副本源码及 24 个父产物，均一致。direct runner exit 0，无 JUnit；原终端流未另重定向的限制已记录，API/Vite 日志及 JSON 保留。[浏览器结果与逐项证据](../artifacts/evaluations/annual-recovery-r2-20261006/browser-timeout-parent-resume-412eb7e3305c44b4aa804129c5141613/browser-evidence.json)、[主控独立核对](../artifacts/evaluations/annual-recovery-controller-20261006/r2-browser-child-review-20261007T131911.json)。
+
+**并发读取及最后版本投递：** 单独复用同一受控 partial 父副本，只补此前没有及时挂好的轮询关卡。新 child `annual-job-4d00027450714aacbc1f87ab05783fe0` / `annual-analysis-74d2dfaf-03b8-4920-b5d9-80fb279cc223` 读取时间线为 running/partial sequence 2→10→sealed completed sequence 17；job 仍 running 时即可严格读取已经发布的封存快照。浏览器实际持有旧 sequence 2 响应，在终态 API 结果落盘后才释放；随后重新 GET 并收到 sequence 17，最终 DOM 展示完成状态和续跑发现。两次读取的 job/report 可能因正常并发推进使用不同序号，每个单独读取与导出内部保持一致。父 24 项哈希不变，发现 8+调查 2+评审 1 等于 11 次本机 HTTP 和准入。direct runner exit 0，API/Vite 收证后退出；主控阅读时间线并查看最终截图。过晚启动、连接被拒绝的旧 poller 单列失败，不算通过。[完整时间线、截图与命令](../artifacts/evaluations/annual-recovery-r2-20261006/browser-report-timeline-ec8643af444e4f14802076e47d248ddd/report-timeline-evidence.json)。
+
+### 阶段边界与后续
+
+原始保护基线共 703 个文件；最终主控核对缺失/变化零。用户初始产品路线/验收文档修改、计划书 Word 删除与另名文件、原 PDF 均保留；本阶段仅暂存本任务文件及主控新增验收段落，不纳入其他未提交内容，不 push。tmp 默认保留。正式产物位于 `artifacts/evaluations/annual-recovery-r2-20261006/`，主控[最终阶段审阅](../artifacts/evaluations/annual-recovery-controller-20261006/r2-accepted-review.json)记录保护证据、验收范围和本地提交身份。
+
+本 goal 真实配置服务请求累计 **0/80**，剩余 **80**；尚未读取真实模型配置。R3 同源输入压缩与有限主报告预算、R4 全部发现归并、R5 普通入口及 R6 两份新在线结果仍待执行。当前源码不表示 15/90/300 秒真实性能目标已通过；最终完整后端套件、前端构建和最终浏览器矩阵留在 R6 最终代码上验收。真人财务复核及其他外部交付关卡保持未通过状态。

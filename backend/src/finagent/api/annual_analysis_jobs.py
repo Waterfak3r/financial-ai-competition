@@ -6,11 +6,15 @@ import hashlib
 import json
 import os
 import re
+import signal
 import stat
 import subprocess
 import sys
 import threading
-from concurrent.futures import ThreadPoolExecutor
+import time
+import atexit
+import ctypes
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,6 +32,13 @@ from finagent.core.annual_runtime_identity import (
 )
 from finagent.core.model_settings import ModelConfigError
 from finagent.core.model_settings_store import ModelSettingsStoreError, resolve_model_settings
+from finagent.core.annual_checkpoints import AnnualCheckpointError, save_annual_checkpoint
+from finagent.core.annual_recovery import (
+    read_gate_admission_count,
+    select_call_gate_database,
+    validate_annual_recovery_parent,
+)
+from finagent.core.model_call_ledger import close_admission_gate, open_admission_gate
 
 _COMPANY_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,64}$")
 _DOCUMENT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -45,6 +56,11 @@ _MIN_CLI_TIMEOUT_SECONDS = 60
 _MAX_DETERMINISTIC_CLI_TIMEOUT_SECONDS = 900
 _MAX_MODEL_CLI_TIMEOUT_SECONDS = 3600
 _RUNTIME_PROBE_TIMEOUT_SECONDS = 15
+_CALL_LIVENESS_INTERVAL_SECONDS = 1.0
+_CALL_LIVENESS_STALE_SECONDS = 5.0
+_RECOVERY_OWNER_WAIT_SECONDS = 12.0
+_RECOVERY_OWNER_POLL_INTERVAL_SECONDS = 0.1
+_CANCEL_GRACE_SECONDS = 3.0
 _SERVICE_REGISTRY_LOCK = threading.Lock()
 _SERVICE_REGISTRY: dict[str, "AnnualAnalysisJobService"] = {}
 
@@ -88,6 +104,17 @@ class AnnualAnalysisJobService:
         )
         self._lock = threading.RLock()
         self._states: dict[str, dict[str, Any]] = {}
+        self._futures: dict[str, Future[Any]] = {}
+        self._processes: dict[str, subprocess.Popen[str]] = {}
+        self._heartbeats: dict[str, tuple[threading.Event, threading.Thread]] = {}
+        self._slot_owners: set[str] = set()
+        self._cancel_requested: set[str] = set()
+        self._cancel_owner_stopped: set[str] = set()
+        self._liveness_failed: set[str] = set()
+        self._cancel_finalizing: set[str] = set()
+        self._cancel_done: dict[str, threading.Event] = {}
+        self._recovery_settling: set[str] = set()
+        self._closing = False
         self.api_runtime_identity = dict(
             api_runtime_identity or capture_api_runtime_identity(self.project_root)
         )
@@ -145,8 +172,12 @@ class AnnualAnalysisJobService:
                     "run_id": None,
                     "result_url": None,
                     "error": None,
+                    "_cli_owner_expected": False,
+                    "recovery_capability": {"can_resume": False, "reason": "recovery_not_available"},
+                    "recovery_progress": _empty_recovery_progress(None),
                 }
                 self._states[job_id] = state
+                self._slot_owners.add(job_id)
                 try:
                     _write_state(job_dir / "job.json", state, create=True)
                 except Exception:
@@ -161,7 +192,7 @@ class AnnualAnalysisJobService:
                         pass
                     raise
                 try:
-                    self._executor.submit(self._execute, job_id)
+                    self._futures[job_id] = self._executor.submit(self._execute, job_id)
                     submitted = True
                 except RuntimeError:
                     state.update(
@@ -175,6 +206,7 @@ class AnnualAnalysisJobService:
                     )
                     _write_state(job_dir / "job.json", state, create=False)
                     self._slots.release()
+                    self._slot_owners.discard(job_id)
                     submitted = True
                 return _public_state(state)
         except Exception:
@@ -184,6 +216,7 @@ class AnnualAnalysisJobService:
 
     def get(self, job_id: str) -> dict[str, Any]:
         checked = _validate_job_id(job_id)
+        self._settle_pending_recovery(checked)
         with self._lock:
             job_dir = _safe_existing_job_dir(self.jobs_root, checked)
             state_path = _safe_regular_file(job_dir / "job.json", self.project_root)
@@ -191,16 +224,225 @@ class AnnualAnalysisJobService:
             if state.get("job_id") != checked:
                 raise AnnualAnalysisJobError(404, "job_not_found", "找不到该年度分析任务。")
             self._states[checked] = state
-            public = _public_state(state)
-            public["result_availability"] = _result_availability_projection(
-                self.project_root,
-                state,
+            state = dict(state)
+        public = _public_state(state)
+        public["result_availability"] = _result_availability_projection(self.project_root, state)
+        public["recovery_progress"] = self._recovery_progress_projection(state)
+        public["recovery_capability"] = self._recovery_capability_projection(state, public["result_availability"])
+        recovery = _discovery_recovery_projection(self.project_root, state)
+        if recovery is not None:
+            public["recovery"] = recovery
+        if state.get("status") == "running" and state.get("stage") == "annual_analysis_cli":
+            progress = _read_discovery_progress(job_dir, checked, state)
+            if progress is not None:
+                public["discovery_progress"] = progress
+        return public
+
+    def cancel(self, job_id: str) -> dict[str, Any]:
+        """Close admission before requesting cancellation; terminal jobs stay immutable."""
+
+        checked = _validate_job_id(job_id)
+        process: subprocess.Popen[str] | None = None
+        gate_db: Path | None = None
+        terminal = False
+        with self._lock:
+            state = self._load_persisted_state_locked(checked)
+            status = state.get("status")
+            if status not in {"queued", "running"}:
+                terminal = True
+            future = self._futures.get(checked)
+            if not terminal and status == "queued" and future is not None and future.cancel():
+                self._futures.pop(checked, None)
+                state.update(
+                    status="cancelled",
+                    stage="cancelled",
+                    updated_at=_utc_now(),
+                    error=None,
+                )
+                self._persist_state_locked(checked, state)
+                self._release_slot_once_locked(checked)
+                state = dict(state)
+            elif not terminal:
+                state = None
+            if not terminal and state is None:
+                self._cancel_requested.add(checked)
+                gate_value = self._load_persisted_state_locked(checked).get("_call_gate_db")
+                gate_db = Path(gate_value) if isinstance(gate_value, str) else None
+                process = self._processes.get(checked)
+                # Do not advertise cancellation until the SQLite admission
+                # transaction has closed the gate below.
+        if terminal or state is not None:
+            return self.get(checked)
+
+        if gate_db is not None:
+            try:
+                self._close_job_gate(checked, gate_db)
+            except Exception:
+                # Fail closed at the process boundary too. Never continue a
+                # running request when the persistent gate cannot be closed.
+                self._write_cancel_marker(checked)
+                self._stop_owned_process(checked, process)
+                self._mark_cancel_pending(
+                    checked,
+                    code="call_gate_unavailable",
+                    message="模型调用闸门无法确认关闭；已请求停止，已保存报告可只读查看，暂不能续跑。",
+                )
+                raise AnnualAnalysisJobError(
+                    503,
+                    "call_gate_unavailable",
+                    "模型调用闸门无法确认关闭；任务仍在收束，暂不能续跑。",
+                ) from None
+        self._write_cancel_marker(checked)
+        with self._lock:
+            try:
+                state = self._load_persisted_state_locked(checked)
+            except AnnualAnalysisJobError:
+                state = None
+            if state is not None and state.get("status") in {"queued", "running"}:
+                state["stage"] = "cancellation_requested"
+                self._persist_state_locked(checked, state)
+        if self._stop_owned_process(checked, process):
+            self._finish_cancelled(checked)
+        else:
+            self._mark_cancel_pending(checked)
+        return self.get(checked)
+
+    def resume(self, parent_job_id: str, parent_run_id: str) -> dict[str, Any]:
+        """Create one immutable child job for a strictly validated recoverable parent."""
+
+        checked_parent_job = _validate_job_id(parent_job_id)
+        checked_parent_run = _safe_run_id(parent_run_id)
+        self._ensure_runtime_compatible()
+        self._settle_pending_recovery(checked_parent_job)
+        with self._lock:
+            parent_state = self._load_persisted_state_locked(checked_parent_job)
+            if parent_state.get("run_id") != checked_parent_run:
+                raise AnnualAnalysisJobError(409, "recovery_parent_mismatch", "父任务与父运行编号不匹配。")
+            if parent_state.get("_recovery_owner_pending") is True:
+                raise AnnualAnalysisJobError(
+                    409,
+                    "parent_active",
+                    "原年度分析进程尚未确认停止；已保存报告可只读查看，暂不能续跑。",
+                )
+            if parent_state.get("status") in {"queued", "running"}:
+                raise AnnualAnalysisJobError(409, "parent_active", "父年度分析任务仍在运行，暂不能续跑。")
+            if self._has_active_child_locked(checked_parent_job, checked_parent_run):
+                raise AnnualAnalysisJobError(409, "already_has_active_child", "该父运行已有续跑任务正在执行。")
+            parent_request = parent_state.get("request")
+            if not isinstance(parent_request, Mapping):
+                raise AnnualAnalysisJobError(409, "recovery_parent_invalid", "父任务请求记录无效，不能续跑。")
+            normalized = validate_job_request(self.project_root, parent_request)
+
+        try:
+            archive = load_annual_report(self.project_root, checked_parent_run)
+        except AnnualReportReadError as exc:
+            code = "source_invalid" if _is_source_validation_error(exc.code) else "recovery_not_available"
+            raise AnnualAnalysisJobError(409, code, "父运行未通过当前来源与报告严格校验，不能续跑。") from None
+        try:
+            settings = resolve_model_settings(self.project_root)
+        except (ModelConfigError, ModelSettingsStoreError):
+            raise AnnualAnalysisJobError(409, "binding_missing", "父运行的模型绑定无法确认，不能续跑。") from None
+        capability = validate_annual_recovery_parent(
+            self.project_root,
+            checked_parent_run,
+            normalized,
+            settings=settings,
+            archive=archive,
+        )
+        if capability.get("can_resume") is not True:
+            reason = _public_recovery_reason(capability.get("reason"))
+            raise AnnualAnalysisJobError(
+                409,
+                reason,
+                _recovery_reason_message(reason),
             )
-            if state.get("status") == "running" and state.get("stage") == "annual_analysis_cli":
-                progress = _read_discovery_progress(job_dir, checked, state)
-                if progress is not None:
-                    public["discovery_progress"] = progress
-            return public
+
+        if not self._slots.acquire(blocking=False):
+            raise AnnualAnalysisJobError(429, "job_capacity_reached", "年度分析任务队列已满，请稍后重试。")
+        submitted = False
+        child_job_id: str | None = None
+        try:
+            with self._lock:
+                latest_parent = self._load_persisted_state_locked(checked_parent_job)
+                if latest_parent.get("status") in {"queued", "running"}:
+                    raise AnnualAnalysisJobError(409, "parent_active", "父年度分析任务仍在运行，暂不能续跑。")
+                if self._has_active_child_locked(checked_parent_job, checked_parent_run):
+                    raise AnnualAnalysisJobError(409, "already_has_active_child", "该父运行已有续跑任务正在执行。")
+                _ensure_artifact_directories(self.project_root, include_job_root=True)
+                child_job_id = f"annual-job-{uuid4().hex}"
+                child_dir = self.jobs_root / child_job_id
+                child_dir.mkdir(exist_ok=False)
+                parent_progress = self._recovery_progress_projection(latest_parent)
+                now = _utc_now()
+                state = {
+                    "job_id": child_job_id,
+                    "status": "queued",
+                    "stage": "queued",
+                    "created_at": now,
+                    "updated_at": now,
+                    "request": normalized,
+                    "run_id": None,
+                    "result_url": None,
+                    "error": None,
+                    "_cli_owner_expected": False,
+                    "parent_job_id": checked_parent_job,
+                    "parent_run_id": checked_parent_run,
+                    "recovery": {
+                        "contract_version": "fintrace_annual_recovery_v1",
+                        "parent_run_id": checked_parent_run,
+                        "reused_batches": 0,
+                        "current_attempts": 0,
+                    },
+                    "recovery_progress": _empty_recovery_progress(
+                        checked_parent_run,
+                        parent_provider_admission_count=parent_progress["cumulative_provider_admission_count"],
+                    ),
+                    "recovery_capability": {"can_resume": False, "reason": "recovery_not_available"},
+                }
+                self._states[child_job_id] = state
+                self._slot_owners.add(child_job_id)
+                _write_state(child_dir / "job.json", state, create=True)
+                try:
+                    self._futures[child_job_id] = self._executor.submit(self._execute, child_job_id)
+                except RuntimeError:
+                    state.update(
+                        status="failed",
+                        stage="failed",
+                        updated_at=_utc_now(),
+                        error={
+                            "code": "job_executor_unavailable",
+                            "message": "年度分析服务当前无法启动续跑任务，请稍后重试。",
+                        },
+                    )
+                    self._persist_state_locked(child_job_id, state)
+                    self._release_slot_once_locked(child_job_id)
+                    submitted = True
+                    return _public_state(state)
+                submitted = True
+                return _public_state(state)
+        finally:
+            if not submitted:
+                with self._lock:
+                    if child_job_id is not None and child_job_id in self._slot_owners:
+                        state = self._states.get(child_job_id)
+                        if state is not None and state.get("status") == "queued":
+                            state.update(
+                                status="failed",
+                                stage="failed",
+                                updated_at=_utc_now(),
+                                error={
+                                    "code": "job_executor_unavailable",
+                                    "message": "年度分析服务未能启动续跑任务。",
+                                },
+                            )
+                            try:
+                                self._persist_state_locked(child_job_id, state)
+                            except (AnnualAnalysisJobError, OSError, ValueError):
+                                self._states.pop(child_job_id, None)
+                        self._futures.pop(child_job_id, None)
+                        self._release_slot_once_locked(child_job_id)
+                    else:
+                        self._slots.release()
 
     def runtime_diagnostics(self) -> dict[str, Any]:
         current_source_fingerprint, current_source_file_count = source_manifest_fingerprint(self.project_root)
@@ -259,25 +501,85 @@ class AnnualAnalysisJobService:
             )
 
     def _execute(self, job_id: str) -> None:
+        heartbeat_stop: threading.Event | None = None
+        run_id: str | None = None
         try:
-            state = self._load_state(job_id)
+            with self._lock:
+                state = self._load_persisted_state_locked(job_id)
+                if state.get("status") == "cancelled":
+                    return
+                if state.get("status") != "queued":
+                    return
             self._ensure_runtime_compatible()
-            self._update(job_id, status="running", stage="validating_source", error=None)
             normalized = validate_job_request(self.project_root, state["request"])
-            self._update(job_id, stage="annual_analysis_cli")
+            run_id = self._reserve_run_id()
+            job_dir = _safe_existing_job_dir(self.jobs_root, job_id)
+            gate_db = select_call_gate_database(self.project_root, job_dir)
+            open_admission_gate(gate_db, job_id)
+            with self._lock:
+                current = self._load_persisted_state_locked(job_id)
+                if current.get("status") == "cancelled" or job_id in self._cancel_requested:
+                    close_admission_gate(gate_db, job_id)
+                    self._cancel_owner_stopped.add(job_id)
+                    self._finish_cancelled(job_id)
+                    return
+                current.update(
+                    status="running",
+                    stage="validating_source",
+                    run_id=run_id,
+                    result_url=f"/v1/annual-analyses/{run_id}",
+                    error=None,
+                    _call_gate_db=str(gate_db),
+                )
+                current["recovery_progress"] = self._initial_recovery_progress(current)
+                self._persist_state_locked(job_id, current)
+            heartbeat_stop = self._start_heartbeat(job_id, job_dir / "call-liveness")
             artifacts_root = self.project_root / "artifacts"
             runner_request = dict(normalized)
             runner_request["_internal_job_id"] = job_id
+            runner_request["_reserved_run_id"] = run_id
+            runner_request["_request_mode"] = normalized["mode"]
+            runner_request["_resume_parent_run_id"] = state.get("parent_run_id")
+            runner_request["_call_gate_db"] = str(gate_db)
+            runner_request["_call_cancel_file"] = str(job_dir / "call-cancel")
+            runner_request["_call_liveness_file"] = str(job_dir / "call-liveness")
+            runner_request["_call_stopped_file"] = str(job_dir / "call-stopped")
+            runner_request["_active_source_sha256"] = str(normalized["sha256"])
+            runner_request["_register_process"] = lambda process: self._register_process(job_id, process)
             runner_request["_expected_runtime_fingerprint"] = str(
                 self.cli_startup_identity["fingerprint"]
             )
+            with self._lock:
+                if job_id in self._cancel_requested:
+                    # This check and the durable owner flag are serialized
+                    # with cancel(). A false flag proves this worker has not
+                    # handed control to Popen yet.
+                    self._cancel_owner_stopped.add(job_id)
+                    self._finish_cancelled(job_id)
+                    return
+                current = self._load_persisted_state_locked(job_id)
+                current["stage"] = "annual_analysis_cli"
+                current["_cli_owner_expected"] = True
+                self._persist_state_locked(job_id, current)
             result = _invoke_cli(self.project_root, artifacts_root, runner_request)
-            run_id = _run_id_from_output(result.stdout + "\n" + result.stderr)
-            if run_id is None:
+            reported_run_id = _run_id_from_output(result.stdout + "\n" + result.stderr)
+            if job_id in self._cancel_requested:
+                self._finish_cancelled(job_id)
+                return
+            if reported_run_id is not None and reported_run_id != run_id:
+                self._finish_failure(
+                    job_id,
+                    "analysis_run_id_mismatch",
+                    "年度分析进程返回的运行编号与预分配编号不一致。",
+                    run_id=run_id,
+                )
+                return
+            if reported_run_id is None:
                 self._finish_failure(
                     job_id,
                     "analysis_run_id_missing",
                     "年度分析进程未返回有效 run_id，无法确认报告归档。",
+                    run_id=run_id,
                 )
                 return
             self._update(job_id, run_id=run_id, stage="validating_report_archive")
@@ -335,23 +637,41 @@ class AnnualAnalysisJobService:
                 error=None,
             )
         except AnnualAnalysisJobError as exc:
-            self._finish_failure(job_id, exc.code, exc.message)
+            if job_id in self._cancel_requested:
+                self._finish_cancelled(job_id)
+            else:
+                self._finish_failure(job_id, exc.code, exc.message, run_id=run_id)
         except subprocess.TimeoutExpired:
-            self._finish_failure(
-                job_id,
-                "analysis_timeout",
-                "年度分析超过配置的运行时限，分析进程已终止；请检查 PDF 后重新提交。",
-            )
+            if job_id in self._cancel_requested:
+                self._finish_cancelled(job_id)
+            else:
+                self._finish_cli_failure_after_stop(
+                    job_id,
+                    run_id,
+                    failure_kind="timeout",
+                    code="analysis_timeout",
+                    message="年度分析超过配置的运行时限，分析进程已终止；请检查 PDF 后重新提交。",
+                )
         except Exception:
             # Never persist exception text or a subprocess traceback. It may
             # contain local paths or environment-specific values.
-            self._finish_failure(
-                job_id,
-                "analysis_worker_failed",
-                "年度分析任务执行失败；请检查运行归档并重新提交。",
-            )
+            if job_id in self._cancel_requested:
+                self._finish_cancelled(job_id)
+            else:
+                self._finish_cli_failure_after_stop(
+                    job_id,
+                    run_id,
+                    failure_kind="worker",
+                    code="analysis_worker_failed",
+                    message="年度分析任务执行失败；请检查运行归档并重新提交。",
+                )
         finally:
-            self._slots.release()
+            if heartbeat_stop is not None:
+                self._stop_heartbeat(job_id, heartbeat_stop)
+            with self._lock:
+                self._processes.pop(job_id, None)
+                self._futures.pop(job_id, None)
+                self._release_slot_once_locked(job_id)
 
     def _load_state(self, job_id: str) -> dict[str, Any]:
         with self._lock:
@@ -362,13 +682,10 @@ class AnnualAnalysisJobService:
 
     def _update(self, job_id: str, **fields: Any) -> dict[str, Any]:
         with self._lock:
-            state = self._states.get(job_id)
-            if state is None:
-                raise AnnualAnalysisJobError(404, "job_not_found", "找不到该年度分析任务。")
+            state = self._load_persisted_state_locked(job_id)
             state.update(fields)
             state["updated_at"] = _utc_now()
-            job_dir = _safe_existing_job_dir(self.jobs_root, job_id)
-            _write_state(job_dir / "job.json", state, create=False)
+            self._persist_state_locked(job_id, state)
             return _public_state(state)
 
     def _finish_failure(
@@ -379,14 +696,562 @@ class AnnualAnalysisJobService:
         *,
         run_id: str | None = None,
     ) -> None:
-        self._update(
-            job_id,
-            status="failed",
-            stage="failed",
-            run_id=run_id,
-            result_url=None,
-            error={"code": code, "message": message},
+        with self._lock:
+            state = self._load_persisted_state_locked(job_id)
+            if state.get("status") in {"completed", "completed_with_issues", "cancelled"}:
+                return
+            actual_run_id = run_id if run_id is not None else state.get("run_id")
+        if isinstance(actual_run_id, str) and self._preserve_sealed_result(job_id, actual_run_id):
+            return
+        with self._lock:
+            state = self._load_persisted_state_locked(job_id)
+            if state.get("status") in {"completed", "completed_with_issues", "cancelled"}:
+                return
+            state.update(
+                status="failed",
+                stage="failed",
+                run_id=actual_run_id,
+                result_url=f"/v1/annual-analyses/{actual_run_id}" if actual_run_id else None,
+                error={"code": code, "message": message},
+            )
+            self._persist_state_locked(job_id, state)
+
+    def _load_persisted_state_locked(self, job_id: str) -> dict[str, Any]:
+        checked = _validate_job_id(job_id)
+        job_dir = _safe_existing_job_dir(self.jobs_root, checked)
+        state_path = _safe_regular_file(job_dir / "job.json", self.project_root)
+        state = _read_json_object(state_path, _MAX_SOURCE_RECORD_BYTES)
+        if state.get("job_id") != checked:
+            raise AnnualAnalysisJobError(404, "job_not_found", "找不到该年度分析任务。")
+        self._states[checked] = state
+        return state
+
+    def _persist_state_locked(self, job_id: str, state: dict[str, Any]) -> None:
+        state["updated_at"] = _utc_now()
+        job_dir = _safe_existing_job_dir(self.jobs_root, job_id)
+        _write_state(job_dir / "job.json", state, create=False)
+        self._states[job_id] = dict(state)
+
+    def _release_slot_once_locked(self, job_id: str) -> None:
+        if job_id in self._slot_owners:
+            self._slot_owners.remove(job_id)
+            self._slots.release()
+
+    def _register_process(self, job_id: str, process: subprocess.Popen[str]) -> None:
+        cancel_requested = False
+        with self._lock:
+            self._processes[job_id] = process
+            state = self._load_persisted_state_locked(job_id)
+            witness = _runner_owner_witness(process)
+            if witness is not None:
+                state["_runner_owner"] = witness
+                self._persist_state_locked(job_id, state)
+            cancel_requested = job_id in self._cancel_requested
+        if cancel_requested:
+            if self._terminate_owned_process(process):
+                with self._lock:
+                    self._cancel_owner_stopped.add(job_id)
+            else:
+                self._mark_cancel_pending(job_id)
+
+    def _start_heartbeat(self, job_id: str, path: Path) -> threading.Event:
+        stop = threading.Event()
+        _touch_owned_file(path, self.project_root)
+
+        def run() -> None:
+            while not stop.wait(_CALL_LIVENESS_INTERVAL_SECONDS):
+                try:
+                    _refresh_owned_file_mtime(path, self.project_root)
+                except (AnnualAnalysisJobError, OSError, NotImplementedError):
+                    self._fail_closed_liveness(job_id)
+
+        thread = threading.Thread(target=run, name=f"annual-liveness-{job_id[-8:]}", daemon=True)
+        with self._lock:
+            self._heartbeats[job_id] = (stop, thread)
+        thread.start()
+        return stop
+
+    def _stop_heartbeat(self, job_id: str, stop: threading.Event) -> None:
+        stop.set()
+        with self._lock:
+            heartbeat = self._heartbeats.pop(job_id, None)
+        if heartbeat is not None and heartbeat[1].is_alive():
+            heartbeat[1].join(timeout=2.0)
+
+    def _write_cancel_marker(self, job_id: str) -> None:
+        job_dir = _safe_existing_job_dir(self.jobs_root, job_id)
+        path = job_dir / "call-cancel"
+        try:
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
+        except FileExistsError:
+            return
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(b"cancelled\n")
+            handle.flush()
+
+    def _close_job_gate(self, job_id: str, database_path: Path) -> None:
+        job_dir = _safe_existing_job_dir(self.jobs_root, job_id)
+        local_database = (job_dir / "call-gate.sqlite3").resolve()
+        try:
+            configured_database = select_call_gate_database(self.project_root, job_dir).resolve()
+        except Exception:
+            configured_database = local_database
+        checked_database = Path(database_path).resolve()
+        if checked_database not in {local_database, configured_database}:
+            raise AnnualAnalysisJobError(409, "call_gate_path_invalid", "本任务调用闸门路径不属于其隔离任务或当前共享账本。")
+        close_admission_gate(checked_database, job_id)
+
+    def _stop_owned_process(self, job_id: str, process: subprocess.Popen[str] | None) -> bool:
+        if process is None:
+            with self._lock:
+                process = self._processes.get(job_id)
+                state = self._states.get(job_id)
+            if process is None:
+                run_id = state.get("run_id") if isinstance(state, Mapping) else None
+                if isinstance(run_id, str) and _call_stopped_marker_matches(self.jobs_root / job_id, run_id):
+                    return True
+                if isinstance(state, Mapping) and state.get("_cli_owner_expected") is False:
+                    return True
+                return False
+        stopped = self._terminate_owned_process(process)
+        if stopped:
+            with self._lock:
+                self._cancel_owner_stopped.add(job_id)
+        return stopped
+
+    @staticmethod
+    def _terminate_owned_process(process: subprocess.Popen[str]) -> bool:
+        if process.poll() is not None:
+            return True
+        try:
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    capture_output=True,
+                    text=True,
+                    timeout=_CANCEL_GRACE_SECONDS,
+                    check=False,
+                )
+                try:
+                    process.wait(timeout=_CANCEL_GRACE_SECONDS)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=_CANCEL_GRACE_SECONDS)
+            else:
+                os.killpg(process.pid, signal.SIGTERM)
+                try:
+                    process.wait(timeout=_CANCEL_GRACE_SECONDS)
+                except subprocess.TimeoutExpired:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait(timeout=_CANCEL_GRACE_SECONDS)
+        except (OSError, subprocess.TimeoutExpired):
+            try:
+                process.kill()
+            except OSError:
+                pass
+            try:
+                process.wait(timeout=_CANCEL_GRACE_SECONDS)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        return process.poll() is not None
+
+    def _mark_cancel_pending(
+        self,
+        job_id: str,
+        *,
+        code: str = "process_stop_unconfirmed",
+        message: str = "已请求停止并正在确认原进程停止；已保存报告可只读查看，暂不能续跑。",
+    ) -> None:
+        with self._lock:
+            try:
+                current = self._load_persisted_state_locked(job_id)
+            except AnnualAnalysisJobError:
+                return
+            if current.get("status") in {"completed", "completed_with_issues", "failed", "cancelled"}:
+                return
+            current.update(
+                stage="cancellation_requested",
+                error={"code": code, "message": message},
+            )
+            current["_recovery_owner_pending"] = True
+            current["_recovery_owner_required"] = _runner_may_be_active(
+                current,
+                self._processes.get(job_id),
+            )
+            if current["_recovery_owner_required"]:
+                current["_recovery_terminal_target"] = "cancelled"
+                current.pop("_recovery_failure_kind", None)
+            self._persist_state_locked(job_id, current)
+
+    def _finish_cli_failure_after_stop(
+        self,
+        job_id: str,
+        run_id: str | None,
+        *,
+        failure_kind: str,
+        code: str,
+        message: str,
+    ) -> None:
+        """Close admission and prove the owned CLI stopped before sealing failure."""
+
+        with self._lock:
+            try:
+                current = self._load_persisted_state_locked(job_id)
+            except AnnualAnalysisJobError:
+                return
+            gate_value = current.get("_call_gate_db")
+            process = self._processes.get(job_id)
+
+        gate_closed = False
+        if isinstance(gate_value, str):
+            try:
+                self._close_job_gate(job_id, Path(gate_value))
+                gate_closed = True
+            except Exception:
+                gate_closed = False
+        try:
+            self._write_cancel_marker(job_id)
+            cancel_written = True
+        except (OSError, AnnualAnalysisJobError):
+            cancel_written = False
+
+        stop_confirmed = self._stop_owned_process(job_id, process)
+        if stop_confirmed and gate_closed and cancel_written:
+            self._append_terminal_checkpoint(run_id, "failed")
+            self._finish_failure(job_id, code, message, run_id=run_id)
+            return
+
+        # A sealed final report wins the completion race, but remains
+        # non-resumable until both the owner and its admission boundary settle.
+        if isinstance(run_id, str):
+            self._preserve_sealed_result(job_id, run_id)
+        with self._lock:
+            try:
+                current = self._load_persisted_state_locked(job_id)
+            except AnnualAnalysisJobError:
+                return
+            if current.get("status") not in {"completed", "completed_with_issues"}:
+                current.update(
+                    status="interrupted",
+                    stage="interrupted",
+                    run_id=run_id,
+                    result_url=f"/v1/annual-analyses/{run_id}" if isinstance(run_id, str) else None,
+                )
+            current["error"] = {
+                "code": "process_stop_unconfirmed",
+                "message": "已请求停止并正在确认原分析进程停止；已保存报告可只读查看，暂不能续跑。",
+            }
+            current["_recovery_owner_pending"] = True
+            current["_recovery_owner_required"] = True
+            current["_recovery_terminal_target"] = "failed"
+            current["_recovery_failure_kind"] = failure_kind
+            self._persist_state_locked(job_id, current)
+
+    def _fail_closed_liveness(self, job_id: str) -> None:
+        with self._lock:
+            if job_id in self._liveness_failed:
+                return
+            self._liveness_failed.add(job_id)
+            try:
+                state = self._load_persisted_state_locked(job_id)
+            except AnnualAnalysisJobError:
+                return
+            if state.get("status") != "running":
+                return
+            self._cancel_requested.add(job_id)
+            gate_value = state.get("_call_gate_db")
+            process = self._processes.get(job_id)
+            state["stage"] = "cancellation_requested"
+            state["error"] = {
+                "code": "call_liveness_unavailable",
+                "message": "本地调用心跳无法安全更新；已请求停止并正在确认原进程停止，已保存报告可只读查看，暂不能续跑。",
+            }
+            self._persist_state_locked(job_id, state)
+        if isinstance(gate_value, str):
+            try:
+                self._close_job_gate(job_id, Path(gate_value))
+            except Exception:
+                pass
+        try:
+            self._write_cancel_marker(job_id)
+        except (OSError, AnnualAnalysisJobError):
+            pass
+        if self._stop_owned_process(job_id, process):
+            self._finish_cancelled(job_id)
+        else:
+            self._mark_cancel_pending(job_id)
+
+    def _finish_cancelled(self, job_id: str) -> None:
+        with self._lock:
+            current = self._load_persisted_state_locked(job_id)
+            if current.get("status") in {"completed", "completed_with_issues", "failed", "cancelled"}:
+                return
+            if job_id in self._cancel_finalizing:
+                done = self._cancel_done.setdefault(job_id, threading.Event())
+                first = False
+                run_id = current.get("run_id")
+            else:
+                self._cancel_finalizing.add(job_id)
+                done = self._cancel_done.setdefault(job_id, threading.Event())
+                first = True
+                run_id = current.get("run_id")
+        if not first:
+            done.wait(timeout=10.0)
+            return
+        if isinstance(run_id, str) and self._preserve_sealed_result(job_id, run_id):
+            with self._lock:
+                self._cancel_finalizing.discard(job_id)
+                done.set()
+            return
+        with self._lock:
+            current = self._load_persisted_state_locked(job_id)
+            process = self._processes.get(job_id)
+            run_id = current.get("run_id")
+            writer_may_be_active = _runner_may_be_active(current, process)
+            stop_confirmed = job_id in self._cancel_owner_stopped or (
+                isinstance(run_id, str)
+                and _runner_stop_confirmed(self.jobs_root / job_id, current, run_id, process)
+            )
+        if writer_may_be_active and not stop_confirmed:
+            if process is not None:
+                stop_confirmed = self._terminate_owned_process(process)
+                if stop_confirmed:
+                    with self._lock:
+                        self._cancel_owner_stopped.add(job_id)
+            if not stop_confirmed:
+                self._mark_cancel_pending(job_id)
+                with self._lock:
+                    self._cancel_finalizing.discard(job_id)
+                    done.set()
+                return
+        if isinstance(run_id, str):
+            self._append_terminal_checkpoint(run_id, "cancelled")
+        with self._lock:
+            current = self._load_persisted_state_locked(job_id)
+            if current.get("status") in {"completed", "completed_with_issues", "failed"}:
+                self._cancel_finalizing.discard(job_id)
+                done.set()
+                return
+            current.update(
+                status="cancelled",
+                stage="cancelled",
+                result_url=f"/v1/annual-analyses/{run_id}" if isinstance(run_id, str) else None,
+                error=None,
+            )
+            current.pop("_recovery_owner_pending", None)
+            current.pop("_recovery_owner_required", None)
+            current.pop("_recovery_terminal_target", None)
+            current.pop("_recovery_failure_kind", None)
+            self._persist_state_locked(job_id, current)
+            self._cancel_owner_stopped.discard(job_id)
+            self._liveness_failed.discard(job_id)
+            self._cancel_finalizing.discard(job_id)
+            done.set()
+
+    def _preserve_sealed_result(self, job_id: str, run_id: str) -> bool:
+        try:
+            archive = load_annual_report(self.project_root, run_id)
+        except Exception:
+            return False
+        snapshot = archive.snapshot
+        if isinstance(snapshot, Mapping):
+            if snapshot.get("is_partial") is True:
+                return False
+            terminal = snapshot.get("state")
+        else:
+            terminal = archive.manifest_summary.get("status")
+        if terminal not in {"completed", "completed_with_issues"}:
+            return False
+        with self._lock:
+            state = self._load_persisted_state_locked(job_id)
+            if state.get("status") not in {"queued", "running", "completed", "completed_with_issues"}:
+                return False
+            process = self._processes.get(job_id)
+            owner_may_be_active = _runner_may_be_active(state, process)
+            owner_stopped = _runner_stop_confirmed(
+                self.jobs_root / job_id,
+                state,
+                run_id,
+                process,
+            )
+            pending = owner_may_be_active and not owner_stopped
+            state.update(
+                status=terminal,
+                stage=terminal,
+                run_id=run_id,
+                result_url=f"/v1/annual-analyses/{run_id}",
+                error=(
+                    {
+                        "code": "process_stop_unconfirmed",
+                        "message": "报告已完成保存；正在确认原分析进程停止，暂不能续跑。",
+                    }
+                    if pending
+                    else None
+                ),
+            )
+            if pending:
+                state["_recovery_owner_pending"] = True
+                state["_recovery_owner_required"] = True
+            else:
+                state.pop("_recovery_owner_pending", None)
+                state.pop("_recovery_owner_required", None)
+                state.pop("_recovery_terminal_target", None)
+                state.pop("_recovery_failure_kind", None)
+                if owner_stopped:
+                    self._cancel_owner_stopped.discard(job_id)
+            self._persist_state_locked(job_id, state)
+        return True
+
+    def _append_terminal_checkpoint(self, run_id: str | None, state: str) -> None:
+        if not isinstance(run_id, str):
+            return
+        try:
+            archive = load_annual_report(self.project_root, run_id)
+        except Exception:
+            return
+        snapshot = archive.snapshot
+        if not isinstance(snapshot, Mapping) or snapshot.get("is_partial") is not True:
+            return
+        if snapshot.get("state") in {"completed", "completed_with_issues"}:
+            return
+        parent_run_id = snapshot.get("parent_run_id")
+        source_sha = archive.manifest_summary.get("source_pdf_sha256")
+        try:
+            if snapshot.get("state") != state:
+                save_annual_checkpoint(
+                    self.project_root,
+                    run_id,
+                    {
+                        "state": state,
+                        "is_partial": True,
+                        "parent_run_id": parent_run_id,
+                        "source_sha256": source_sha,
+                        "report": archive.report,
+                    },
+                )
+            _set_running_manifest_terminal_status(self.project_root, run_id, "interrupted" if state == "cancelled" else state)
+        except (AnnualCheckpointError, AnnualReportReadError, AnnualAnalysisJobError, OSError, ValueError):
+            return
+
+    def _recovery_progress_for_state(self, state: Mapping[str, Any]) -> dict[str, Any]:
+        saved = state.get("recovery_progress")
+        if isinstance(saved, Mapping) and saved.get("contract_version") == "fintrace_annual_recovery_v1":
+            return dict(saved)
+        parent_run_id = state.get("parent_run_id") if isinstance(state.get("parent_run_id"), str) else None
+        return _empty_recovery_progress(parent_run_id)
+
+    def _initial_recovery_progress(self, state: Mapping[str, Any]) -> dict[str, Any]:
+        parent = self._recovery_progress_for_state(state)
+        return _empty_recovery_progress(
+            parent.get("parent_run_id"),
+            parent_provider_admission_count=parent.get("parent_provider_admission_count", 0),
         )
+
+    def _recovery_progress_projection(self, state: Mapping[str, Any]) -> dict[str, Any]:
+        current = state.get("recovery_progress")
+        if not isinstance(current, Mapping):
+            current = _empty_recovery_progress(None)
+        count = 0
+        job_id = state.get("job_id")
+        gate_db_value = state.get("_call_gate_db")
+        if isinstance(job_id, str) and isinstance(gate_db_value, str):
+            try:
+                count = read_gate_admission_count(Path(gate_db_value), job_id)
+            except Exception:
+                raise AnnualAnalysisJobError(
+                    503,
+                    "recovery_ledger_unavailable",
+                    "本任务的模型准入记录暂不可安全读取，未返回推测计数。",
+                ) from None
+        parent_count = current.get("parent_provider_admission_count", 0)
+        if type(parent_count) is not int or parent_count < 0:
+            raise AnnualAnalysisJobError(503, "recovery_ledger_unavailable", "父子运行准入计数记录无效。")
+        now = _utc_now()
+        return {
+            "contract_version": "fintrace_annual_recovery_v1",
+            "parent_run_id": current.get("parent_run_id"),
+            "parent_provider_admission_count": parent_count,
+            "current_provider_admission_count": count,
+            "cumulative_provider_admission_count": parent_count + count,
+            "reused_batch_count": _reused_batch_count_for_state(self.project_root, state),
+            "updated_at": now,
+        }
+
+    def _recovery_capability_projection(
+        self,
+        state: Mapping[str, Any],
+        availability: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        status = state.get("status")
+        if state.get("_recovery_owner_pending") is True:
+            return {"can_resume": False, "reason": "parent_active"}
+        if status in {"queued", "running"}:
+            return {"can_resume": False, "reason": "parent_active"}
+        if status not in {"completed_with_issues", "failed", "interrupted", "cancelled"}:
+            return {"can_resume": False, "reason": "recovery_not_available"}
+        if availability.get("status") != "available" or not isinstance(state.get("run_id"), str):
+            return {"can_resume": False, "reason": "source_invalid" if availability.get("category") == "source_validation_failed" else "recovery_not_available"}
+        try:
+            archive = load_annual_report(self.project_root, str(state["run_id"]))
+            request = state.get("request")
+            if not isinstance(request, Mapping):
+                return {"can_resume": False, "reason": "binding_missing"}
+            normalized = validate_job_request(self.project_root, request)
+            settings = resolve_model_settings(self.project_root)
+            result = validate_annual_recovery_parent(
+                self.project_root,
+                str(state["run_id"]),
+                normalized,
+                settings=settings,
+                archive=archive,
+            )
+        except AnnualReportReadError as exc:
+            return {"can_resume": False, "reason": "source_invalid" if _is_source_validation_error(exc.code) else "recovery_not_available"}
+        except (AnnualAnalysisJobError, ModelConfigError, ModelSettingsStoreError, OSError, ValueError):
+            return {"can_resume": False, "reason": "binding_missing"}
+        if result.get("can_resume") is True:
+            with self._lock:
+                parent_job_id = state.get("job_id")
+                parent_run_id = state.get("run_id")
+                if isinstance(parent_job_id, str) and isinstance(parent_run_id, str) and self._has_active_child_locked(parent_job_id, parent_run_id):
+                    return {"can_resume": False, "reason": "already_has_active_child"}
+            return {"can_resume": True, "reason": "recoverable_batches"}
+        return {"can_resume": False, "reason": _public_recovery_reason(result.get("reason"))}
+
+    def _has_active_child_locked(self, parent_job_id: str, parent_run_id: str) -> bool:
+        for candidate in self._states.values():
+            if (
+                candidate.get("parent_job_id") == parent_job_id
+                and candidate.get("parent_run_id") == parent_run_id
+                and candidate.get("status") in {"queued", "running"}
+            ):
+                return True
+        return False
+
+    def _reserve_run_id(self) -> str:
+        for _ in range(5):
+            run_id = f"annual-analysis-{uuid4()}"
+            run_dir = self.project_root / "artifacts" / "runs" / run_id
+            report_dir = self.project_root / "artifacts" / "reports" / run_id
+            if not run_dir.exists() and not report_dir.exists():
+                return run_id
+        raise AnnualAnalysisJobError(503, "run_id_collision", "未能分配唯一年度分析运行编号。")
+
+    def shutdown(self) -> None:
+        with self._lock:
+            if self._closing:
+                return
+            self._closing = True
+            active_ids = [
+                job_id for job_id, state in self._states.items()
+                if state.get("status") in {"queued", "running"}
+            ]
+        for job_id in active_ids:
+            try:
+                self.cancel(job_id)
+            except Exception:
+                pass
+        self._executor.shutdown(wait=True, cancel_futures=True)
 
     def _recover_interrupted_jobs(self) -> None:
         jobs_root = self.jobs_root
@@ -408,20 +1273,381 @@ class AnnualAnalysisJobService:
                 if state.get("job_id") != name or state.get("status") not in {"queued", "running"}:
                     self._states[name] = state
                     continue
+                run_id = state.get("run_id")
+                runner_started = _runner_may_be_active(state, None)
+                safe_to_finalize = True
+                gate_value = state.get("_call_gate_db")
+                if isinstance(gate_value, str):
+                    try:
+                        self._close_job_gate(name, Path(gate_value))
+                    except Exception:
+                        safe_to_finalize = False
+                elif runner_started:
+                    safe_to_finalize = False
+                try:
+                    self._write_cancel_marker(name)
+                except (OSError, AnnualAnalysisJobError):
+                    safe_to_finalize = False
+                if runner_started:
+                    safe_to_finalize = safe_to_finalize and self._wait_for_prior_runner_stop(
+                        entry,
+                        state,
+                        run_id if isinstance(run_id, str) else None,
+                    )
                 state.update(
                     status="interrupted",
                     stage="interrupted",
                     updated_at=_utc_now(),
-                    result_url=None,
+                    result_url=f"/v1/annual-analyses/{run_id}" if isinstance(run_id, str) else None,
                     error={
                         "code": "service_interrupted",
-                        "message": "服务在任务完成前退出；该任务已标记为中断，请重新提交。",
+                        "message": "服务在任务完成前退出；已请求停止并正在确认原进程停止，已保存报告可只读查看，暂不能续跑。",
                     },
                 )
+                state["_recovery_owner_pending"] = True
+                state["_recovery_owner_required"] = runner_started
                 _write_state(state_path, state, create=False)
                 self._states[name] = state
+                if safe_to_finalize:
+                    self._settle_pending_recovery(name)
             except (OSError, ValueError, AnnualAnalysisJobError, json.JSONDecodeError):
                 continue
+
+    def _wait_for_prior_runner_stop(
+        self,
+        job_dir: Path,
+        state: Mapping[str, Any],
+        run_id: str | None,
+    ) -> bool:
+        deadline = time.monotonic() + _RECOVERY_OWNER_WAIT_SECONDS
+        while True:
+            if _call_stopped_marker_matches(job_dir, run_id):
+                return True
+            owner_status = _runner_owner_status(state.get("_runner_owner"))
+            if owner_status == "stopped":
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(_RECOVERY_OWNER_POLL_INTERVAL_SECONDS)
+
+    def _settle_pending_recovery(self, job_id: str) -> None:
+        with self._lock:
+            try:
+                state = self._load_persisted_state_locked(job_id)
+            except AnnualAnalysisJobError:
+                return
+            if state.get("_recovery_owner_pending") is not True or job_id in self._recovery_settling:
+                return
+            self._recovery_settling.add(job_id)
+        try:
+            job_dir = _safe_existing_job_dir(self.jobs_root, job_id)
+            run_id = state.get("run_id") if isinstance(state.get("run_id"), str) else None
+            owner_required = state.get("_recovery_owner_required") is True
+            owner_stopped = (
+                job_id in self._cancel_owner_stopped
+                or _call_stopped_marker_matches(job_dir, run_id)
+                or _runner_owner_status(state.get("_runner_owner")) == "stopped"
+            )
+            if owner_required and not owner_stopped:
+                return
+            gate_value = state.get("_call_gate_db")
+            if owner_required and not isinstance(gate_value, str):
+                return
+            if isinstance(gate_value, str):
+                try:
+                    self._close_job_gate(job_id, Path(gate_value))
+                except Exception:
+                    return
+            if run_id is not None:
+                try:
+                    archive = load_annual_report(self.project_root, run_id)
+                except AnnualReportReadError:
+                    archive = None
+                snapshot = archive.snapshot if archive is not None else None
+                if (
+                    isinstance(snapshot, Mapping)
+                    and snapshot.get("is_partial") is False
+                    and snapshot.get("state") in {"completed", "completed_with_issues"}
+                ):
+                    final_status = str(snapshot["state"])
+                    error = None
+                else:
+                    target = state.get("_recovery_terminal_target")
+                    checkpoint_state = (
+                        target
+                        if target in {"failed", "interrupted", "cancelled"}
+                        else (
+                            "failed"
+                            if archive is not None and archive.manifest_summary.get("status") == "failed"
+                            else "interrupted"
+                        )
+                    )
+                    self._append_terminal_checkpoint(run_id, checkpoint_state)
+                    final_status = checkpoint_state
+                    if checkpoint_state == "cancelled":
+                        error = None
+                    elif checkpoint_state == "failed" and target == "failed":
+                        error = _deferred_failure_error(state.get("_recovery_failure_kind"))
+                    else:
+                        error = {
+                            "code": "service_interrupted",
+                            "message": "服务在任务完成前退出；已确认原分析进程停止，保存的报告仍可只读查看。",
+                        }
+            else:
+                target = state.get("_recovery_terminal_target")
+                final_status = target if target in {"failed", "interrupted", "cancelled"} else "interrupted"
+                if final_status == "cancelled":
+                    error = None
+                elif final_status == "failed" and target == "failed":
+                    error = _deferred_failure_error(state.get("_recovery_failure_kind"))
+                else:
+                    error = {
+                        "code": "service_interrupted",
+                        "message": "服务在任务完成前退出；任务未启动分析进程。",
+                    }
+            with self._lock:
+                current = self._load_persisted_state_locked(job_id)
+                current.update(
+                    status=final_status,
+                    stage=final_status,
+                    updated_at=_utc_now(),
+                    error=error,
+                )
+                current.pop("_recovery_owner_pending", None)
+                current.pop("_recovery_owner_required", None)
+                current.pop("_recovery_terminal_target", None)
+                current.pop("_recovery_failure_kind", None)
+                self._persist_state_locked(job_id, current)
+                self._cancel_owner_stopped.discard(job_id)
+        finally:
+            with self._lock:
+                self._recovery_settling.discard(job_id)
+
+
+def _runner_owner_witness(process: subprocess.Popen[str]) -> dict[str, Any] | None:
+    pid = getattr(process, "pid", None)
+    if type(pid) is not int or pid <= 0:
+        return None
+    token = _process_start_token_from_handle(process)
+    if token is None:
+        status, token = _process_start_token_for_pid(pid)
+        if status != "alive":
+            return None
+    return {"pid": pid, "start_token": token}
+
+
+def _deferred_failure_error(failure_kind: object) -> dict[str, str]:
+    if failure_kind == "timeout":
+        return {
+            "code": "analysis_timeout",
+            "message": "年度分析超过配置的运行时限，分析进程已终止；请检查 PDF 后重新提交。",
+        }
+    return {
+        "code": "analysis_worker_failed",
+        "message": "年度分析任务执行失败；请检查运行归档并重新提交。",
+    }
+
+
+def _runner_may_be_active(
+    state: Mapping[str, Any],
+    process: subprocess.Popen[str] | None,
+) -> bool:
+    if process is not None or isinstance(state.get("_runner_owner"), Mapping):
+        return True
+    if state.get("_cli_owner_expected") is True:
+        return True
+    if state.get("_cli_owner_expected") is False:
+        return False
+    # Older job records did not persist the explicit owner flag. Keep their
+    # ambiguous post-cancel state fail-closed.
+    return state.get("stage") in {"annual_analysis_cli", "cancellation_requested"}
+
+
+def _runner_stop_confirmed(
+    job_dir: Path,
+    state: Mapping[str, Any],
+    run_id: str,
+    process: subprocess.Popen[str] | None,
+) -> bool:
+    if not _runner_may_be_active(state, process):
+        return True
+    if _call_stopped_marker_matches(job_dir, run_id):
+        return True
+    if process is not None:
+        try:
+            return process.poll() is not None
+        except (OSError, subprocess.SubprocessError):
+            return False
+    return False
+
+
+def _runner_owner_status(value: Any) -> str:
+    if not isinstance(value, Mapping):
+        return "unknown"
+    pid = value.get("pid")
+    expected_token = value.get("start_token")
+    if type(pid) is not int or pid <= 0 or not isinstance(expected_token, str) or not expected_token:
+        return "unknown"
+    status, current_token = _process_start_token_for_pid(pid)
+    if status == "stopped":
+        return "stopped"
+    if status != "alive" or current_token is None:
+        return "unknown"
+    # A different process now using the same PID is not evidence about the
+    # original owner. Require its explicit stop marker or keep recovery closed.
+    return "alive" if current_token == expected_token else "unknown"
+
+
+def _process_start_token_from_handle(process: subprocess.Popen[str]) -> str | None:
+    if os.name != "nt":
+        return None
+    handle = getattr(process, "_handle", None)
+    if handle is None:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _FileTime(ctypes.Structure):
+            _fields_ = [("low", wintypes.DWORD), ("high", wintypes.DWORD)]
+
+        created = _FileTime()
+        exited = _FileTime()
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.GetProcessTimes.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(_FileTime),
+            ctypes.POINTER(_FileTime),
+            ctypes.POINTER(_FileTime),
+            ctypes.POINTER(_FileTime),
+        ]
+        kernel.GetProcessTimes.restype = wintypes.BOOL
+        if not kernel.GetProcessTimes(
+            wintypes.HANDLE(int(handle)),
+            ctypes.byref(created),
+            ctypes.byref(exited),
+            ctypes.byref(_FileTime()),
+            ctypes.byref(_FileTime()),
+        ):
+            return None
+        return f"win:{created.high:08x}{created.low:08x}"
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+
+
+def _process_start_token_for_pid(pid: int) -> tuple[str, str | None]:
+    if os.name == "nt":
+        return _windows_process_start_token(pid)
+    if sys.platform.startswith("linux"):
+        return _linux_process_start_token(pid)
+    return "unknown", None
+
+
+def _windows_process_start_token(pid: int) -> tuple[str, str | None]:
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _FileTime(ctypes.Structure):
+            _fields_ = [("low", wintypes.DWORD), ("high", wintypes.DWORD)]
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.GetProcessTimes.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(_FileTime),
+            ctypes.POINTER(_FileTime),
+            ctypes.POINTER(_FileTime),
+            ctypes.POINTER(_FileTime),
+        ]
+        kernel.GetProcessTimes.restype = wintypes.BOOL
+        kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel.WaitForSingleObject.restype = wintypes.DWORD
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle.restype = wintypes.BOOL
+        handle = kernel.OpenProcess(0x00100000 | 0x1000, False, pid)  # SYNCHRONIZE | QUERY_LIMITED_INFORMATION
+        if not handle:
+            error = ctypes.get_last_error()
+            if error in {6, 87, 1168}:  # invalid handle/parameter or no such process
+                return "stopped", None
+            return "unknown", None
+        try:
+            if kernel.WaitForSingleObject(handle, 0) == 0:
+                return "stopped", None
+            created = _FileTime()
+            if not kernel.GetProcessTimes(
+                handle,
+                ctypes.byref(created),
+                ctypes.byref(_FileTime()),
+                ctypes.byref(_FileTime()),
+                ctypes.byref(_FileTime()),
+            ):
+                return "unknown", None
+            return "alive", f"win:{created.high:08x}{created.low:08x}"
+        finally:
+            kernel.CloseHandle(handle)
+    except (AttributeError, OSError, TypeError, ValueError):
+        return "unknown", None
+
+
+def _linux_process_start_token(pid: int) -> tuple[str, str | None]:
+    try:
+        process_stat = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+    except FileNotFoundError:
+        return "stopped", None
+    except (OSError, UnicodeError):
+        return "unknown", None
+    close_paren = process_stat.rfind(")")
+    if close_paren < 0:
+        return "unknown", None
+    fields = process_stat[close_paren + 1 :].split()
+    if len(fields) <= 19:
+        return "unknown", None
+    if fields[0] == "Z":
+        return "stopped", None
+    try:
+        start_ticks = int(fields[19])
+        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
+    except (OSError, UnicodeError, ValueError):
+        return "unknown", None
+    if start_ticks < 0 or not boot_id:
+        return "unknown", None
+    return "alive", f"linux:{boot_id}:{start_ticks}"
+
+
+def _call_stopped_marker_matches(job_dir: Path, run_id: str | None) -> bool:
+    if run_id is None or _RUN_ID.fullmatch(f"run_id={run_id}") is None:
+        return False
+    path = job_dir / "call-stopped"
+    descriptor: int | None = None
+    try:
+        before = path.lstat()
+        if _is_reparse_point(before) or not stat.S_ISREG(before.st_mode) or before.st_size > 128:
+            return False
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0),
+        )
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or _is_reparse_point(opened)
+            or _file_identity(before) != _file_identity(opened)
+            or opened.st_size > 128
+        ):
+            return False
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            data = handle.read(129)
+        after = path.lstat()
+        if _is_reparse_point(after) or _file_identity(opened) != _file_identity(after):
+            return False
+    except OSError:
+        return False
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    return data == (run_id + "\n").encode("utf-8")
 
 
 def validate_job_request(project_root: Path, request: Mapping[str, Any]) -> dict[str, Any]:
@@ -514,6 +1740,7 @@ def get_annual_analysis_job_service(
         if service is None:
             service = AnnualAnalysisJobService(root, api_runtime_identity=api_runtime_identity)
             _SERVICE_REGISTRY[key] = service
+            atexit.register(service.shutdown)
         return service
 
 
@@ -592,13 +1819,41 @@ def _invoke_cli(project_root: Path, artifacts_root: Path, request: Mapping[str, 
         "--expected-runtime-fingerprint",
         expected_runtime_fingerprint,
     ]
+    reserved_run_id = request.get("_reserved_run_id")
+    if isinstance(reserved_run_id, str):
+        command.extend(["--run-id", _safe_run_id(reserved_run_id)])
+        command.extend(["--request-mode", str(request.get("_request_mode", request["mode"]))])
+    parent_run_id = request.get("_resume_parent_run_id")
+    if parent_run_id is not None:
+        if request["mode"] not in {"model_investigation", "integrated_analysis"}:
+            raise RuntimeError("确定性年度分析任务不能续跑 AI 父运行。")
+        command.extend(["--resume-parent-run-id", _safe_run_id(str(parent_run_id))])
     if request["mode"] in {"m3_screening", "integrated_analysis"}:
         command.append("--with-m3-screening")
     environment = _cli_environment_without_credentials()
+    internal_job_id = request.get("_internal_job_id")
+    call_gate_db = request.get("_call_gate_db")
+    cancel_file = request.get("_call_cancel_file")
+    liveness_file = request.get("_call_liveness_file")
+    stopped_file = request.get("_call_stopped_file")
+    active_source_sha = request.get("_active_source_sha256")
+    if isinstance(internal_job_id, str) and _JOB_ID.fullmatch(internal_job_id):
+        if not all(isinstance(value, str) and value for value in (call_gate_db, cancel_file, liveness_file, active_source_sha)):
+            raise RuntimeError("任务模型准入控制字段无效。")
+        environment.update(
+            {
+                "FINTRACE_CALL_GATE_DB": str(Path(call_gate_db).resolve()),
+                "FINTRACE_CALL_GATE_KEY": internal_job_id,
+                "FINTRACE_CALL_CANCEL_FILE": str(Path(cancel_file).resolve()),
+                "FINTRACE_CALL_LIVENESS_FILE": str(Path(liveness_file).resolve()),
+                "FINTRACE_ACTIVE_SOURCE_SHA256": active_source_sha,
+            }
+        )
+        if isinstance(stopped_file, str) and stopped_file:
+            environment["FINTRACE_CALL_STOPPED_FILE"] = str(Path(stopped_file).resolve())
     if request["mode"] in {"model_investigation", "integrated_analysis"}:
         source_record = source_pdf.parent / "source.json"
         command.extend(["--with-model", "--source-record", str(source_record)])
-        internal_job_id = request.get("_internal_job_id")
         if isinstance(internal_job_id, str) and _JOB_ID.fullmatch(internal_job_id):
             command.extend(["--discovery-progress-job-id", internal_job_id])
         settings = resolve_model_settings(project_root)
@@ -609,6 +1864,41 @@ def _invoke_cli(project_root: Path, artifacts_root: Path, request: Mapping[str, 
                 "MODEL_NAME": settings.model,
             }
         )
+    timeout = _configured_cli_timeout_seconds(str(request["mode"]))
+    register_process = request.get("_register_process")
+    if callable(register_process):
+        process = subprocess.Popen(
+            command,
+            cwd=project_root,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            start_new_session=os.name != "nt",
+            creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0,
+        )
+        register_process(process)
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _terminate_process_tree(process)
+                try:
+                    stdout, stderr = process.communicate(timeout=_CANCEL_GRACE_SECONDS)
+                except subprocess.TimeoutExpired:
+                    stdout, stderr = "", ""
+                raise subprocess.TimeoutExpired(command, timeout, output=stdout, stderr=stderr)
+            try:
+                stdout, stderr = process.communicate(timeout=min(1.0, remaining))
+                break
+            except subprocess.TimeoutExpired:
+                continue
+        return CliResult(process.returncode, stdout, stderr)
+
+    # Keep the direct, unmanaged helper path compatible with callers that use
+    # the legacy internal runner tests or invoke this private helper directly.
     completed = subprocess.run(
         command,
         cwd=project_root,
@@ -618,7 +1908,7 @@ def _invoke_cli(project_root: Path, artifacts_root: Path, request: Mapping[str, 
         encoding="utf-8",
         errors="replace",
         check=False,
-        timeout=_configured_cli_timeout_seconds(str(request["mode"])),
+        timeout=timeout,
     )
     return CliResult(completed.returncode, completed.stdout, completed.stderr)
 
@@ -678,9 +1968,19 @@ def _result_availability_projection(
     project_root: Path,
     state: Mapping[str, Any],
 ) -> dict[str, Any]:
+    unavailable = lambda category, message: {
+        "status": "unavailable",
+        "category": category,
+        "message": message,
+        "run_id": None,
+        "result_url": None,
+        "is_partial": False,
+        "snapshot_state": None,
+        "snapshot_sequence": 0,
+    }
     run_id = state.get("run_id")
-    if not isinstance(run_id, str) or state.get("status") not in {"failed", "interrupted"}:
-        return {"status": "unavailable", "category": "no_recovery_projection", "result_url": None, "message": None}
+    if not isinstance(run_id, str):
+        return unavailable("no_recovery_projection", None)
     try:
         archive = load_annual_report(project_root, run_id)
     except AnnualReportReadError as exc:
@@ -696,22 +1996,12 @@ def _result_availability_projection(
             if category == "source_validation_failed"
             else "报告归档不兼容或无法安全读取。"
         )
-        return {"status": "unavailable", "category": category, "result_url": None, "message": message}
+        return unavailable(category, message)
     except Exception:
-        return {
-            "status": "unavailable",
-            "category": "archive_incompatible",
-            "result_url": None,
-            "message": "报告归档无法安全读取，报告不可用。",
-        }
+        return unavailable("archive_incompatible", "报告归档无法安全读取，报告不可用。")
     request = state.get("request")
     if not isinstance(request, Mapping):
-        return {
-            "status": "unavailable",
-            "category": "source_validation_failed",
-            "result_url": None,
-            "message": "报告来源身份与原任务请求不一致，报告不可用。",
-        }
+        return unavailable("source_validation_failed", "报告来源身份与原任务请求不一致，报告不可用。")
     summary = archive.manifest_summary
     if (
         summary.get("company_id") != request.get("company_id")
@@ -719,17 +2009,45 @@ def _result_availability_projection(
         or summary.get("document_id") != request.get("document_id")
         or summary.get("source_pdf_sha256") != request.get("sha256")
     ):
+        return unavailable("source_validation_failed", "报告来源身份与原任务请求不一致，报告不可用。")
+    snapshot = archive.snapshot
+    snapshot_state = snapshot.get("state") if isinstance(snapshot, Mapping) else None
+    is_partial = snapshot.get("is_partial") is True if isinstance(snapshot, Mapping) else False
+    sequence = snapshot.get("sequence", 0) if isinstance(snapshot, Mapping) else 0
+    if type(sequence) is not int or sequence < 0:
+        return unavailable("archive_incompatible", "报告快照序号无效，报告不可用。")
+    job_status = state.get("status")
+    if is_partial:
         return {
-            "status": "unavailable",
-            "category": "source_validation_failed",
-            "result_url": None,
-            "message": "报告来源身份与原任务请求不一致，报告不可用。",
+            "status": "available",
+            "category": "partial_checkpoint_available",
+            "message": "已保存的部分年报报告可读取；AI 发现仍可能未完成。",
+            "run_id": run_id,
+            "result_url": f"/v1/annual-analyses/{run_id}",
+            "is_partial": True,
+            "snapshot_state": snapshot_state,
+            "snapshot_sequence": sequence,
+        }
+    if job_status in {"failed", "interrupted", "cancelled"}:
+        return {
+            "status": "available",
+            "category": "archive_readable_after_failure",
+            "message": "原任务仍为失败、中断或取消状态，但现有报告通过当前归档校验，可以只读查看。",
+            "run_id": run_id,
+            "result_url": f"/v1/annual-analyses/{run_id}",
+            "is_partial": False,
+            "snapshot_state": snapshot_state,
+            "snapshot_sequence": sequence,
         }
     return {
         "status": "available",
-        "category": "archive_readable_after_failure",
+        "category": "completed_report_available",
+        "message": None,
+        "run_id": run_id,
         "result_url": f"/v1/annual-analyses/{run_id}",
-        "message": "原任务仍为失败状态，但现有报告通过当前归档校验，可以只读查看。",
+        "is_partial": False,
+        "snapshot_state": snapshot_state,
+        "snapshot_sequence": sequence,
     }
 
 
@@ -1120,7 +2438,7 @@ def _write_state(path: Path, state: Mapping[str, Any], *, create: bool) -> None:
 
 
 def _public_state(state: Mapping[str, Any]) -> dict[str, Any]:
-    return {
+    public = {
         "job_id": state.get("job_id"),
         "status": state.get("status"),
         "stage": state.get("stage"),
@@ -1130,7 +2448,308 @@ def _public_state(state: Mapping[str, Any]) -> dict[str, Any]:
         "run_id": state.get("run_id"),
         "result_url": state.get("result_url"),
         "error": state.get("error"),
+        "recovery_capability": state.get("recovery_capability", {"can_resume": False, "reason": "recovery_not_available"}),
     }
+    for key in ("recovery", "recovery_progress"):
+        if isinstance(state.get(key), Mapping):
+            public[key] = dict(state[key])
+    return public
+
+
+def _empty_recovery_progress(
+    parent_run_id: str | None,
+    *,
+    parent_provider_admission_count: int = 0,
+) -> dict[str, Any]:
+    return {
+        "contract_version": "fintrace_annual_recovery_v1",
+        "parent_run_id": parent_run_id,
+        "parent_provider_admission_count": parent_provider_admission_count,
+        "current_provider_admission_count": 0,
+        "cumulative_provider_admission_count": parent_provider_admission_count,
+        "reused_batch_count": 0,
+        "updated_at": _utc_now(),
+    }
+
+
+def _public_recovery_reason(reason: Any) -> str:
+    if reason in {"recovery_parent_active", "parent_active"}:
+        return "parent_active"
+    if reason == "already_has_active_child":
+        return "already_has_active_child"
+    if reason in {"recovery_binding_missing", "recovery_binding_mismatch", "recovery_binding_unavailable"}:
+        return "binding_missing"
+    if reason in {"recovery_source_invalid", "source_invalid", "recovery_parent_invalid"}:
+        return "source_invalid"
+    return "recovery_not_available"
+
+
+def _recovery_reason_message(reason: str) -> str:
+    return {
+        "parent_active": "父年度分析任务仍在运行，暂不能续跑。",
+        "already_has_active_child": "该父运行已有续跑任务正在执行。",
+        "binding_missing": "父运行的模型、提示词或计划绑定无法确认，不能续跑。",
+        "source_invalid": "父运行未通过当前来源与报告严格校验，不能续跑。",
+        "recovery_not_available": "该报告没有通过严格校验的未完成 AI 工作，不能续跑。",
+    }.get(reason, "该报告不能安全续跑。")
+
+
+def _is_source_validation_error(code: str) -> bool:
+    return code in {
+        "source_sha256_mismatch", "source_pdf_invalid", "source_identity_mismatch",
+        "source_record_hash_mismatch", "source_document_mismatch", "archive_identity_mismatch",
+        "report_identity_mismatch", "evidence_source_mismatch", "annual_discovery_evidence_mismatch",
+        "annual_discovery_quote_mismatch", "narrative_evidence_source_mismatch",
+        "narrative_evidence_quote_mismatch",
+    }
+
+
+def _reused_batch_count_for_state(project_root: Path, state: Mapping[str, Any]) -> int:
+    run_id = state.get("run_id")
+    if isinstance(run_id, str):
+        try:
+            archive = load_annual_report(project_root, run_id)
+            discovery = archive.report.get("model_discovery")
+            contract = discovery.get("execution_contract") if isinstance(discovery, Mapping) else None
+            batches = contract.get("reused_batches") if isinstance(contract, Mapping) else None
+            if isinstance(batches, list) and all(type(item) is int and item > 0 for item in batches):
+                return len(batches)
+        except Exception:
+            pass
+    recovery = state.get("recovery")
+    reused = recovery.get("reused_batches") if isinstance(recovery, Mapping) else None
+    return reused if type(reused) is int and reused >= 0 else 0
+
+
+def _discovery_recovery_projection(project_root: Path, state: Mapping[str, Any]) -> dict[str, Any] | None:
+    recovery = state.get("recovery")
+    if not isinstance(recovery, Mapping):
+        return None
+    projection = dict(recovery)
+    run_id = state.get("run_id")
+    if isinstance(run_id, str):
+        try:
+            archive = load_annual_report(project_root, run_id)
+            discovery = archive.report.get("model_discovery")
+            contract = discovery.get("execution_contract") if isinstance(discovery, Mapping) else None
+            if isinstance(contract, Mapping):
+                attempts = contract.get("provider_admission_count")
+                batches = contract.get("reused_batches")
+                if type(attempts) is int and attempts >= 0 and isinstance(batches, list):
+                    projection["current_attempts"] = attempts
+                    projection["reused_batches"] = len(batches)
+        except Exception:
+            pass
+    return projection
+
+
+def _touch_owned_file(path: Path, project_root: Path) -> None:
+    try:
+        descriptor = os.open(
+            path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
+            0o600,
+        )
+    except FileExistsError:
+        _refresh_owned_file_mtime(path, project_root)
+        return
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(b"owner\n")
+        handle.flush()
+
+
+def _refresh_owned_file_mtime(path: Path, project_root: Path) -> None:
+    checked = _safe_regular_file(path, project_root)
+    if os.name == "nt":
+        _refresh_windows_regular_file_mtime(checked)
+    else:
+        _refresh_posix_regular_file_mtime(checked)
+
+
+def _refresh_posix_regular_file_mtime(path: Path) -> None:
+    before = path.lstat()
+    if _is_reparse_point(before) or not stat.S_ISREG(before.st_mode):
+        raise AnnualAnalysisJobError(409, "liveness_file_invalid", "本地调用心跳文件不是普通文件。")
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            _is_reparse_point(opened)
+            or not stat.S_ISREG(opened.st_mode)
+            or not _same_file_object(before, opened)
+        ):
+            raise AnnualAnalysisJobError(409, "liveness_file_changed", "本地调用心跳文件在更新期间发生变化。")
+        if os.utime not in os.supports_fd:
+            raise OSError("safe_file_handle_utime_unavailable")
+        os.utime(descriptor, None)
+        after = path.lstat()
+        if _is_reparse_point(after) or not stat.S_ISREG(after.st_mode) or not _same_file_object(opened, after):
+            raise AnnualAnalysisJobError(409, "liveness_file_changed", "本地调用心跳文件在更新期间发生变化。")
+    finally:
+        os.close(descriptor)
+
+
+def _refresh_windows_regular_file_mtime(path: Path) -> None:
+    from ctypes import wintypes
+
+    class _FileTime(ctypes.Structure):
+        _fields_ = [("low", wintypes.DWORD), ("high", wintypes.DWORD)]
+
+    class _ByHandleFileInformation(ctypes.Structure):
+        _fields_ = [
+            ("attributes", wintypes.DWORD),
+            ("creation_time", _FileTime),
+            ("last_access_time", _FileTime),
+            ("last_write_time", _FileTime),
+            ("volume_serial", wintypes.DWORD),
+            ("file_size_high", wintypes.DWORD),
+            ("file_size_low", wintypes.DWORD),
+            ("number_of_links", wintypes.DWORD),
+            ("file_index_high", wintypes.DWORD),
+            ("file_index_low", wintypes.DWORD),
+        ]
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.CreateFileW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    kernel.GetFileInformationByHandle.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(_ByHandleFileInformation),
+    ]
+    kernel.GetFileInformationByHandle.restype = wintypes.BOOL
+    kernel.SetFileTime.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(_FileTime),
+        ctypes.POINTER(_FileTime),
+        ctypes.POINTER(_FileTime),
+    ]
+    kernel.SetFileTime.restype = wintypes.BOOL
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+
+    generic_read_attributes = 0x0080
+    file_write_attributes = 0x0100
+    share_all = 0x00000001 | 0x00000002 | 0x00000004
+    open_existing = 3
+    open_reparse_point = 0x00200000
+    backup_semantics = 0x02000000
+    invalid_handle = ctypes.c_void_p(-1).value
+    handle = kernel.CreateFileW(
+        str(path),
+        generic_read_attributes | file_write_attributes,
+        share_all,
+        None,
+        open_existing,
+        open_reparse_point | backup_semantics,
+        None,
+    )
+    if handle is None or handle == invalid_handle:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        before = path.lstat()
+        information = _ByHandleFileInformation()
+        if not kernel.GetFileInformationByHandle(handle, ctypes.byref(information)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        file_index = (information.file_index_high << 32) | information.file_index_low
+        handle_identity = (information.volume_serial, file_index)
+        path_identity = (before.st_dev & 0xFFFFFFFF, before.st_ino)
+        if (
+            information.attributes & (_REPARSE_POINT_ATTRIBUTE | 0x00000010)
+            or _is_reparse_point(before)
+            or not stat.S_ISREG(before.st_mode)
+            or handle_identity != path_identity
+        ):
+            raise AnnualAnalysisJobError(409, "liveness_file_invalid", "本地调用心跳文件不是稳定的普通文件。")
+
+        windows_epoch_offset = 11_644_473_600
+        ticks = int((time.time() + windows_epoch_offset) * 10_000_000)
+        modified = _FileTime(ticks & 0xFFFFFFFF, (ticks >> 32) & 0xFFFFFFFF)
+        if not kernel.SetFileTime(handle, None, None, ctypes.byref(modified)):
+            raise ctypes.WinError(ctypes.get_last_error())
+
+        after = path.lstat()
+        if (
+            _is_reparse_point(after)
+            or not stat.S_ISREG(after.st_mode)
+            or (after.st_dev & 0xFFFFFFFF, after.st_ino) != handle_identity
+            or (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino)
+        ):
+            raise AnnualAnalysisJobError(409, "liveness_file_changed", "本地调用心跳文件在更新期间发生变化。")
+    finally:
+        kernel.CloseHandle(handle)
+
+
+def _same_file_object(left: os.stat_result, right: os.stat_result) -> bool:
+    return left.st_dev == right.st_dev and left.st_ino == right.st_ino
+
+
+def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                capture_output=True,
+                text=True,
+                timeout=_CANCEL_GRACE_SECONDS,
+                check=False,
+            )
+        else:
+            os.killpg(process.pid, signal.SIGTERM)
+            try:
+                process.wait(timeout=_CANCEL_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+    except (OSError, subprocess.TimeoutExpired):
+        try:
+            process.kill()
+        except OSError:
+            pass
+
+
+def _set_running_manifest_terminal_status(project_root: Path, run_id: str, status: str) -> None:
+    checked = _safe_run_id(run_id)
+    if status not in {"failed", "interrupted"}:
+        raise AnnualAnalysisJobError(422, "manifest_status_invalid", "运行归档终态无效。")
+    path = _safe_data_path(
+        project_root,
+        ("artifacts", "runs", checked, "manifest.json"),
+        directory=False,
+        missing_code="run_not_found",
+    )
+    manifest = _read_json_object(path, _MAX_SOURCE_RECORD_BYTES)
+    if manifest.get("run_id") != checked:
+        raise AnnualAnalysisJobError(409, "manifest_identity_mismatch", "运行归档身份不匹配。")
+    if manifest.get("status") != "running":
+        return
+    manifest["status"] = status
+    payload = (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    temporary = path.with_name(f".manifest.{uuid4().hex}.tmp")
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
+            0o600,
+        )
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+        os.replace(temporary, path)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _utc_now() -> str:

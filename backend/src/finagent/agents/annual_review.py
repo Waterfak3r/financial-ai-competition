@@ -83,6 +83,7 @@ def run_annual_model_review(
         result["reason"] = "model_review_run_binding_invalid"
         return result
     before = _run_children(run_dir)
+    audited = None
     try:
         prompt = _load_prompt()
         review_input, allowed_ids, evidence_refs, no_priority_allowed = _build_review_input(
@@ -104,6 +105,7 @@ def run_annual_model_review(
             run_dir=run_dir,
             evidence_refs=evidence_refs,
             prompt_version=PROMPT_VERSION,
+            call_stage="annual_review",
         )
         audit_artifacts = [_audit_artifact(audited.audit_dir, artifacts_root, "succeeded")]
         parsed = parse_model_review(
@@ -116,13 +118,23 @@ def run_annual_model_review(
             "reason": None,
             **parsed,
             "model_called": True,
-            "call_count": 1,
-            "call_attempt_count": 1,
+            "call_count": audited.response_count,
+            "call_attempt_count": audited.provider_admission_count,
             "audit_artifacts": audit_artifacts,
             "source_identity": identity,
         }
     except Exception as exc:
-        audits, attempts = _new_audits(run_dir, before, artifacts_root)
+        audits, _attempts_from_audit_dirs = _new_audits(run_dir, before, artifacts_root)
+        # Parsing happens after audited_complete_chat has durably accepted a
+        # response. Preserve that authoritative count if semantic validation
+        # rejects the response; only call failures get counts from the raised
+        # exception's admission ledger metadata.
+        if audited is not None:
+            attempts = audited.provider_admission_count
+            responses = audited.response_count
+        else:
+            attempts = _safe_exception_count(exc, "provider_admission_count")
+            responses = _safe_exception_count(exc, "response_count")
         response_present = any(a.get("response_path") for a in audits)
         known_response_reasons = {
             "model_review_response_invalid",
@@ -135,11 +147,16 @@ def run_annual_model_review(
         result.update(
             reason=safe_reason or ("model_review_response_invalid" if response_present else "model_review_call_failed"),
             model_called=attempts > 0,
-            call_count=1 if response_present else 0,
+            call_count=responses,
             call_attempt_count=attempts,
             audit_artifacts=audits,
         )
         return result
+
+
+def _safe_exception_count(exc: BaseException, field: str) -> int:
+    value = getattr(exc, field, 0)
+    return value if type(value) is int and 0 <= value <= 64 else 0
 
 
 def parse_model_review(

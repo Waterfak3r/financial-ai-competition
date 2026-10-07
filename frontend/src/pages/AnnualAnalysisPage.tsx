@@ -3,7 +3,12 @@ import type { FormEvent, MouseEvent, ReactNode, RefObject } from "react";
 import { loadAnnualAnalysisCapabilities } from "../api/annualAnalysisCapabilities";
 import { AnnualReportApiError, downloadAnnualAnalysisExport, loadAnnualAnalysis, loadVerificationEvidencePreview } from "../api/annualReports";
 import { loadAnnualAnalysisHistory } from "../api/annualAnalysisHistory";
-import { createAnnualAnalysisJob, loadAnnualAnalysisJob } from "../api/annualAnalysisJobs";
+import {
+  cancelAnnualAnalysisJob,
+  createAnnualAnalysisJob,
+  loadAnnualAnalysisJob,
+  resumeAnnualAnalysisJob,
+} from "../api/annualAnalysisJobs";
 import { loadDiscoveryEvidencePreview } from "../api/discoveryEvidences";
 import { loadNarrativeEvidences, loadNarrativeEvidencePreview } from "../api/narrativeEvidences";
 import { textPdfUploadIssues, uploadTextPdf } from "../api/prechecks";
@@ -16,6 +21,7 @@ import type {
   ConfirmedMetric,
   PdfBox,
   M3AnnualScreening,
+  AnnualAnalysisSnapshot,
   VerificationEvidence,
   VerifiedClaim,
 } from "../types/annualReport";
@@ -44,7 +50,7 @@ const CORE_METRICS = [
   { metricId: "operating_cash_flow", label: "经营活动产生的现金流量净额", tone: "orange" },
 ] as const;
 
-type JobAction = "uploading" | "starting" | "retrying" | "refreshing" | null;
+type JobAction = "uploading" | "starting" | "retrying" | "refreshing" | "cancelling" | "resuming" | null;
 interface JobFormErrors {
   file?: string;
   companyId?: string;
@@ -143,6 +149,8 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
   const jobRefreshLock = useRef(false);
   const jobReadSequence = useRef(0);
   const reportRequest = useRef(0);
+  const lastLoadedJobRevision = useRef(new Map<string, string>());
+  const pendingReportRead = useRef<{ job: AnnualAnalysisJob; generation: number } | null>(null);
   const taskGeneration = useRef(0);
   const previewRequest = useRef(0);
 
@@ -198,12 +206,27 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
     void refreshModelCapability();
   }, [refreshModelCapability]);
 
-  const loadReportForJob = useCallback(async (completedJob: AnnualAnalysisJob, generation: number) => {
+  const loadReportForJob = useCallback(async (completedJob: AnnualAnalysisJob, generation: number, force = false) => {
     if (!isReadableResultJob(completedJob) || completedJob.run_id === null) {
       return;
     }
+    const revision = annualJobResultRevision(completedJob);
+    if (requestLock.current && !force) {
+      const pending = pendingReportRead.current;
+      if (
+        pending === null || pending.job.job_id !== completedJob.job_id ||
+        annualJobResultRevision(pending.job) !== revision
+      ) pendingReportRead.current = { job: completedJob, generation };
+      return;
+    }
+    if (!force && lastLoadedJobRevision.current.get(completedJob.job_id) === revision) return;
+    if (force) pendingReportRead.current = null;
     const recoveredAfterFailure = isFailedJob(completedJob);
-    const recoveredStatusText = completedJob.status === "interrupted" ? "原任务仍为中断状态" : "原任务仍为失败状态";
+    const recoveredStatusText = completedJob.status === "interrupted"
+      ? "原任务仍为中断状态"
+      : completedJob.status === "cancelled"
+        ? "原任务仍为取消状态"
+        : "原任务仍为失败状态";
     const requestId = reportRequest.current + 1;
     reportRequest.current = requestId;
     requestLock.current = true;
@@ -218,14 +241,38 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
       if (taskGeneration.current !== generation || reportRequest.current !== requestId) {
         return;
       }
+      if (
+        loaded.report.company_id !== completedJob.request.company_id ||
+        loaded.report.report_year !== completedJob.request.report_year ||
+        loaded.report.source_document_id !== completedJob.request.document_id ||
+        loaded.report.source_sha256.toLowerCase() !== completedJob.request.sha256.toLowerCase()
+      ) throw new AnnualReportApiError("部分报告与当前任务请求的来源身份不一致，未显示该结果。", null, "source_identity_mismatch");
+      const resultSequence = completedJob.result_availability?.snapshot_sequence ?? 0;
+      if (resultSequence > 0 && loaded.snapshot?.sequence !== resultSequence) {
+        throw new AnnualReportApiError("报告快照序号已变化，未以旧版本覆盖当前结果；请重新读取任务状态。", null, "snapshot_revision_mismatch");
+      }
+      const execution = loaded.report.model_discovery?.execution_contract;
+      const recovery = completedJob.recovery_progress;
+      if (recovery !== undefined && (execution !== undefined || recovery.parent_run_id !== null)) {
+        if (
+          execution === undefined || execution.parent_run_id !== recovery.parent_run_id ||
+          execution.reused_batches.length !== recovery.reused_batch_count
+        ) throw new AnnualReportApiError("报告批次复用统计与任务恢复进度不一致，未显示该结果。", null, "recovery_progress_mismatch");
+      }
       setResponse(loaded);
+      lastLoadedJobRevision.current.set(completedJob.job_id, revision);
       setRunId(loaded.report.run_id);
       setResultOrigin(createdJobIds.current.has(completedJob.job_id) ? "new" : "history");
       const requiresDiscoveryLayer =
         createdJobIds.current.has(completedJob.job_id) || completedJob.discovery_progress !== undefined;
       const missingLayers = missingRequestedReportLayers(completedJob.request.mode, loaded.report, requiresDiscoveryLayer);
-      if (missingLayers.length > 0) {
+      const partialResult = loaded.snapshot?.is_partial === true || completedJob.result_availability?.is_partial === true;
+      const resumableAiResult = completedJob.recovery_capability?.can_resume === true &&
+        loaded.report.model_discovery?.execution_contract !== undefined;
+      if (!partialResult && !resumableAiResult && missingLayers.length > 0) {
         setJobError(`${recoveredAfterFailure ? `${recoveredStatusText}，但现有报告可读` : "任务已完成"}；报告缺少所选的${missingLayers.join("、")}，请核对归档后再重试。`);
+      } else {
+        setJobError(null);
       }
     } catch (error) {
       if (taskGeneration.current === generation && reportRequest.current === requestId) {
@@ -236,6 +283,13 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
       if (taskGeneration.current === generation && reportRequest.current === requestId) {
         requestLock.current = false;
         setLoading(false);
+        const pending = pendingReportRead.current;
+        if (pending !== null && pending.generation === generation && taskGeneration.current === generation) {
+          pendingReportRead.current = null;
+          if (annualJobResultRevision(pending.job) !== lastLoadedJobRevision.current.get(pending.job.job_id)) {
+            window.setTimeout(() => void loadReportForJob(pending.job, pending.generation, true), 0);
+          }
+        }
       }
     }
   }, []);
@@ -404,7 +458,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
         setJobError(null);
         if (isReadableResultJob(current)) {
           void loadReportForJob(current, generation);
-          return;
+          if (!isActiveJob(current)) return;
         }
         if (isFailedJob(current)) {
           return;
@@ -455,6 +509,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
     const previousJob = job;
     const generation = taskGeneration.current + 1;
     taskGeneration.current = generation;
+    pendingReportRead.current = null;
     reportRequest.current += 1;
     requestLock.current = false;
     setLoading(false);
@@ -563,6 +618,65 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
     await submitJob(() => job.request, "retrying", job.request.mode);
   }
 
+  async function onCancelJob() {
+    if (job === null || !isActiveJob(job) || jobSubmitLock.current || jobRefreshLock.current) return;
+    jobRefreshLock.current = true;
+    jobReadSequence.current += 1;
+    const generation = taskGeneration.current;
+    setJobAction("cancelling");
+    setJobError(null);
+    try {
+      const cancelled = await cancelAnnualAnalysisJob(job.job_id);
+      if (taskGeneration.current !== generation) return;
+      setJob(cancelled);
+      setHistoryRetry((value) => value + 1);
+      if (isReadableResultJob(cancelled)) void loadReportForJob(cancelled, generation, true);
+    } catch (error) {
+      if (taskGeneration.current === generation) setJobError(errorMessage(error));
+    } finally {
+      if (taskGeneration.current === generation) setJobAction(null);
+      jobRefreshLock.current = false;
+    }
+  }
+
+  async function onResumeJob() {
+    if (
+      job === null || response === null || !canResumeJob(job, response) ||
+      jobSubmitLock.current || jobRefreshLock.current || requestLock.current
+    ) return;
+    jobSubmitLock.current = true;
+    const parent = job;
+    const generation = taskGeneration.current + 1;
+    taskGeneration.current = generation;
+    pendingReportRead.current = null;
+    reportRequest.current += 1;
+    setJobAction("resuming");
+    setJobError(null);
+    setRestoreError(null);
+    try {
+      const resumed = await resumeAnnualAnalysisJob(parent.job_id, parent.run_id!);
+      if (taskGeneration.current !== generation) return;
+      if (
+        resumed.recovery?.parent_run_id !== parent.run_id ||
+        !sameAnnualAnalysisRequest(resumed.request, parent.request)
+      ) throw new AnnualReportApiError("续跑任务未绑定到当前父任务与来源，未切换到新任务。", null, "recovery_parent_mismatch");
+      setJob(resumed);
+      createdJobIds.current.add(resumed.job_id);
+      setResultOrigin("history");
+      setSelectedHistoryItem(null);
+      writeStoredJobId(resumed.job_id);
+      writeUrlSelection({ kind: "job", id: resumed.job_id }, true);
+      setHistoryRetry((value) => value + 1);
+      if (resumed.run_id !== null) setRunId(resumed.run_id);
+      if (isReadableResultJob(resumed)) void loadReportForJob(resumed, generation, true);
+    } catch (error) {
+      if (taskGeneration.current === generation) setJobError(errorMessage(error));
+    } finally {
+      if (taskGeneration.current === generation) setJobAction(null);
+      jobSubmitLock.current = false;
+    }
+  }
+
   async function onRefreshJob() {
     if (jobAction !== null || jobRefreshLock.current || jobSubmitLock.current) {
       return;
@@ -593,7 +707,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
         setRunId(refreshed.run_id);
       }
       if (isReadableResultJob(refreshed)) {
-        void loadReportForJob(refreshed, generation);
+        void loadReportForJob(refreshed, generation, true);
       }
     } catch (error) {
       if (taskGeneration.current === generation) {
@@ -631,6 +745,8 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
     if (updateUrl) writeUrlSelection(selection, true);
     const generation = taskGeneration.current + 1;
     taskGeneration.current = generation;
+    pendingReportRead.current = null;
+    lastLoadedJobRevision.current.clear();
     reportRequest.current += 1;
     requestLock.current = false;
     jobReadSequence.current += 1;
@@ -712,6 +828,12 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
 
   function onOpenHistoryItem(item: AnnualAnalysisHistoryItem) {
     setSelectedHistoryItem(item);
+    const hasPartialCheckpoint = item.run_id !== null && item.result_available &&
+      item.issues.some((issue) => issue.code === "partial_result_available");
+    if (hasPartialCheckpoint && item.job_id !== null) {
+      void navigateToSelection({ kind: "job", id: item.job_id }, true);
+      return;
+    }
     if (item.run_id !== null && item.result_available) {
       void navigateToSelection({ kind: "run", id: item.run_id }, true);
       return;
@@ -1063,6 +1185,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
             {history.items.map((item) => {
               const canOpenReport = item.run_id !== null && item.result_available;
               const canOpenJob = item.job_id !== null;
+              const cancelledWithoutReadableReport = item.job_status === "cancelled" && !canOpenReport;
               const actionText = canOpenReport ? "打开报告" : canOpenJob ? "查看任务状态" : "报告暂不可读";
               return (
                 <li className="annual-history-item" key={item.item_id}>
@@ -1087,7 +1210,11 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
                       {actionText}
                     </button>
                   </div>
-                  {item.issues.length > 0 ? (
+                  {cancelledWithoutReadableReport ? (
+                    <ul className="annual-history-issues">
+                      <li>任务已取消；当前没有可读取的已保存报告。</li>
+                    </ul>
+                  ) : item.issues.length > 0 ? (
                     <ul className="annual-history-issues">
                       {item.issues.map((issue) => <li key={issue.code}>{issue.message}</li>)}
                     </ul>
@@ -1144,6 +1271,15 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
           error={jobError}
           onRetry={onRetryJob}
           onRefresh={onRefreshJob}
+          onCancel={onCancelJob}
+          onResume={onResumeJob}
+          canResume={canResumeJob(job, response)}
+          onOpenParent={() => {
+            const parentRunId = job.recovery_progress?.parent_run_id ?? job.recovery?.parent_run_id;
+            if (parentRunId !== null && parentRunId !== undefined) {
+              void navigateToSelection({ kind: "run", id: parentRunId }, true);
+            }
+          }}
           onDismissError={() => setJobError(null)}
         />
       ) : null}
@@ -1689,6 +1825,10 @@ function JobStatusPanel({
   error,
   onRetry,
   onRefresh,
+  onCancel,
+  onResume,
+  canResume,
+  onOpenParent,
   onDismissError,
 }: {
   job: AnnualAnalysisJob;
@@ -1696,16 +1836,29 @@ function JobStatusPanel({
   error: string | null;
   onRetry: () => void;
   onRefresh: () => void;
+  onCancel: () => void;
+  onResume: () => void;
+  canResume: boolean;
+  onOpenParent: () => void;
   onDismissError: () => void;
 }) {
   const terminal = !isActiveJob(job);
-  const readableHistoricalResult = job.result_availability?.status === "available"
-    && (job.status === "failed" || job.status === "interrupted");
-  const historicalResultTitle = job.status === "interrupted"
-    ? "原任务中断，已保存报告可只读查看"
-    : "原任务失败，已保存报告可只读查看";
-  const historicalErrorPrefix = job.status === "interrupted" ? "原任务中断记录：" : "原任务失败记录：";
+  const readableResult = isReadableResultJob(job);
+  const partialResult = readableResult && job.result_availability?.is_partial === true;
+  const resumablePartial = canResume;
+  const readableHistoricalResult = readableResult && isFailureOrCancellationJob(job);
+  const historicalResultTitle = partialResult
+    ? "部分结果已保存，可查看；AI 发现尚未完成"
+    : job.status === "interrupted"
+      ? "原任务中断，已保存报告可只读查看"
+      : job.status === "cancelled"
+        ? "原任务已取消，已保存报告可只读查看"
+        : "原任务失败，已保存报告可只读查看";
+  const historicalErrorPrefix = job.status === "interrupted" ? "原任务中断记录："
+    : job.status === "cancelled" ? "原任务取消记录：" : "原任务失败记录：";
   const statusClass = "annual-job-status annual-job-status-" + job.status;
+  const recoveryProgress = job.recovery_progress;
+  const parentRunId = recoveryProgress?.parent_run_id ?? job.recovery?.parent_run_id ?? null;
   return (
     <section className="panel annual-job-status-panel" aria-live="polite" aria-labelledby="annual-job-status-title">
       <div className="annual-section-heading">
@@ -1713,10 +1866,10 @@ function JobStatusPanel({
           <p className="eyebrow">年报处理进度</p>
           <h2 id="annual-job-status-title">本次分析</h2>
         </div>
-        <span className={statusClass}>{jobStatusText(job.status)}</span>
+        <span className={statusClass}>{jobStatusText(job.status, readableResult)}</span>
       </div>
       <p className="annual-job-stage">
-        {readableHistoricalResult ? historicalResultTitle : jobStageText(job.stage, job.status)}
+        {partialResult ? historicalResultTitle : readableHistoricalResult ? historicalResultTitle : jobStageText(job.stage, job.status, readableResult)}
       </p>
       <p className="annual-job-status-note">
         {job.request.mode === "m3_screening"
@@ -1729,14 +1882,22 @@ function JobStatusPanel({
         {` 公司代码 ${job.request.company_id}，报告年份 ${job.request.report_year}。`}
         {terminal ? " 处理状态已稳定。" : " 页面会自动更新处理状态。"}
       </p>
-      {job.result_availability?.status === "available" ? (
+      {partialResult ? (
         <p className="annual-job-reanalysis-note" role="note">
-          {job.status === "interrupted" ? "原任务状态仍为中断" : "原任务状态仍为失败"}；关联报告已通过当前严格校验，可只读查看。读取保存报告不会创建新任务或调用模型。重新提交会创建新的分析任务，AI 模式可能产生费用。
+          已保存报告中的基础分析可读取；AI 发现仍可能未完成。取消或读取不会覆盖原运行，续跑会保留父运行并只尝试尚未完成的批次。
+        </p>
+      ) : readableHistoricalResult ? (
+        <p className="annual-job-reanalysis-note" role="note">
+          {job.status === "interrupted" ? "原任务状态仍为中断" : job.status === "cancelled" ? "原任务状态仍为取消" : "原任务状态仍为失败"}；关联报告已通过当前严格校验，可只读查看。读取保存报告不会创建新任务或调用模型。重新提交会创建新的分析任务。
         </p>
       ) : null}
-      {job.status === "completed_with_issues" ? (
+      {job.status === "completed_with_issues" && canResume ? (
         <p className="annual-job-reanalysis-note" role="note">
-          点击“重新分析这份报告”会用同一来源创建新任务，当前报告归档会保留；这不是续跑失败批次。AI 模式会重新发送整份年报中可提取的文字，并可能产生费用。
+          服务端严格校验确认仍有可续跑的 AI 批次或阶段。续跑会创建新任务、保留此报告与父运行，并复用已成功批次。
+        </p>
+      ) : job.status === "completed_with_issues" ? (
+        <p className="annual-job-reanalysis-note" role="note">
+          点击“重新分析这份报告”会用同一来源创建新任务并保留当前报告；没有通过服务端严格续跑资格检查，因此不会复用旧 AI 批次。
         </p>
       ) : null}
       {job.discovery_progress === undefined ? null : (
@@ -1751,6 +1912,17 @@ function JobStatusPanel({
           <small>批次进度只表示全文扫描阶段；最终评审与报告归档以本任务终态为准。</small>
         </div>
       )}
+      {recoveryProgress === undefined ? null : (
+        <div className="annual-discovery-progress" role="status" aria-live="polite">
+          <strong>续跑尝试统计</strong>
+          <p>
+            本次请求尝试的模型准入 {formatInteger(recoveryProgress.current_provider_admission_count)} 次；
+            父子运行累计模型准入 {formatInteger(recoveryProgress.cumulative_provider_admission_count)} 次；
+            复用了 {formatInteger(recoveryProgress.reused_batch_count)} 个批次。
+          </p>
+          {parentRunId === null ? null : <button type="button" className="text-button" disabled={action !== null} onClick={onOpenParent}>查看父运行 {parentRunId}</button>}
+        </div>
+      )}
       {job.error !== null ? (
         <div className="annual-job-error" role="alert">
           <strong>{readableHistoricalResult ? historicalErrorPrefix : ""}{job.error.message}</strong>
@@ -1760,6 +1932,9 @@ function JobStatusPanel({
           </details>
         </div>
       ) : null}
+      {job.result_availability?.status === "unavailable" && job.result_availability.message !== null ? (
+        <p className="annual-job-reanalysis-note" role="note">{job.result_availability.message}</p>
+      ) : null}
       {error !== null ? (
         <div className="annual-job-error annual-job-poll-error" role="alert">
           <span>{error}</span>
@@ -1767,17 +1942,24 @@ function JobStatusPanel({
         </div>
       ) : null}
       <div className="annual-job-actions annual-job-status-actions">
-        {job.result_availability?.status === "available" ? (
+        {readableResult ? (
           <>
             <button type="button" className="primary" disabled={action !== null} onClick={onRefresh}>
-              {action === "refreshing" ? "正在读取…" : "查看已保存报告"}
+              {action === "refreshing" ? "正在读取…" : partialResult ? "查看已保存部分报告" : "查看已保存报告"}
             </button>
-            <button type="button" className="secondary" disabled={action !== null} onClick={onRetry}>
-              {action === "retrying" ? "正在重新提交…" : "重新提交同一来源"}
-            </button>
+            {resumablePartial ? (
+              <button type="button" className="primary" disabled={action !== null} onClick={onResume}>
+                {action === "resuming" ? "正在创建续跑任务…" : "续跑未完成批次"}
+              </button>
+            ) : null}
+            {canReanalyzeJob(job) ? (
+              <button type="button" className="secondary" disabled={action !== null} onClick={onRetry}>
+                {action === "retrying" ? "正在重新提交…" : job.status === "completed_with_issues" ? "重新分析全部内容" : "重新提交同一来源"}
+              </button>
+            ) : null}
           </>
         ) : null}
-        {job.result_availability?.status === "available" ? null : (
+        {readableResult ? null : (
           <>
             {canReanalyzeJob(job) ? (
               <button type="button" className="primary" disabled={action !== null} onClick={onRetry}>
@@ -1791,6 +1973,11 @@ function JobStatusPanel({
             </button>
           </>
         )}
+        {isActiveJob(job) ? (
+          <button type="button" className="secondary" disabled={action !== null} onClick={onCancel}>
+            {action === "cancelling" ? "正在取消…" : "取消分析并保留已保存结果"}
+          </button>
+        ) : null}
       </div>
       <details className="annual-job-source-details">
         <summary>技术记录：来源文件与任务编号</summary>
@@ -2319,6 +2506,9 @@ function AnnualReportView({
     setExportError(null);
     try {
       const result = await downloadAnnualAnalysisExport(report.run_id, format);
+      if (response.snapshot !== undefined && result.snapshot === undefined) {
+        throw new AnnualReportApiError("导出响应没有返回其使用的快照版本，已停止下载。", null, "missing_export_snapshot");
+      }
       const objectUrl = URL.createObjectURL(result.blob);
       const link = document.createElement("a");
       link.href = objectUrl;
@@ -2328,7 +2518,13 @@ function AnnualReportView({
       link.click();
       link.remove();
       window.setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000);
-      setExportMessage(format === "html" ? "已下载 HTML；可离线查看或用浏览器打印成 PDF。" : "报告已下载。导出保留各层归档状态，不提升核验等级。");
+      const exportedSnapshot = result.snapshot;
+      const snapshotDescription = exportedSnapshot === undefined
+        ? "此旧归档未提供快照版本元数据。"
+        : `导出内容来自点击时服务器最新已保存且通过严格校验的${exportedSnapshot.is_partial ? "部分" : "封存"}快照：${snapshotStateText(exportedSnapshot.state)}，序号 ${exportedSnapshot.sequence}。`;
+      setExportMessage(
+        `${format === "html" ? "HTML 已下载；可离线查看或用浏览器打印成 PDF。" : `${format.toUpperCase()} 已下载。`} ${snapshotDescription} 导出保留各层归档状态，不提升核验等级。`,
+      );
     } catch (error) {
       setExportError(errorMessage(error));
     } finally {
@@ -2345,8 +2541,8 @@ function AnnualReportView({
           <p className="annual-report-title-caption">{report.title?.trim() || "年度分析归档结果"}</p>
           <p className="annual-run-id">{resultOrigin === "new" ? "本次运行" : "历史归档"} · {modeText} · {report.model_called ? "已调用模型" : "模型未调用"}</p>
         </div>
-        <span className={manifest.status === "completed_with_issues" ? "review-chip" : "annual-status-chip"}>
-          {manifestStatusText(manifest.status)}
+        <span className={response.snapshot?.is_partial === true || manifest.status === "completed_with_issues" ? "review-chip" : "annual-status-chip"}>
+          {response.snapshot?.is_partial === true ? "部分结果已保存" : manifestStatusText(manifest.status)}
         </span>
       </header>
 
@@ -2361,6 +2557,13 @@ function AnnualReportView({
           </details>
         ) : null}
       </div>
+
+      {response.snapshot?.is_partial === true ? (
+        <p className="annual-job-reanalysis-note" role="status">
+          基础年度分析与此快照已保存，可继续查看和导出；AI 发现仍可能未完成。当前读取的是快照序号 {response.snapshot.sequence}，代表同一 run_id 的部分状态，不表示任务已成功完成。
+          {discovery?.execution_contract === undefined ? "" : ` 其中，发现扫描阶段本次准入 ${formatInteger(discovery.execution_contract.provider_admission_count)} 次；该阶段父子运行累计 ${formatInteger(discovery.execution_contract.cumulative_provider_admission_count)} 次；复用了 ${formatInteger(discovery.execution_contract.reused_batches.length)} 个批次。`}
+        </p>
+      ) : null}
 
       {mode === "integrated_analysis" ? (
         <p className="annual-scope-summary" role="note">
@@ -2473,7 +2676,7 @@ function AnnualReportView({
       <section className="annual-export-tools" aria-label="下载报告">
         <div>
           <strong>下载报告</strong>
-          <span>下载 HTML 后可离线查看，也可用浏览器打印成 PDF。</span>
+          <span>导出使用点击时服务器最新已保存且通过严格校验的快照；下载完成后显示该文件的状态与序号。HTML 可离线查看，也可用浏览器打印成 PDF。</span>
         </div>
         <div className="annual-export-buttons">
           <button type="button" className="secondary" disabled={exporting !== null} onClick={() => void downloadExport("json")}>
@@ -4700,6 +4903,18 @@ function manifestStatusText(status: string): string {
       : "状态未知";
 }
 
+function snapshotStateText(state: AnnualAnalysisSnapshot["state"]): string {
+  const labels: Record<AnnualAnalysisSnapshot["state"], string> = {
+    running: "正在生成",
+    cancelled: "已取消",
+    interrupted: "已中断",
+    failed: "已失败",
+    completed: "已完成",
+    completed_with_issues: "已完成，报告含问题",
+  };
+  return labels[state];
+}
+
 function comparabilityStatusText(status: string): string {
   return status === "verified" ? "可比性检查通过" : status === "abstained" ? "可比性弃权" : "可比性未确认";
 }
@@ -4885,20 +5100,90 @@ function isSuccessfulJob(job: AnnualAnalysisJob): boolean {
 }
 
 function isReadableResultJob(job: AnnualAnalysisJob): boolean {
-  return isSuccessfulJob(job) || (
-    isFailedJob(job) && job.result_availability?.status === "available"
-  );
+  if (job.result_availability?.status === "unavailable") return false;
+  return isSuccessfulJob(job) || (job.run_id !== null && job.result_availability?.status === "available");
 }
 
 function isFailedJob(job: AnnualAnalysisJob): boolean {
   return job.status === "failed" || job.status === "interrupted";
 }
 
-function canReanalyzeJob(job: AnnualAnalysisJob): boolean {
-  return isFailedJob(job) || job.status === "completed_with_issues";
+function isFailureOrCancellationJob(job: AnnualAnalysisJob): boolean {
+  return isFailedJob(job) || job.status === "cancelled";
 }
 
-function jobStatusText(status: AnnualAnalysisJob["status"]): string {
+function canResumeJob(job: AnnualAnalysisJob | null, response: AnnualAnalysisResponse | null): boolean {
+  if (
+    job === null || response === null || job.recovery_capability?.can_resume !== true ||
+    job.run_id === null || job.result_availability?.status !== "available" ||
+    response.report.run_id !== job.run_id || response.report.company_id !== job.request.company_id ||
+    response.report.report_year !== job.request.report_year || response.report.source_document_id !== job.request.document_id ||
+    response.report.source_sha256.toLowerCase() !== job.request.sha256.toLowerCase() ||
+    response.report.model_discovery?.execution_contract === undefined
+  ) return false;
+  if (job.status === "completed_with_issues") {
+    return job.result_availability.category === "completed_report_available" &&
+      job.result_availability.is_partial === false && job.result_availability.snapshot_state === "completed_with_issues" &&
+      response.snapshot?.is_partial === false && response.snapshot.state === "completed_with_issues";
+  }
+  const serviceInterruptionProjection = job.status === "interrupted" && job.error?.code === "service_interrupted" &&
+    (job.result_availability.snapshot_state === "running" || job.result_availability.snapshot_state === "failed");
+  return (job.status === "failed" || job.status === "interrupted" || job.status === "cancelled") &&
+    job.result_availability.is_partial === true &&
+    (job.result_availability.snapshot_state === job.status || serviceInterruptionProjection) &&
+    response.snapshot?.is_partial === true &&
+    (response.snapshot.state === job.status ||
+      serviceInterruptionProjection && response.snapshot.state === job.result_availability.snapshot_state);
+}
+
+function sameAnnualAnalysisRequest(left: AnnualAnalysisJobRequest, right: AnnualAnalysisJobRequest): boolean {
+  return left.company_id === right.company_id && left.report_year === right.report_year &&
+    left.document_id === right.document_id && left.source_pdf_path === right.source_pdf_path &&
+    left.sha256.toLowerCase() === right.sha256.toLowerCase() && left.mode === right.mode;
+}
+
+function canReanalyzeJob(job: AnnualAnalysisJob): boolean {
+  return isFailureOrCancellationJob(job) || job.status === "completed_with_issues";
+}
+
+function annualJobResultRevision(job: AnnualAnalysisJob): string {
+  const result = job.result_availability;
+  const discovery = job.discovery_progress;
+  const recovery = job.recovery_progress;
+  return JSON.stringify({
+    status: job.status,
+    stage: job.stage,
+    run_id: job.run_id,
+    result_url: job.result_url,
+    result_availability: result === undefined ? null : {
+      status: result.status,
+      category: result.category,
+      snapshot_state: result.snapshot_state ?? null,
+      is_partial: result.is_partial ?? null,
+      snapshot_sequence: result.snapshot_sequence ?? null,
+    },
+    discovery_progress: discovery === undefined ? null : {
+      event: discovery.event,
+      status: discovery.status,
+      batch_index: discovery.batch_index,
+      processed_batches: discovery.processed_batches,
+      successful_batches: discovery.successful_batches,
+      partial_batches: discovery.partial_batches,
+      failed_batches: discovery.failed_batches,
+    },
+    recovery_progress: recovery === undefined ? null : {
+      parent_run_id: recovery.parent_run_id,
+      parent_provider_admission_count: recovery.parent_provider_admission_count,
+      current_provider_admission_count: recovery.current_provider_admission_count,
+      cumulative_provider_admission_count: recovery.cumulative_provider_admission_count,
+      reused_batch_count: recovery.reused_batch_count,
+    },
+    recovery_capability: job.recovery_capability ?? null,
+    error: job.error === null ? null : { code: job.error.code, message: job.error.message },
+  });
+}
+
+function jobStatusText(status: AnnualAnalysisJob["status"], hasReadableResult: boolean): string {
   switch (status) {
     case "queued":
       return "排队中";
@@ -4912,10 +5197,12 @@ function jobStatusText(status: AnnualAnalysisJob["status"]): string {
       return "分析失败";
     case "interrupted":
       return "任务中断";
+    case "cancelled":
+      return hasReadableResult ? "已取消，部分结果保留" : "已取消";
   }
 }
 
-function jobStageText(stage: string, status: AnnualAnalysisJob["status"]): string {
+function jobStageText(stage: string, status: AnnualAnalysisJob["status"], hasReadableResult: boolean): string {
   const labels: Record<string, string> = {
     queued: "等待可用的分析位置",
     validating_source: "正在检查年报与公司和年份是否一致",
@@ -4926,6 +5213,11 @@ function jobStageText(stage: string, status: AnnualAnalysisJob["status"]): strin
     failed: "任务未完成，可按同一来源重新提交",
     interrupted: "服务重启或退出导致任务中断，可按同一来源重新提交",
   };
+  if (status === "cancelled") {
+    return hasReadableResult
+      ? "分析已取消；已保存的部分结果仍可查看"
+      : "分析已取消；当前没有可读取的已保存报告";
+  }
   if (labels[stage] !== undefined) {
     return labels[stage];
   }
@@ -5055,6 +5347,7 @@ function historyStatusText(value: string | null): string {
     completed_with_issues: "完成但有问题",
     failed: "执行失败",
     interrupted: "已中断",
+    cancelled: "已取消",
     archived: "已归档",
     unavailable: "暂不可读取",
   };

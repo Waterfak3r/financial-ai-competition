@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -12,6 +13,8 @@ from pathlib import Path
 
 import pytest
 from scripts import analyze_annual as annual_cli
+from finagent.core.annual_checkpoints import load_current_annual_checkpoint
+import finagent.core.annual_checkpoints as checkpoints
 
 _ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = _ROOT / "scripts" / "analyze_annual.py"
@@ -631,6 +634,277 @@ def test_cli_integrates_m3_and_investigation_with_independent_failure_propagatio
         assert manifest["status"] == "completed_with_issues"
         assert m3["status"] == ("failed" if failed_layer == "m3_screening" else "completed")
         assert investigation["status"] == ("failed" if failed_layer == "model_investigation" else "completed")
+
+
+def _run_mocked_recoverable_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[int, str, Path, Path, dict[str, int]]:
+    """Run the real CLI publication path with only analysis/provider stages injected."""
+    monkeypatch.setattr(annual_cli, "ROOT", tmp_path)
+    source_pdf = tmp_path / "data" / "raw" / "603288" / "2024" / "doc-1" / "report.pdf"
+    source_pdf.parent.mkdir(parents=True)
+    source_pdf.write_bytes(b"%PDF-mock-publication-input")
+    source_record = source_pdf.parent / "source.json"
+    source_record.write_text("{}", encoding="utf-8")
+    source_sha256 = _sha256(source_pdf)
+    calls = {"investigation": 0}
+    base_report: dict[str, object] = {
+        "kind": "fintrace_annual_analysis_report",
+        "run_id": "placeholder",
+        "company_id": "603288",
+        "report_year": 2024,
+        "source_document_id": "doc-1",
+        "source_sha256": source_sha256,
+        "scope": {"note": "standard scope"},
+        "confirmed": {"metrics": [], "analyses": []},
+        "pending_review": {"facts": [], "calculations": [], "claims": [], "candidate_signals": []},
+        "limitations": [],
+    }
+
+    def mock_analysis(*_args: object, **kwargs: object) -> SimpleNamespace:
+        base_report["run_id"] = kwargs["run_id"]
+        return SimpleNamespace(
+            parsed_pdf=SimpleNamespace(source_sha256=source_sha256, to_dict=lambda: {"source_sha256": source_sha256}),
+            archive_dict=lambda: {"run_id": base_report["run_id"], "model_called": False},
+            report=base_report,
+            markdown="# standard report\n",
+            facts=[],
+            evidences=[],
+            fact_verifications=[],
+            calculations=[],
+            screening=[],
+            status="completed",
+        )
+
+    def mock_investigation(report: dict[str, object], **kwargs: object) -> dict[str, object]:
+        calls["investigation"] += 1
+        run_id = str(report["run_id"])
+        discovery = {
+            "kind": "fintrace_annual_model_discovery",
+            "status": "completed",
+            "model_called": True,
+            "model_call_count": 1,
+            "model_call_attempt_count": 1,
+            "execution_contract": {"contract_version": 3},
+            "findings": [],
+            "evidences": [],
+            "limitations": [],
+        }
+        review = {
+            "status": "completed",
+            "model_called": True,
+            "call_count": 1,
+            "call_attempt_count": 1,
+            "assessment": "reviewed",
+            "summary": "controlled test review",
+            "reasons": [],
+            "follow_up_items": [],
+            "limitations": [],
+            "source_identity": {
+                "run_id": run_id,
+                "company_id": "603288",
+                "report_year": 2024,
+                "source_document_id": "doc-1",
+                "source_sha256": source_sha256,
+            },
+        }
+        investigation: dict[str, object] = {
+            "kind": "fintrace_annual_investigation",
+            "run_id": run_id,
+            "company_id": "603288",
+            "report_year": 2024,
+            "source_document_id": "doc-1",
+            "source_sha256": source_sha256,
+            "status": "completed",
+            "model_called": True,
+            "model_call_count": 1,
+            "model_call_attempt_count": 1,
+            "items": [],
+            "audit_artifacts": [{"audit_id": "controlled-attempt", "status": "succeeded"}],
+            "discovery": discovery,
+            "final_review": review,
+            "archive_path": "investigation.json",
+        }
+        callback = kwargs.get("checkpoint_callback")
+        assert callable(callback)
+        running_report, _ = annual_cli.attach_investigation_to_report(
+            report,
+            {},
+            investigation,
+            investigation_path="runs/placeholder/investigation.json",
+        )
+        callback(running_report, "running", None)
+        return investigation
+
+    monkeypatch.setattr(annual_cli, "analyze_annual_pdf", mock_analysis)
+    monkeypatch.setattr(annual_cli, "run_annual_investigation_appendix", mock_investigation)
+    monkeypatch.setattr(
+        annual_cli,
+        "render_report_with_investigation",
+        lambda *_args, **_kwargs: "# report with controlled investigation\n",
+    )
+    args = SimpleNamespace(
+        source_pdf=source_pdf,
+        company_id="603288",
+        report_year=2024,
+        document_id="doc-1",
+        expected_sha256=None,
+        artifacts_root=tmp_path / "artifacts",
+        with_model=True,
+        source_record=source_record,
+        with_m3_screening=False,
+        request_mode="model_investigation",
+        run_id=None,
+        resume_parent_run_id=None,
+    )
+    return_code = annual_cli._run(args)
+    run_id = next(
+        path.name
+        for path in (tmp_path / "artifacts" / "runs").iterdir()
+        if path.is_dir()
+    )
+    return return_code, run_id, tmp_path / "artifacts" / "runs" / run_id, tmp_path / "artifacts" / "reports" / run_id, calls
+
+
+def test_cli_retries_transient_report_replace_and_seals_after_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    original_replace = os.replace
+    attempts = 0
+
+    def transient_report_lock(source: object, destination: object) -> None:
+        nonlocal attempts
+        if Path(destination).name == "report.json":
+            attempts += 1
+            if attempts < 3:
+                error = PermissionError("controlled transient Windows sharing lock")
+                error.winerror = 32  # type: ignore[attr-defined]
+                raise error
+        original_replace(source, destination)
+
+    monkeypatch.setattr(checkpoints.os, "replace", transient_report_lock)
+    monkeypatch.setattr(checkpoints.time, "sleep", lambda _delay: None)
+    return_code, run_id, run_dir, report_dir, calls = _run_mocked_recoverable_publication(tmp_path, monkeypatch)
+    capsys.readouterr()
+
+    assert return_code == 0
+    assert attempts == 3
+    assert calls["investigation"] == 1
+    assert _read_json(run_dir / "manifest.json")["status"] == "completed"
+    checkpoint = load_current_annual_checkpoint(tmp_path, run_id)
+    assert checkpoint is not None and checkpoint.state == "completed" and not checkpoint.is_partial
+    assert _read_json(report_dir / "report.json")["model_called"] is True
+
+
+def test_cli_persistent_report_replace_failure_keeps_last_partial_and_reports_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    original_replace = os.replace
+    report_attempts = 0
+
+    def persistent_report_lock(source: object, destination: object) -> None:
+        nonlocal report_attempts
+        if Path(destination).name == "report.json":
+            report_attempts += 1
+            error = PermissionError("controlled persistent Windows sharing lock")
+            error.winerror = 5  # type: ignore[attr-defined]
+            raise error
+        original_replace(source, destination)
+
+    monkeypatch.setattr(checkpoints.os, "replace", persistent_report_lock)
+    monkeypatch.setattr(checkpoints.time, "sleep", lambda _delay: None)
+    return_code, run_id, run_dir, _report_dir, calls = _run_mocked_recoverable_publication(tmp_path, monkeypatch)
+    output = capsys.readouterr()
+
+    assert return_code == 2
+    assert "status=failed" in output.err
+    assert report_attempts == 6
+    assert calls["investigation"] == 1
+    manifest = _read_json(run_dir / "manifest.json")
+    failure = _read_json(run_dir / "failure.json")
+    investigation = _read_json(run_dir / "investigation.json")
+    assert manifest["status"] == "failed"
+    assert manifest["model_investigation"]["model_call_count"] == 1
+    assert investigation["model_call_count"] == 1
+    assert len(investigation["audit_artifacts"]) == 1
+    assert failure["publication_stage"] == "final_report"
+    checkpoint = load_current_annual_checkpoint(tmp_path, run_id)
+    assert checkpoint is not None and checkpoint.state == "running" and checkpoint.is_partial
+    assert checkpoint.report["model_called"] is True
+
+
+def test_cli_terminal_checkpoint_publish_failure_keeps_last_partial_and_reports_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    original_replace = os.replace
+    terminal_attempts = 0
+
+    def persistent_terminal_checkpoint_lock(source: object, destination: object) -> None:
+        nonlocal terminal_attempts
+        destination_path = Path(destination)
+        if destination_path.name == "checkpoint-current.json":
+            pointer_payload = json.loads(Path(source).read_text(encoding="utf-8"))
+            if pointer_payload.get("sequence") == 3:
+                terminal_attempts += 1
+                error = PermissionError("controlled terminal checkpoint sharing lock")
+                error.winerror = 33  # type: ignore[attr-defined]
+                raise error
+        original_replace(source, destination)
+
+    monkeypatch.setattr(checkpoints.os, "replace", persistent_terminal_checkpoint_lock)
+    monkeypatch.setattr(checkpoints.time, "sleep", lambda _delay: None)
+    return_code, run_id, run_dir, _report_dir, calls = _run_mocked_recoverable_publication(tmp_path, monkeypatch)
+    output = capsys.readouterr()
+
+    assert return_code == 2
+    assert "status=failed" in output.err
+    assert terminal_attempts == 6
+    assert calls["investigation"] == 1
+    assert _read_json(run_dir / "manifest.json")["status"] == "failed"
+    assert _read_json(run_dir / "failure.json")["publication_stage"] == "terminal_checkpoint"
+    checkpoint = load_current_annual_checkpoint(tmp_path, run_id)
+    assert checkpoint is not None and checkpoint.sequence == 2
+    assert checkpoint.state == "running" and checkpoint.is_partial
+
+
+def test_cli_terminal_manifest_replace_failure_preserves_sealed_publication_window(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    original_replace = os.replace
+    manifest_attempts = 0
+
+    def persistent_terminal_manifest_lock(source: object, destination: object) -> None:
+        nonlocal manifest_attempts
+        if Path(destination).name == "manifest.json":
+            manifest_attempts += 1
+            error = PermissionError("controlled terminal manifest sharing lock")
+            error.winerror = 32  # type: ignore[attr-defined]
+            raise error
+        original_replace(source, destination)
+
+    monkeypatch.setattr(checkpoints.os, "replace", persistent_terminal_manifest_lock)
+    monkeypatch.setattr(checkpoints.time, "sleep", lambda _delay: None)
+    return_code, run_id, run_dir, _report_dir, calls = _run_mocked_recoverable_publication(tmp_path, monkeypatch)
+    output = capsys.readouterr()
+
+    assert return_code == 2
+    assert "status=failed" in output.err
+    assert manifest_attempts == 6
+    assert calls["investigation"] == 1
+    assert _read_json(run_dir / "manifest.json")["status"] == "running"
+    failure = _read_json(run_dir / "failure.json")
+    assert failure["publication_stage"] == "terminal_manifest"
+    checkpoint = load_current_annual_checkpoint(tmp_path, run_id)
+    assert checkpoint is not None and checkpoint.state == "completed" and not checkpoint.is_partial
 
 
 def _invoke(

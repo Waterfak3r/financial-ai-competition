@@ -5,6 +5,11 @@ import type {
   AnnualAnalysisJobRequest,
   AnnualAnalysisJobStatus,
   AnnualAnalysisResultAvailability,
+  AnnualAnalysisRecovery,
+  AnnualAnalysisRecoveryCapability,
+  AnnualAnalysisRecoveryCapabilityReason,
+  AnnualAnalysisRecoveryProgress,
+  AnnualAnalysisSnapshotState,
 } from "../types/annualAnalysisJob";
 
 const JOBS_PATH = "/api/v1/annual-analysis-jobs";
@@ -19,6 +24,15 @@ const STATUSES = new Set<AnnualAnalysisJobStatus>([
   "completed_with_issues",
   "failed",
   "interrupted",
+  "cancelled",
+]);
+const SNAPSHOT_STATES = new Set<AnnualAnalysisSnapshotState>([
+  "running",
+  "cancelled",
+  "interrupted",
+  "failed",
+  "completed",
+  "completed_with_issues",
 ]);
 const MODES = new Set<AnnualAnalysisJobMode>([
   "deterministic",
@@ -140,6 +154,61 @@ export async function loadAnnualAnalysisJob(jobId: string): Promise<AnnualAnalys
   return readJob(payload, jobId);
 }
 
+export async function cancelAnnualAnalysisJob(jobId: string): Promise<AnnualAnalysisJob> {
+  validateJobId(jobId);
+  const response = await fetch(JOBS_PATH + "/" + encodeURIComponent(jobId) + "/cancel", {
+    method: "POST",
+    headers: { Accept: "application/json" },
+    cache: "no-store",
+    credentials: "omit",
+  }).catch(() => {
+    throw new AnnualAnalysisJobApiError("无法连接本地年度分析服务。请确认后端仍在运行。");
+  });
+  const payload = await readJson(response);
+  if (!response.ok) {
+    const failure = failureMessage(response.status, payload);
+    throw new AnnualAnalysisJobApiError(failure.message, response.status, failure.code);
+  }
+  return readJob(payload, jobId);
+}
+
+export async function resumeAnnualAnalysisJob(parentJobId: string, parentRunId: string): Promise<AnnualAnalysisJob> {
+  validateJobId(parentJobId);
+  const checkedRunId = parentRunId.trim();
+  if (!RUN_ID_PATTERN.test(checkedRunId)) {
+    throw new AnnualAnalysisJobApiError("父运行编号格式无效，无法续跑。", null, "invalid_parent_run_id");
+  }
+  await assertAnnualRuntimeCompatible();
+  const response = await fetch(JOBS_PATH + "/" + encodeURIComponent(parentJobId) + "/resume", {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json; charset=utf-8",
+    },
+    body: JSON.stringify({ parent_run_id: checkedRunId }),
+    cache: "no-store",
+    credentials: "omit",
+  }).catch(() => {
+    throw new AnnualAnalysisJobApiError("无法连接本地年度分析服务。请确认后端仍在运行。");
+  });
+  const payload = await readJson(response);
+  if (!response.ok) {
+    const failure = failureMessage(response.status, payload);
+    throw new AnnualAnalysisJobApiError(failure.message, response.status, failure.code);
+  }
+  const resumed = readJob(payload);
+  if (resumed.recovery?.parent_run_id !== checkedRunId) {
+    throw invalidResponse("续跑任务未绑定到请求的父运行");
+  }
+  return resumed;
+}
+
+function validateJobId(jobId: string): void {
+  if (!JOB_ID_PATTERN.test(jobId)) {
+    throw new AnnualAnalysisJobApiError("任务编号格式无效，无法读取任务状态。");
+  }
+}
+
 function validateRequest(request: AnnualAnalysisJobRequest) {
   if (
     !/^[A-Za-z0-9][A-Za-z0-9._-]{0,64}$/.test(request.company_id) ||
@@ -240,9 +309,12 @@ function readJob(value: unknown, expectedJobId?: string, expectedRequest?: Annua
     !Number.isFinite(Date.parse(stringField(record, "created_at"))) ||
     !Number.isFinite(Date.parse(stringField(record, "updated_at"))) ||
     (runId !== null && !RUN_ID_PATTERN.test(runId)) ||
-    successful !== (runId !== null && resultUrl !== null) ||
-    (successful && resultUrl !== "/v1/annual-analyses/" + runId) ||
-    (!successful && resultUrl !== null) ||
+    successful && (runId === null || resultUrl === null) ||
+    // Older failed/interrupted job records may retain the run id while their
+    // job-level URL is null. A strictly validated result_availability URL is
+    // independent and remains the only read link in that legacy shape.
+    (runId === null && resultUrl !== null) ||
+    (resultUrl !== null && resultUrl !== "/v1/annual-analyses/" + runId) ||
     ((status === "failed" || status === "interrupted") !== (error !== null))
   ) {
     throw invalidResponse("任务状态字段不一致");
@@ -253,6 +325,19 @@ function readJob(value: unknown, expectedJobId?: string, expectedRequest?: Annua
   const discoveryProgress = record.discovery_progress === undefined
     ? undefined
     : readDiscoveryProgress(record.discovery_progress);
+  const recovery = record.recovery === undefined ? undefined : readRecovery(record.recovery);
+  const recoveryProgress = record.recovery_progress === undefined
+    ? undefined
+    : readRecoveryProgress(record.recovery_progress);
+  const recoveryCapability = record.recovery_capability === undefined
+    ? undefined
+    : readRecoveryCapability(record.recovery_capability);
+  if (
+    recoveryCapability?.can_resume === true &&
+    (runId === null || resultAvailability?.status !== "available" ||
+      (resultAvailability.snapshot_sequence ?? 0) < 1 ||
+      !(status === "completed_with_issues" || status === "failed" || status === "interrupted" || status === "cancelled"))
+  ) throw invalidResponse("recovery_capability 与可读终态不一致");
   return {
     job_id: jobId,
     status,
@@ -265,6 +350,9 @@ function readJob(value: unknown, expectedJobId?: string, expectedRequest?: Annua
     error,
     ...(resultAvailability === undefined ? {} : { result_availability: resultAvailability }),
     ...(discoveryProgress === undefined ? {} : { discovery_progress: discoveryProgress }),
+    ...(recovery === undefined ? {} : { recovery }),
+    ...(recoveryProgress === undefined ? {} : { recovery_progress: recoveryProgress }),
+    ...(recoveryCapability === undefined ? {} : { recovery_capability: recoveryCapability }),
   };
 }
 
@@ -277,37 +365,145 @@ function readResultAvailability(
   const record = asRecord(value);
   const availabilityStatus = record?.status;
   const category = record?.category;
+  const legacyShape = record !== null && Object.keys(record).length === 4;
+  const availabilityRunId = legacyShape
+    ? runId
+    : nullableStringField(record ?? {}, "run_id");
   const resultUrl = nullableStringField(record ?? {}, "result_url");
   const message = nullableStringField(record ?? {}, "message");
+  const hasSnapshot = record !== null && Object.prototype.hasOwnProperty.call(record, "snapshot_state");
+  const snapshotStateValue = hasSnapshot ? record?.snapshot_state : undefined;
+  const snapshotState = hasSnapshot
+    ? snapshotStateValue === null ? null : snapshotStateField(record ?? {}, "snapshot_state")
+    : undefined;
+  const isPartial = hasSnapshot ? booleanField(record ?? {}, "is_partial") : undefined;
+  const snapshotSequence = hasSnapshot ? integerField(record ?? {}, "snapshot_sequence") : undefined;
   const categories = new Set<AnnualAnalysisResultAvailability["category"]>([
     "archive_readable_after_failure",
+    "partial_checkpoint_available",
+    "completed_report_available",
     "source_validation_failed",
     "archive_incompatible",
     "no_recovery_projection",
   ]);
   if (
     record === null ||
-    Object.keys(record).length !== 4 ||
+    Object.keys(record).length !== (hasSnapshot ? 8 : 4) ||
     (availabilityStatus !== "available" && availabilityStatus !== "unavailable") ||
     typeof category !== "string" || !categories.has(category as AnnualAnalysisResultAvailability["category"]) ||
     (message !== null && message.length > 500) ||
     (availabilityStatus === "available" && (
-      category !== "archive_readable_after_failure" ||
-      (status !== "failed" && status !== "interrupted") ||
-      error === null ||
-      runId === null ||
+      runId === null || availabilityRunId !== runId ||
       resultUrl !== "/v1/annual-analyses/" + runId ||
-      message === null
+      (hasSnapshot
+        ? snapshotState === undefined ||
+          snapshotSequence === undefined || snapshotSequence < 0 ||
+          category === "partial_checkpoint_available" && (
+            isPartial !== true || snapshotSequence < 1 ||
+            snapshotState === null ||
+            message !== "已保存的部分年报报告可读取；AI 发现仍可能未完成。" ||
+            status === "running" && snapshotState !== "running" ||
+            status === "cancelled" && snapshotState !== "cancelled" ||
+            status === "interrupted" && snapshotState !== "interrupted" &&
+              !(error?.code === "service_interrupted" && (snapshotState === "running" || snapshotState === "failed")) ||
+            status === "failed" && snapshotState !== "failed" && snapshotState !== "interrupted"
+          ) ||
+          category === "completed_report_available" && (
+            (status !== "completed" && status !== "completed_with_issues") || isPartial !== false ||
+            snapshotSequence === 0 && snapshotState !== null ||
+            snapshotSequence > 0 && snapshotState !== status
+          ) ||
+          category === "archive_readable_after_failure" &&
+            ((status !== "failed" && status !== "interrupted" && status !== "cancelled") || isPartial !== false ||
+              snapshotSequence === 0 && snapshotState !== null) ||
+          category !== "partial_checkpoint_available" && category !== "completed_report_available" && category !== "archive_readable_after_failure"
+        : category !== "archive_readable_after_failure" ||
+          (status !== "failed" && status !== "interrupted") || error === null || message === null)
     )) ||
-    (availabilityStatus === "unavailable" && resultUrl !== null)
+    availabilityStatus === "unavailable" && (
+      resultUrl !== null || availabilityRunId !== null ||
+      hasSnapshot && (snapshotState !== null || isPartial !== false || snapshotSequence !== 0)
+    )
   ) {
     throw invalidResponse("报告可读状态字段不一致");
   }
   return {
     status: availabilityStatus,
     category: category as AnnualAnalysisResultAvailability["category"],
+    run_id: availabilityRunId,
     result_url: resultUrl,
     message,
+    ...(snapshotState === undefined ? {} : { snapshot_state: snapshotState as AnnualAnalysisResultAvailability["snapshot_state"] }),
+    ...(isPartial === undefined ? {} : { is_partial: isPartial }),
+    ...(snapshotSequence === undefined ? {} : { snapshot_sequence: snapshotSequence }),
+  };
+}
+
+function readRecoveryCapability(value: unknown): AnnualAnalysisRecoveryCapability {
+  const record = asRecord(value);
+  if (record === null || Object.keys(record).length !== 2) throw invalidResponse("recovery_capability 契约无效");
+  const canResume = booleanField(record, "can_resume");
+  const reason = stringField(record, "reason");
+  const reasons = new Set<AnnualAnalysisRecoveryCapabilityReason>([
+    "recoverable_batches", "recovery_not_available", "binding_missing", "source_invalid",
+    "parent_active", "already_has_active_child",
+  ]);
+  if (
+    !reasons.has(reason as AnnualAnalysisRecoveryCapabilityReason) ||
+    canResume !== (reason === "recoverable_batches")
+  ) throw invalidResponse("recovery_capability 原因与权限不一致");
+  return { can_resume: canResume, reason: reason as AnnualAnalysisRecoveryCapabilityReason };
+}
+
+function readRecovery(value: unknown): AnnualAnalysisRecovery {
+  const record = asRecord(value);
+  if (
+    record === null || Object.keys(record).length !== 4 ||
+    record.contract_version !== "fintrace_annual_recovery_v1"
+  ) throw invalidResponse("recovery 契约无效");
+  const parentRunId = stringField(record, "parent_run_id");
+  const reusedBatches = integerField(record, "reused_batches");
+  const currentAttempts = integerField(record, "current_attempts");
+  if (
+    !RUN_ID_PATTERN.test(parentRunId) || reusedBatches < 0 || reusedBatches > 128 ||
+    currentAttempts < 0 || currentAttempts > 4096
+  ) throw invalidResponse("recovery 计数或父运行编号无效");
+  return {
+    contract_version: "fintrace_annual_recovery_v1",
+    parent_run_id: parentRunId,
+    reused_batches: reusedBatches,
+    current_attempts: currentAttempts,
+  };
+}
+
+function readRecoveryProgress(value: unknown): AnnualAnalysisRecoveryProgress {
+  const record = asRecord(value);
+  if (
+    record === null || Object.keys(record).length !== 7 ||
+    record.contract_version !== "fintrace_annual_recovery_v1"
+  ) throw invalidResponse("recovery_progress 契约无效");
+  const parentRunId = nullableStringField(record, "parent_run_id");
+  const parentProviderAdmissionCount = integerField(record, "parent_provider_admission_count");
+  const currentProviderAdmissionCount = integerField(record, "current_provider_admission_count");
+  const cumulativeProviderAdmissionCount = integerField(record, "cumulative_provider_admission_count");
+  const reusedBatchCount = integerField(record, "reused_batch_count");
+  const updatedAt = stringField(record, "updated_at");
+  if (
+    (parentRunId !== null && !RUN_ID_PATTERN.test(parentRunId)) ||
+    [parentProviderAdmissionCount, currentProviderAdmissionCount, cumulativeProviderAdmissionCount, reusedBatchCount]
+      .some((count) => !Number.isSafeInteger(count) || count < 0) ||
+    cumulativeProviderAdmissionCount !== parentProviderAdmissionCount + currentProviderAdmissionCount ||
+    reusedBatchCount > 128 || currentProviderAdmissionCount > 4096 || parentProviderAdmissionCount > 4096 ||
+    updatedAt.length > 40 || !/(?:Z|[+-]\d{2}:\d{2})$/.test(updatedAt) || !Number.isFinite(Date.parse(updatedAt))
+  ) throw invalidResponse("recovery_progress 计数或更新时间无效");
+  return {
+    contract_version: "fintrace_annual_recovery_v1",
+    parent_run_id: parentRunId,
+    parent_provider_admission_count: parentProviderAdmissionCount,
+    current_provider_admission_count: currentProviderAdmissionCount,
+    cumulative_provider_admission_count: cumulativeProviderAdmissionCount,
+    reused_batch_count: reusedBatchCount,
+    updated_at: updatedAt,
   };
 }
 
@@ -426,6 +622,18 @@ function statusField(record: Record<string, unknown>, key: string): AnnualAnalys
     throw invalidResponse(key);
   }
   return value as AnnualAnalysisJobStatus;
+}
+
+function snapshotStateField(record: Record<string, unknown>, key: string): AnnualAnalysisSnapshotState {
+  const value = stringField(record, key);
+  if (!SNAPSHOT_STATES.has(value as AnnualAnalysisSnapshotState)) throw invalidResponse(key);
+  return value as AnnualAnalysisSnapshotState;
+}
+
+function booleanField(record: Record<string, unknown>, key: string): boolean {
+  const value = record[key];
+  if (typeof value !== "boolean") throw invalidResponse(key);
+  return value;
 }
 
 function invalidResponse(detail: string): AnnualAnalysisJobApiError {

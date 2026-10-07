@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 import threading
+import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
 from finagent.core.model_settings import ModelConfigError, ModelSettings, load_model_settings
 from finagent.llm.chat_completion import ChatMessage, ModelResponseError, complete_chat
+from finagent.llm import chat_completion as chat_module
 
 _SECRET = "sk-test-secret-should-not-leak"
 _USER_TEXT = "请只回复一个词"
@@ -96,6 +99,104 @@ def test_posts_shared_chat_completions_fields_and_reads_text() -> None:
     assert result.response_id == "chatcmpl-local"
     assert result.usage is not None
     assert result.usage.total_tokens == 4
+    assert result.provider_admitted is True
+    assert result.admission_id is not None
+    assert len(result.admission_id) == 36
+
+
+def test_large_local_response_is_drained_while_worker_is_running() -> None:
+    large_text = "x" * (256 * 1024)
+
+    def behavior(_path: str):
+        return 200, {
+            "id": "chatcmpl-large",
+            "model": "example-model-returned",
+            "choices": [{"message": {"content": large_text}}],
+        }
+
+    server, thread = _serve(behavior)
+    try:
+        result = complete_chat(
+            [ChatMessage("user", "返回大段文本")],
+            _settings(server.server_port),
+            timeout_seconds=5,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+    assert result.response_id == "chatcmpl-large"
+    assert len(result.text) == len(large_text)
+
+
+@pytest.mark.parametrize("timeout", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_deadline_is_rejected_before_admission_or_network(
+    timeout: float, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    server, thread = _serve(lambda _path: (200, {"id": "x", "model": "m", "choices": []}))
+    reserve_calls = {"count": 0}
+
+    def reserve(*args, **kwargs):
+        reserve_calls["count"] += 1
+        return str(uuid.uuid4())
+
+    monkeypatch.setattr(chat_module, "reserve_provider_attempt", reserve)
+    try:
+        with pytest.raises(ModelResponseError, match="超时时间") as failed:
+            complete_chat(
+                [ChatMessage("user", "test")],
+                _settings(server.server_port),
+                timeout_seconds=timeout,
+            )
+        assert failed.value.category == "invalid_timeout"
+        assert reserve_calls["count"] == 0
+        assert server.captured is None  # type: ignore[attr-defined]
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
+def test_dripping_local_http_response_still_obeys_hard_deadline() -> None:
+    class _DaemonServer(ThreadingHTTPServer):
+        daemon_threads = True
+
+    class _DripHandler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers.get("Content-Length", "0"))
+            self.rfile.read(length)
+            encoded = json.dumps(
+                {"id": "slow", "model": "m", "choices": [{"message": {"content": "ok"}}]}
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            try:
+                for offset in range(0, len(encoded), 2):
+                    self.wfile.write(encoded[offset : offset + 2])
+                    self.wfile.flush()
+                    time.sleep(0.04)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server = _DaemonServer(("127.0.0.1", 0), _DripHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    started = time.monotonic()
+    try:
+        with pytest.raises(ModelResponseError, match="超时"):
+            complete_chat(
+                [ChatMessage("user", "慢速")],
+                _settings(server.server_port),
+                timeout_seconds=0.3,
+            )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+    assert time.monotonic() - started < 1.5
 
 
 def test_appends_chat_path_once_when_base_url_has_trailing_slash() -> None:

@@ -8,16 +8,23 @@ import math
 import os
 import re
 import stat
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from finagent.core.annual_checkpoints import (
+    AnnualCheckpointError,
+    AnnualCheckpointRecord,
+    _load_current_annual_checkpoint_with_verified_source,
+)
 from finagent.core.sample_provenance import resolve_sample_provenance
 from finagent.core.safe_paths import PathBoundaryError, validate_run_id
 from finagent.api.narrative_reading_context import build_reading_context
 from finagent.ingestion.parse_text_pdf import parse_text_pdf
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$", re.IGNORECASE)
+_LOWER_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _MAX_MANIFEST_BYTES = 2 * 1024 * 1024
 _MAX_REPORT_BYTES = 32 * 1024 * 1024
 _MAX_SOURCE_PDF_BYTES = 256 * 1024 * 1024
@@ -51,6 +58,45 @@ _V2_SAFE_BATCH_FAILURES = frozenset(
         "serialized_input_limit_breached",
     }
 )
+_V3_ATTEMPT_FAILURES = frozenset({
+    "http_401", "http_403", "http_429", "http_5xx", "connection_error", "timeout",
+    "invalid_response", "transport_error", "cancelled", "ledger_budget_exhausted",
+    "ledger_provider_mismatch", "ledger_source_context_missing_or_unapproved",
+    "ledger_unavailable", "ledger_policy_mismatch", "call_gate_closed",
+    "call_deadline_exhausted", "audit_write_failed", "call_failed",
+})
+_V3_UNATTEMPTED_REASONS = frozenset({
+    "awaiting_model", "workflow_time_budget_exhausted", "user_cancelled",
+    "provider_budget_exhausted", "provider_admission_rejected",
+    "authentication_failure_stopped", "consecutive_transport_failures_stopped",
+    "parent_call_gate_closed",
+})
+_V3_BATCH_FAILURES = _V2_SAFE_BATCH_FAILURES | frozenset({"audit_write_failed"})
+_V3_EXECUTION_KIND = "fintrace_annual_discovery_execution_v3"
+_V3_BINDING_FIELDS = {
+    "source_sha256", "company_id", "report_year", "source_document_id", "analysis_mode",
+    "provider_model_fingerprint", "model", "prompts_sha256", "parser_version", "plan_sha256",
+    "m3_binding_sha256",
+}
+_V3_CONTRACT_FIELDS = {
+    "kind", "plan_sha256", "identity_sha256", "binding", "parent_run_id",
+    "provider_admission_count", "parent_provider_admission_count",
+    "cumulative_provider_admission_count", "response_count", "reused_batches", "batches",
+}
+_V3_BATCH_FIELDS = {"batch_index", "state", "resolution", "reason", "attempts"}
+_V3_ATTEMPT_FIELDS = {
+    "attempt_index", "audit_id", "admission_id", "provider_admitted", "status",
+    "response_accepted", "accepted_findings", "reason",
+}
+_V3_COVERAGE_BATCH_FIELDS = {
+    "batch_index", "status", "reason", "pages", "raw_chars", "accepted_findings",
+    "rejected_findings", "restored_quotes", "resolution", "inherited_findings",
+}
+_MAX_V3_ATTEMPTS_PER_BATCH = 64
+_MAX_V3_ATTEMPTS_TOTAL = 4096
+_MAX_REVIEW_AUDIT_BYTES = 512 * 1024
+_MAX_REVIEW_PROVIDER_ATTEMPTS = 3
+_REVIEW_RETRYABLE_FAILURES = frozenset({"connection_error", "http_429", "http_5xx", "timeout"})
 _REPARSE_POINT_ATTRIBUTE = 0x400
 NARRATIVE_EVIDENCE_INTERPRETATION = "原文片段定位/模型观点引用，非独立因果核验"
 DISCOVERY_EVIDENCE_INTERPRETATION = "年报原文定位，模型发现未经独立语义核验"
@@ -77,27 +123,27 @@ class AnnualReportArchive:
     source_provenance: dict[str, object]
     # Appended with a default so existing positional constructors remain valid.
     discovery_evidences: tuple[dict[str, Any], ...] = ()
+    # Partial snapshots and R2 sealed final reports expose a small, safe handle.
+    snapshot: dict[str, Any] | None = None
 
 
-def load_annual_report(project_root: Path, run_id: str) -> AnnualReportArchive:
-    """读取正式 v2 归档，并逐次校验归档标识及原文 SHA256。"""
+def load_annual_report(
+    project_root: Path,
+    run_id: str,
+    *,
+    _lineage: tuple[str, ...] = (),
+) -> AnnualReportArchive:
+    """Read a sealed annual report or a strictly verified R2 checkpoint."""
 
     checked_run_id = _checked_run_id(run_id)
+    if checked_run_id in _lineage or len(_lineage) >= 32:
+        raise AnnualReportReadError(409, "annual_discovery_parent_invalid", "年度 v3 父运行链存在循环或超过层级上限。")
+    lineage = (*_lineage, checked_run_id)
     root = Path(project_root).resolve()
     _safe_archive_path(root, ("artifacts", "runs"), directory=True, missing_code="run_not_found")
-    _safe_archive_path(
-        root,
-        ("artifacts", "runs", checked_run_id),
-        directory=True,
-        missing_code="run_not_found",
-    )
+    _safe_archive_path(root, ("artifacts", "runs", checked_run_id), directory=True, missing_code="run_not_found")
     _safe_archive_path(root, ("artifacts", "reports"), directory=True, missing_code="report_not_found")
-    _safe_archive_path(
-        root,
-        ("artifacts", "reports", checked_run_id),
-        directory=True,
-        missing_code="report_not_found",
-    )
+    _safe_archive_path(root, ("artifacts", "reports", checked_run_id), directory=True, missing_code="report_not_found")
 
     manifest_path = _safe_archive_path(
         root,
@@ -111,25 +157,13 @@ def load_annual_report(project_root: Path, run_id: str) -> AnnualReportArchive:
         directory=False,
         missing_code="archive_incomplete",
     )
-    report_path = _safe_archive_path(
-        root,
-        ("artifacts", "reports", checked_run_id, "report.json"),
-        directory=False,
-        missing_code="report_not_found",
-    )
     manifest_bytes = _read_checked_file(manifest_path, _MAX_MANIFEST_BYTES, "archive_incomplete")
     source_pdf_bytes = _read_checked_file(source_path, _MAX_SOURCE_PDF_BYTES, "archive_incomplete")
-    report_bytes = _read_checked_file(report_path, _MAX_REPORT_BYTES, "report_not_found")
     manifest = _parse_json_object(manifest_bytes, "manifest_invalid")
-    report = _parse_json_object(report_bytes, "report_invalid")
-
-    if report.get("kind") != "fintrace_annual_analysis_report":
-        raise AnnualReportReadError(422, "report_invalid", "report.json 不是受支持的 FINTRACE 年度分析报告。")
 
     if not source_pdf_bytes.startswith(b"%PDF-"):
         raise AnnualReportReadError(422, "source_pdf_invalid", "归档 source.pdf 不是有效的 PDF 文件。")
     actual_source_sha256 = hashlib.sha256(source_pdf_bytes).hexdigest()
-    report_sha256 = hashlib.sha256(report_bytes).hexdigest()
     inputs = manifest.get("inputs")
     outputs = manifest.get("outputs")
     if not isinstance(inputs, Mapping) or not isinstance(outputs, Mapping):
@@ -142,30 +176,121 @@ def load_annual_report(project_root: Path, run_id: str) -> AnnualReportArchive:
     expected_report_dir = f"reports/{checked_run_id}"
     expected_source_path = f"{expected_run_path}/source.pdf"
     expected_report_path = f"{expected_report_dir}/report.json"
+    manifest_status = manifest.get("status")
     if (
         manifest.get("run_id") != checked_run_id
-        or manifest.get("status") not in {"completed", "completed_with_issues"}
+        or manifest_status not in {"running", "completed", "completed_with_issues", "failed", "interrupted"}
         or inputs.get("source_pdf_archive_path") != expected_source_path
         or outputs.get("run_dir") != expected_run_path
         or outputs.get("report_dir") != expected_report_dir
         or outputs.get("report_json") != expected_report_path
     ):
         raise AnnualReportReadError(409, "archive_identity_mismatch", "manifest 与请求的年度分析归档标识或固定路径不一致。")
-
     if actual_source_sha256 != manifest_source_sha256.lower():
         raise AnnualReportReadError(409, "source_sha256_mismatch", "归档 PDF 与 manifest 记录的来源哈希不一致。")
+    if (
+        not isinstance(manifest.get("company_id"), str)
+        or not isinstance(manifest.get("document_id"), str)
+        or type(manifest.get("report_year")) is not int
+    ):
+        raise AnnualReportReadError(422, "manifest_invalid", "年度分析 manifest 的公司或报告身份字段无效。")
 
+    report_path: Path | None
+    try:
+        report_path = _safe_archive_path(
+            root,
+            ("artifacts", "reports", checked_run_id, "report.json"),
+            directory=False,
+            missing_code="report_not_found",
+        )
+    except AnnualReportReadError as exc:
+        if exc.code != "report_not_found":
+            raise
+        report_path = None
+
+    checkpoint = _load_checkpoint_for_reader(root, checked_run_id, actual_source_sha256)
+    snapshot_metadata: dict[str, Any] | None = None
+    if report_path is not None:
+        report_file_bytes = _read_checked_file(report_path, _MAX_REPORT_BYTES, "report_not_found")
+        report_file = _parse_json_object(report_file_bytes, "report_invalid")
+        report_file_sha256 = hashlib.sha256(report_file_bytes).hexdigest()
+    else:
+        report_file = None
+        report_file_bytes = b""
+        report_file_sha256 = ""
+
+    if checkpoint is None:
+        if report_file is None:
+            raise AnnualReportReadError(404, "report_not_found", "找不到该运行的年度分析报告或正式检查点。")
+        if manifest_status not in {"completed", "completed_with_issues"}:
+            raise AnnualReportReadError(404, "report_not_found", "找不到该运行的年度正式检查点。")
+        if _has_v3_execution_contract(report_file):
+            raise AnnualReportReadError(409, "checkpoint_final_seal_missing", "年度 v3 最终报告缺少匹配的检查点封存记录。")
+        report = report_file
+        report_bytes = report_file_bytes
+        report_sha256 = report_file_sha256
+    elif not checkpoint.is_partial:
+        checkpoint_state_is_final = checkpoint.state in {"completed", "completed_with_issues"}
+        manifest_matches_seal = (
+            manifest_status in {"completed", "completed_with_issues"}
+            and checkpoint.state == manifest_status
+        )
+        running_manifest_has_seal = manifest_status == "running" and checkpoint_state_is_final
+        if (
+            not checkpoint_state_is_final
+            or not (manifest_matches_seal or running_manifest_has_seal)
+            or report_file is None
+            or checkpoint.report != report_file
+        ):
+            raise AnnualReportReadError(409, "checkpoint_final_seal_mismatch", "最终报告与检查点封存记录不一致。")
+        # A final pointer is itself the durable seal. If the manifest update is
+        # the second half of publication, the report and immutable checkpoint
+        # agree, so exposing the sealed state does not infer completion.
+        report = checkpoint.report
+        report_bytes = _canonical_report_bytes(report)
+        report_sha256 = checkpoint.report_sha256
+        snapshot_metadata = checkpoint.metadata
+    elif (
+        manifest_status in {"completed", "completed_with_issues"}
+        and checkpoint.report.get("kind") == "fintrace_annual_analysis_report"
+        and _has_v3_execution_contract(checkpoint.report)
+        and checkpoint.state in {"awaiting_model", "running", "partial", "cancelled", "failed", "interrupted"}
+    ):
+        # CLI finalization publishes report.json and the terminal manifest
+        # before the final checkpoint. During that narrow window, project the
+        # last strictly verified v3 pointer as partial and ignore the newer,
+        # not-yet-sealed report file.
+        report = checkpoint.report
+        report_bytes = _canonical_report_bytes(report)
+        report_sha256 = checkpoint.report_sha256
+        snapshot_metadata = checkpoint.metadata
+    elif checkpoint.is_partial:
+        if not _partial_checkpoint_matches_manifest(checkpoint.state, manifest_status, checkpoint.report):
+            raise AnnualReportReadError(409, "checkpoint_state_mismatch", "部分检查点状态与 manifest 终态不匹配。")
+        report = checkpoint.report
+        report_bytes = _canonical_report_bytes(report)
+        report_sha256 = checkpoint.report_sha256
+        snapshot_metadata = checkpoint.metadata
+    else:
+        raise AnnualReportReadError(409, "checkpoint_state_mismatch", "检查点封存状态与 manifest 不匹配。")
+
+    if report.get("kind") != "fintrace_annual_analysis_report":
+        raise AnnualReportReadError(422, "report_invalid", "年度检查点或 report.json 不是受支持的 FINTRACE 年度分析报告。")
     if (
         report.get("run_id") != checked_run_id
         or report.get("source_sha256") != manifest_source_sha256.lower()
         or report.get("company_id") != manifest.get("company_id")
         or report.get("report_year") != manifest.get("report_year")
         or report.get("source_document_id") != manifest.get("document_id")
-        or not isinstance(manifest.get("company_id"), str)
-        or not isinstance(manifest.get("document_id"), str)
-        or type(manifest.get("report_year")) is not int
     ):
         raise AnnualReportReadError(409, "report_identity_mismatch", "报告与 manifest 的 run_id、来源哈希或文档元数据不一致。")
+    if (
+        isinstance(report.get("model_discovery"), Mapping)
+        and "execution_contract" in report["model_discovery"]
+        and manifest_status in {"completed", "completed_with_issues"}
+        and checkpoint is None
+    ):
+        raise AnnualReportReadError(409, "checkpoint_final_seal_missing", "年度 v3 最终报告缺少匹配的检查点封存记录。")
 
     verification_evidences = _collect_verified_evidences(report, manifest_source_sha256.lower())
     narrative_evidences = _collect_narrative_evidences(
@@ -183,12 +308,49 @@ def load_annual_report(project_root: Path, run_id: str) -> AnnualReportArchive:
         expected_report_year=manifest["report_year"],
         expected_document_id=manifest["document_id"],
         expected_sha256=manifest_source_sha256.lower(),
+        expected_analysis_mode=manifest.get("mode"),
         nested_discovery=(
             report.get("model_investigation", {}).get("discovery")
             if isinstance(report.get("model_investigation"), Mapping)
             else None
         ),
     )
+    discovery = report.get("model_discovery")
+    validated_parent_archive: AnnualReportArchive | None = None
+    if isinstance(discovery, Mapping) and "execution_contract" in discovery:
+        contract = discovery.get("execution_contract")
+        if not isinstance(contract, Mapping):
+            raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 执行契约无效。")
+        contract_parent = contract.get("parent_run_id")
+        if snapshot_metadata is None or snapshot_metadata.get("parent_run_id") != contract_parent:
+            raise AnnualReportReadError(409, "annual_discovery_parent_invalid", "年度 v3 父运行与检查点元数据不一致。")
+        if contract_parent is not None:
+            validated_parent_archive = _validate_v3_parent_archive(
+                root,
+                contract_parent,
+                current_run_id=checked_run_id,
+                current_report=report,
+                current_contract=contract,
+                lineage=lineage,
+            )
+        model_review = report.get("model_review")
+        if isinstance(model_review, Mapping) and model_review.get("reason") == "review_reused_for_matching_inputs":
+            if validated_parent_archive is None:
+                raise AnnualReportReadError(409, "annual_review_reuse_invalid", "复用的年度评审缺少严格验证的父运行。")
+            _validate_v3_reused_model_review(
+                root,
+                current_report=report,
+                current_contract=contract,
+                parent_archive=validated_parent_archive,
+            )
+        elif (
+            isinstance(model_review, Mapping)
+            and model_review.get("status") == "completed"
+            and model_review.get("model_called") is False
+        ):
+            raise AnnualReportReadError(422, "annual_review_invalid", "完成的年度评审必须绑定本次调用或受控复用证明。")
+        elif isinstance(model_review, Mapping) and model_review.get("status") == "completed":
+            _validate_v3_called_model_review(root, report, contract)
     raw_mode = manifest.get("mode")
     supported_modes = {"deterministic", "m3_screening", "model_investigation", "integrated_analysis"}
     manifest_mode = raw_mode if isinstance(raw_mode, str) and raw_mode in supported_modes else None
@@ -204,10 +366,11 @@ def load_annual_report(project_root: Path, run_id: str) -> AnnualReportArchive:
         "source_pdf_archive_path": expected_source_path,
         "report_json_path": expected_report_path,
         "source_pdf_sha256": actual_source_sha256,
-        # Existing manifests do not persist a report-file hash. This is the
-        # hash of the exact report.json bytes returned by this request.
         "report_sha256": report_sha256,
     }
+    if checkpoint is not None:
+        manifest_summary["snapshot_sha256"] = checkpoint.snapshot_sha256
+        manifest_summary["manifest_binding_sha256"] = checkpoint.manifest_binding_sha256
     source_provenance = resolve_sample_provenance(
         actual_source_sha256,
         company_id=manifest["company_id"],
@@ -223,7 +386,539 @@ def load_annual_report(project_root: Path, run_id: str) -> AnnualReportArchive:
         discovery_evidences=discovery_evidences,
         source_pdf_bytes=source_pdf_bytes,
         source_provenance=source_provenance,
+        snapshot=snapshot_metadata,
     )
+
+
+def _validate_v3_parent_archive(
+    root: Path,
+    parent_run_id: str,
+    *,
+    current_run_id: str,
+    current_report: Mapping[str, Any],
+    current_contract: Mapping[str, Any],
+    lineage: tuple[str, ...],
+) -> AnnualReportArchive:
+    """Recheck the immutable parent report and its source-bound accepted rows."""
+
+    try:
+        parent = load_annual_report(root, parent_run_id, _lineage=lineage)
+    except AnnualReportReadError:
+        raise AnnualReportReadError(409, "annual_discovery_parent_invalid", "年度 v3 父运行未通过当前严格归档校验。") from None
+    parent_discovery = parent.report.get("model_discovery")
+    if not isinstance(parent_discovery, Mapping):
+        raise AnnualReportReadError(409, "annual_discovery_parent_invalid", "年度 v3 父运行缺少发现报告。")
+    parent_contract = parent_discovery.get("execution_contract")
+    if not isinstance(parent_contract, Mapping) or set(parent_contract) != _V3_CONTRACT_FIELDS:
+        raise AnnualReportReadError(409, "annual_discovery_parent_invalid", "年度 v3 父运行缺少严格执行绑定。")
+    if (
+        parent.run_id == current_run_id
+        or parent.report.get("source_sha256") != current_report.get("source_sha256")
+        or parent.report.get("company_id") != current_report.get("company_id")
+        or parent.report.get("report_year") != current_report.get("report_year")
+        or parent.report.get("source_document_id") != current_report.get("source_document_id")
+        or current_contract.get("identity_sha256") != parent_contract.get("identity_sha256")
+        or current_contract.get("plan_sha256") != parent_contract.get("plan_sha256")
+        or current_contract.get("binding") != parent_contract.get("binding")
+        or current_contract.get("parent_provider_admission_count")
+        != parent_contract.get("cumulative_provider_admission_count")
+    ):
+        raise AnnualReportReadError(409, "annual_discovery_parent_invalid", "年度 v3 父子运行身份或累计计数不一致。")
+    if parent.snapshot is None or (
+        not parent.snapshot.get("is_partial")
+        and parent.snapshot.get("state") != "completed_with_issues"
+    ):
+        raise AnnualReportReadError(409, "annual_discovery_parent_invalid", "年度 v3 父运行没有可续跑检查点。")
+
+    parent_coverage = parent_discovery.get("coverage")
+    current_discovery = current_report.get("model_discovery")
+    current_coverage = current_discovery.get("coverage") if isinstance(current_discovery, Mapping) else None
+    parent_rows = parent_coverage.get("batch_results", []) if isinstance(parent_coverage, Mapping) else None
+    current_rows = current_coverage.get("batch_results", []) if isinstance(current_coverage, Mapping) else None
+    current_findings = current_discovery.get("findings", []) if isinstance(current_discovery, Mapping) else None
+    parent_findings = parent_discovery.get("findings", [])
+    if not all(isinstance(items, list) for items in (parent_rows, current_rows, current_findings, parent_findings)):
+        raise AnnualReportReadError(422, "annual_discovery_parent_invalid", "年度 v3 父子批次投影无效。")
+    parent_counts = {row["batch_index"]: row["accepted_findings"] for row in parent_rows if isinstance(row, Mapping)}
+    current_counts = {
+        row["batch_index"]: row
+        for row in current_rows
+        if isinstance(row, Mapping)
+    }
+    reused = current_contract.get("reused_batches")
+    parent_state_by_index = {row["batch_index"]: row["status"] for row in parent_rows if isinstance(row, Mapping)}
+    if (
+        len(parent_counts) != len(parent_rows)
+        or len(current_counts) != len(current_rows)
+        or not isinstance(reused, list)
+        or any(index not in parent_counts or parent_counts[index] != current_counts[index].get("inherited_findings") for index in current_counts)
+        or any(parent_state_by_index.get(index) != "succeeded" for index in reused)
+    ):
+        raise AnnualReportReadError(409, "annual_discovery_parent_invalid", "年度 v3 父子批次继承或成功重用关系无效。")
+    current_by_finding_id = {
+        finding.get("finding_id"): finding
+        for finding in current_findings
+        if isinstance(finding, Mapping) and isinstance(finding.get("finding_id"), str)
+    }
+    for finding in parent_findings:
+        finding_id = finding.get("finding_id") if isinstance(finding, Mapping) else None
+        if not isinstance(finding_id, str) or current_by_finding_id.get(finding_id) != finding:
+            raise AnnualReportReadError(409, "annual_discovery_parent_invalid", "年度 v3 子报告未完整保留父报告合格发现。")
+    return parent
+
+
+def _validate_v3_reused_model_review(
+    root: Path,
+    *,
+    current_report: Mapping[str, Any],
+    current_contract: Mapping[str, Any],
+    parent_archive: AnnualReportArchive,
+) -> None:
+    """Verify a no-call review reuse against its strict parent and original audit."""
+
+    current_review = current_report.get("model_review")
+    parent_report = parent_archive.report
+    parent_review = parent_report.get("model_review")
+    required_fields = {
+        "status", "reason", "assessment", "summary", "reasons", "follow_up_items",
+        "limitations", "model_called", "call_count", "call_attempt_count",
+        "audit_artifacts", "source_identity",
+    }
+    if (
+        not isinstance(current_review, Mapping)
+        or set(current_review) != required_fields
+        or current_review.get("status") != "completed"
+        or current_review.get("reason") != "review_reused_for_matching_inputs"
+        or current_review.get("model_called") is not False
+        or type(current_review.get("call_count")) is not int
+        or current_review.get("call_count") != 0
+        or type(current_review.get("call_attempt_count")) is not int
+        or current_review.get("call_attempt_count") != 0
+        or not isinstance(parent_review, Mapping)
+        or set(parent_review) != required_fields
+        or parent_review.get("status") != "completed"
+    ):
+        _raise_review_reuse_invalid()
+
+    binding = current_contract.get("binding")
+    parent_discovery = parent_report.get("model_discovery")
+    parent_contract = parent_discovery.get("execution_contract") if isinstance(parent_discovery, Mapping) else None
+    parent_binding = parent_contract.get("binding") if isinstance(parent_contract, Mapping) else None
+    model_name = binding.get("model") if isinstance(binding, Mapping) else None
+    if (
+        not isinstance(binding, Mapping)
+        or not isinstance(parent_binding, Mapping)
+        or dict(binding) != dict(parent_binding)
+        or not isinstance(model_name, str)
+        or parent_review.get("source_identity") != _review_report_identity(parent_report)
+        or current_review.get("source_identity") != _review_report_identity(current_report)
+        or any(
+            current_review.get(field) != parent_review.get(field)
+            for field in ("assessment", "summary", "reasons", "follow_up_items", "limitations")
+        )
+        or not isinstance(current_review.get("audit_artifacts"), list)
+        or current_review.get("audit_artifacts") != parent_review.get("audit_artifacts")
+    ):
+        _raise_review_reuse_invalid()
+
+    parent_investigation = parent_report.get("model_investigation")
+    current_investigation = current_report.get("model_investigation")
+    if (
+        not isinstance(parent_investigation, Mapping)
+        or not isinstance(current_investigation, Mapping)
+        or parent_investigation.get("model_name") != model_name
+        or current_investigation.get("model_name") != model_name
+    ):
+        _raise_review_reuse_invalid()
+    try:
+        from finagent.reports.investigation_append import _review_reuse_signature
+
+        parent_signature = _review_reuse_signature(
+            parent_report,
+            parent_investigation,
+            _review_report_identity(parent_report),
+            model_name=model_name,
+        )
+        current_signature = _review_reuse_signature(
+            current_report,
+            current_investigation,
+            _review_report_identity(current_report),
+            model_name=model_name,
+        )
+    except Exception:
+        _raise_review_reuse_invalid()
+    if parent_signature != current_signature:
+        _raise_review_reuse_invalid()
+
+    parent_reason = parent_review.get("reason")
+    if parent_reason == "review_reused_for_matching_inputs":
+        # load_annual_report() strictly checked the parent's own reuse proof,
+        # including its earlier ancestor. Keeping the exact audit index makes
+        # that verified origin traceable through any bounded child chain.
+        if current_review.get("audit_artifacts") != parent_review.get("audit_artifacts"):
+            _raise_review_reuse_invalid()
+        return
+    if parent_reason is not None:
+        _raise_review_reuse_invalid()
+    _validate_original_review_audit(
+        root,
+        report=parent_report,
+        review=parent_review,
+        binding=parent_binding,
+        investigation=parent_investigation,
+    )
+
+
+def _validate_v3_called_model_review(
+    root: Path,
+    report: Mapping[str, Any],
+    contract: Mapping[str, Any],
+) -> None:
+    review = report.get("model_review")
+    investigation = report.get("model_investigation")
+    binding = contract.get("binding")
+    required_fields = {
+        "status", "reason", "assessment", "summary", "reasons", "follow_up_items",
+        "limitations", "model_called", "call_count", "call_attempt_count",
+        "audit_artifacts", "source_identity",
+    }
+    if (
+        not isinstance(review, Mapping)
+        or set(review) != required_fields
+        or review.get("reason") is not None
+        or review.get("model_called") is not True
+        or not isinstance(binding, Mapping)
+        or not isinstance(investigation, Mapping)
+        or investigation.get("model_name") != binding.get("model")
+        or review.get("source_identity") != _review_report_identity(report)
+    ):
+        raise AnnualReportReadError(422, "annual_review_invalid", "完成的年度评审调用身份或字段无效。")
+    _validate_original_review_audit(
+        root,
+        report=report,
+        review=review,
+        binding=binding,
+        investigation=investigation,
+    )
+
+
+def _validate_original_review_audit(
+    root: Path,
+    *,
+    report: Mapping[str, Any],
+    review: Mapping[str, Any],
+    binding: Mapping[str, Any],
+    investigation: Mapping[str, Any],
+) -> None:
+    """Check the durable annual-review request/response and its bounded attempts."""
+
+    if (
+        review.get("model_called") is not True
+        or type(review.get("call_count")) is not int
+        or review.get("call_count") != 1
+        or type(review.get("call_attempt_count")) is not int
+        or not 1 <= review.get("call_attempt_count", 0) <= _MAX_REVIEW_PROVIDER_ATTEMPTS
+        or not isinstance(review.get("audit_artifacts"), list)
+        or len(review["audit_artifacts"]) != 1
+    ):
+        _raise_review_reuse_invalid()
+    audit = review["audit_artifacts"][0]
+    audit_fields = {"audit_dir", "request_path", "response_path", "failure_path", "status", "prompt_version"}
+    if not isinstance(audit, Mapping) or set(audit) != audit_fields:
+        _raise_review_reuse_invalid()
+    relative_dir = audit.get("audit_dir")
+    if not isinstance(relative_dir, str) or "\\" in relative_dir:
+        _raise_review_reuse_invalid()
+    parts = relative_dir.split("/")
+    if len(parts) != 3 or parts[0] != "runs":
+        _raise_review_reuse_invalid()
+    origin_run_id = _checked_run_id(parts[1])
+    audit_id = parts[2]
+    if (
+        not _is_uuid4(audit_id)
+        or audit.get("request_path") != f"{relative_dir}/request.json"
+        or audit.get("response_path") != f"{relative_dir}/response.json"
+        or audit.get("failure_path") is not None
+        or audit.get("status") != "succeeded"
+        or audit.get("prompt_version") != "annual_review_v2"
+    ):
+        _raise_review_reuse_invalid()
+
+    if origin_run_id != report.get("run_id"):
+        _raise_review_reuse_invalid()
+    origin_investigation = report.get("model_investigation")
+    if not isinstance(origin_investigation, Mapping):
+        _raise_review_reuse_invalid()
+    model_name = binding.get("model")
+    if not isinstance(model_name, str):
+        _raise_review_reuse_invalid()
+    try:
+        from finagent.agents.annual_review import parse_model_review
+        from finagent.reports.investigation_append import _review_reuse_request_material
+
+        identity = _review_report_identity(report)
+        material = _review_reuse_request_material(
+            report,
+            origin_investigation,
+            identity,
+            model_name=model_name,
+        )
+    except Exception:
+        _raise_review_reuse_invalid()
+
+    run_dir_parts = ("artifacts", "runs", origin_run_id, audit_id)
+    request_path = _safe_archive_path(root, (*run_dir_parts, "request.json"), directory=False, missing_code="archive_incomplete")
+    response_path = _safe_archive_path(root, (*run_dir_parts, "response.json"), directory=False, missing_code="archive_incomplete")
+    request_record = _parse_json_object(
+        _read_checked_file(request_path, _MAX_REVIEW_AUDIT_BYTES, "archive_incomplete"),
+        "annual_review_reuse_invalid",
+    )
+    response_record = _parse_json_object(
+        _read_checked_file(response_path, _MAX_REVIEW_AUDIT_BYTES, "archive_incomplete"),
+        "annual_review_reuse_invalid",
+    )
+    request_fields = {
+        "audit_id", "status", "started_at", "finished_at", "duration_seconds",
+        "prompt_version", "evidence_refs", "model", "timeout_seconds", "messages", "stream",
+    }
+    response_fields = {
+        "status", "started_at", "finished_at", "duration_seconds", "text", "model",
+        "response_id", "usage", "provider_admission_count", "response_count", "attempt_records",
+    }
+    messages = [
+        {"role": "system", "content": material["system_prompt"]},
+        {"role": "user", "content": material["user_content"]},
+    ]
+    if (
+        set(request_record) != request_fields
+        or request_record.get("audit_id") != audit_id
+        or request_record.get("status") != "started"
+        or request_record.get("prompt_version") != "annual_review_v2"
+        or request_record.get("evidence_refs") != material["evidence_refs"]
+        or request_record.get("model") != model_name
+        or not _finite_positive_number(request_record.get("timeout_seconds"))
+        or request_record.get("messages") != messages
+        or request_record.get("stream") is not False
+        or not _nonempty_bounded_text(request_record.get("started_at"), 64)
+        or request_record.get("finished_at") is not None
+        or request_record.get("duration_seconds") is not None
+        or set(response_record) != response_fields
+        or response_record.get("status") != "succeeded"
+        or not _safe_provider_model_text(response_record.get("model"))
+        or not _nonempty_bounded_text(response_record.get("response_id"), 256)
+        or not _nonempty_bounded_text(response_record.get("text"), 12_000)
+        or not _nonempty_bounded_text(response_record.get("started_at"), 64)
+        or not _nonempty_bounded_text(response_record.get("finished_at"), 64)
+        or not _finite_nonnegative_number(response_record.get("duration_seconds"))
+        or type(response_record.get("provider_admission_count")) is not int
+        or response_record.get("provider_admission_count") != review.get("call_attempt_count")
+        or type(response_record.get("response_count")) is not int
+        or response_record.get("response_count") != review.get("call_count")
+    ):
+        _raise_review_reuse_invalid()
+
+    attempts = response_record.get("attempt_records")
+    if not isinstance(attempts, list) or len(attempts) != review.get("call_attempt_count"):
+        _raise_review_reuse_invalid()
+    admitted = 0
+    accepted_responses = 0
+    last_text: str | None = None
+    seen_attempt_ids: set[str] = set()
+    for index, attempt in enumerate(attempts, start=1):
+        attempt_fields = {
+            "attempt_index", "audit_id", "admission_id", "provider_admitted", "response_accepted",
+            "accepted_findings", "status", "reason",
+        }
+        if (
+            not isinstance(attempt, Mapping)
+            or set(attempt) != attempt_fields
+            or type(attempt.get("attempt_index")) is not int
+            or attempt.get("attempt_index") != index
+            or not _is_uuid4(attempt.get("audit_id"))
+            or attempt.get("audit_id") in seen_attempt_ids
+            or not _is_uuid4(attempt.get("admission_id"))
+            or attempt.get("provider_admitted") is not True
+            or type(attempt.get("response_accepted")) is not bool
+            or attempt.get("accepted_findings") != 0
+        ):
+            _raise_review_reuse_invalid()
+        seen_attempt_ids.add(str(attempt["audit_id"]))
+        admitted += 1
+        attempt_dir_name = f"attempt-{index:02d}"
+        attempt_dir = _safe_archive_path(root, (*run_dir_parts, attempt_dir_name), directory=True, missing_code="archive_incomplete")
+        attempt_request_path = _safe_archive_path(root, (*run_dir_parts, attempt_dir_name, "request.json"), directory=False, missing_code="archive_incomplete")
+        attempt_request = _parse_json_object(
+            _read_checked_file(attempt_request_path, _MAX_REVIEW_AUDIT_BYTES, "archive_incomplete"),
+            "annual_review_reuse_invalid",
+        )
+        attempt_request_fields = {
+            "status", "attempt_index", "audit_id", "started_at", "prompt_version", "evidence_refs",
+            "model", "timeout_seconds", "messages", "stream",
+        }
+        if (
+            set(attempt_request) != attempt_request_fields
+            or attempt_request.get("status") != "started"
+            or attempt_request.get("attempt_index") != index
+            or attempt_request.get("audit_id") != attempt.get("audit_id")
+            or attempt_request.get("prompt_version") != "annual_review_v2"
+            or attempt_request.get("evidence_refs") != material["evidence_refs"]
+            or attempt_request.get("model") != model_name
+            or not _finite_positive_number(attempt_request.get("timeout_seconds"))
+            or attempt_request.get("messages") != messages
+            or attempt_request.get("stream") is not False
+            or not _nonempty_bounded_text(attempt_request.get("started_at"), 64)
+        ):
+            _raise_review_reuse_invalid()
+        if attempt.get("response_accepted") is True:
+            if index != len(attempts) or attempt.get("status") != "succeeded" or attempt.get("reason") is not None:
+                _raise_review_reuse_invalid()
+            attempt_response_path = _safe_archive_path(root, (*run_dir_parts, attempt_dir_name, "response.json"), directory=False, missing_code="archive_incomplete")
+            attempt_response = _parse_json_object(
+                _read_checked_file(attempt_response_path, _MAX_REVIEW_AUDIT_BYTES, "archive_incomplete"),
+                "annual_review_reuse_invalid",
+            )
+            if set(attempt_response) != {
+                "status", "attempt_index", "audit_id", "finished_at", "text", "model", "response_id",
+                "usage", "provider_admitted", "admission_id",
+            } or (
+                attempt_response.get("status") != "succeeded"
+                or attempt_response.get("attempt_index") != index
+                or attempt_response.get("audit_id") != attempt.get("audit_id")
+                or attempt_response.get("model") != response_record.get("model")
+                or attempt_response.get("provider_admitted") is not True
+                or attempt_response.get("admission_id") != attempt.get("admission_id")
+                or attempt_response.get("text") != response_record.get("text")
+                or attempt_response.get("response_id") != response_record.get("response_id")
+                or attempt_response.get("usage") != response_record.get("usage")
+                or not _nonempty_bounded_text(attempt_response.get("finished_at"), 64)
+            ):
+                _raise_review_reuse_invalid()
+            accepted_responses += 1
+            last_text = str(attempt_response["text"])
+        else:
+            reason = attempt.get("reason")
+            if (
+                index == len(attempts)
+                or attempt.get("status") != "failed"
+                or reason not in _REVIEW_RETRYABLE_FAILURES
+            ):
+                _raise_review_reuse_invalid()
+            failure_path = _safe_archive_path(root, (*run_dir_parts, attempt_dir_name, "failure.json"), directory=False, missing_code="archive_incomplete")
+            failure_record = _parse_json_object(
+                _read_checked_file(failure_path, _MAX_REVIEW_AUDIT_BYTES, "archive_incomplete"),
+                "annual_review_reuse_invalid",
+            )
+            if (
+                set(failure_record) != {"status", "attempt_index", "audit_id", "finished_at", "category", "provider_admitted"}
+                or failure_record.get("status") != "failed"
+                or failure_record.get("attempt_index") != index
+                or failure_record.get("audit_id") != attempt.get("audit_id")
+                or failure_record.get("category") != reason
+                or failure_record.get("provider_admitted") is not True
+                or not _nonempty_bounded_text(failure_record.get("finished_at"), 64)
+            ):
+                _raise_review_reuse_invalid()
+    if admitted != response_record.get("provider_admission_count") or accepted_responses != 1 or last_text != response_record.get("text"):
+        _raise_review_reuse_invalid()
+    try:
+        parsed = parse_model_review(
+            str(response_record["text"]),
+            allowed_ids=set(material["allowed_ids"]),
+            no_priority_allowed=material["no_priority_allowed"],
+        )
+    except Exception:
+        _raise_review_reuse_invalid()
+    if any(parsed.get(field) != review.get(field) for field in ("assessment", "summary", "reasons", "follow_up_items", "limitations")):
+        _raise_review_reuse_invalid()
+
+
+def _review_report_identity(report: Mapping[str, Any]) -> dict[str, Any]:
+    identity = {
+        "run_id": report.get("run_id"),
+        "company_id": report.get("company_id"),
+        "report_year": report.get("report_year"),
+        "source_document_id": report.get("source_document_id"),
+        "source_sha256": report.get("source_sha256"),
+    }
+    if (
+        not isinstance(identity["run_id"], str)
+        or not isinstance(identity["company_id"], str)
+        or type(identity["report_year"]) is not int
+        or not isinstance(identity["source_document_id"], str)
+        or not isinstance(identity["source_sha256"], str)
+        or _LOWER_SHA256.fullmatch(identity["source_sha256"]) is None
+    ):
+        _raise_review_reuse_invalid()
+    return identity
+
+
+def _raise_review_reuse_invalid() -> None:
+    raise AnnualReportReadError(409, "annual_review_reuse_invalid", "年度评审复用未通过来源、请求或原始审计链校验。")
+
+
+def _nonempty_bounded_text(value: object, maximum: int) -> bool:
+    return isinstance(value, str) and bool(value.strip()) and len(value) <= maximum
+
+
+def _safe_provider_model_text(value: object) -> bool:
+    return (
+        _nonempty_bounded_text(value, 128)
+        and all(ord(char) >= 32 and ord(char) != 127 for char in value)
+    )
+
+
+def _finite_positive_number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value)) and value > 0
+
+
+def _finite_nonnegative_number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value)) and value >= 0
+
+
+def _partial_checkpoint_matches_manifest(
+    checkpoint_state: str,
+    manifest_status: str,
+    report: Mapping[str, Any],
+) -> bool:
+    """Accept stable and exact two-file publication-window pairings."""
+
+    # Partial checkpoint semantics belong to the v3 recovery contract. Legacy
+    # v1/v2 reports remain on their existing final-report path only.
+    if not _has_v3_execution_contract(report):
+        return False
+    allowed = {
+        # A worker can persist a terminal partial checkpoint before updating
+        # the manifest. The pointer remains authoritative during that window.
+        "running": {"awaiting_model", "running", "partial", "cancelled", "failed", "interrupted"},
+        # CLI failure handling publishes its manifest after the last durable
+        # model checkpoint; retain that strictly validated partial projection.
+        "failed": {"awaiting_model", "running", "partial", "failed"},
+        # The job API exposes cancelled, while the durable run manifest uses
+        # interrupted. The checkpoint keeps the user-visible cancellation.
+        "interrupted": {"interrupted", "cancelled"},
+    }
+    return checkpoint_state in allowed.get(manifest_status, set())
+
+
+def _has_v3_execution_contract(report: Mapping[str, Any]) -> bool:
+    discovery = report.get("model_discovery")
+    return isinstance(discovery, Mapping) and "execution_contract" in discovery
+
+
+def _load_checkpoint_for_reader(root: Path, run_id: str, source_sha256: str) -> AnnualCheckpointRecord | None:
+    try:
+        # source_sha256 was computed from the race-checked source.pdf bytes at
+        # the beginning of this strict reader, never copied from job metadata.
+        return _load_current_annual_checkpoint_with_verified_source(root, run_id, source_sha256)
+    except AnnualCheckpointError as exc:
+        raise AnnualReportReadError(exc.status_code, exc.code, exc.message) from None
+
+
+def _canonical_report_bytes(report: Mapping[str, Any]) -> bytes:
+    try:
+        return json.dumps(report, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    except (TypeError, ValueError, RecursionError):
+        raise AnnualReportReadError(422, "report_invalid", "年度分析报告包含无法安全读取的值。") from None
 
 
 def render_evidence_preview(
@@ -586,6 +1281,7 @@ def _collect_discovery_evidences(
     expected_report_year: int,
     expected_document_id: str,
     expected_sha256: str,
+    expected_analysis_mode: object,
     nested_discovery: object,
 ) -> tuple[dict[str, Any], ...]:
     """Rebuild cited discovery evidence from the exact archived source PDF."""
@@ -604,12 +1300,14 @@ def _collect_discovery_evidences(
     layer = report.get("model_discovery")
     if not isinstance(layer, Mapping):
         raise AnnualReportReadError(422, "annual_discovery_invalid", "年度开放式发现结构无效。")
-    layer_fields = {
+    base_layer_fields = {
         "kind", "run_id", "company_id", "report_year", "source_document_id", "source_sha256",
         "status", "prompt_version", "model_called", "model_call_count",
         "model_call_attempt_count", "coverage", "findings", "evidences", "audit_artifacts",
         "limitations", "reason", "fraud_conclusion",
     }
+    has_execution_contract = "execution_contract" in layer
+    layer_fields = base_layer_fields | ({"execution_contract"} if has_execution_contract else set())
     if set(layer) != layer_fields:
         raise AnnualReportReadError(422, "annual_discovery_invalid", "年度开放式发现字段集合无效。")
     if nested_present and nested_discovery != layer:
@@ -648,7 +1346,32 @@ def _collect_discovery_evidences(
     coverage = layer.get("coverage")
     if not isinstance(coverage, Mapping):
         raise AnnualReportReadError(422, "annual_discovery_invalid", "年度开放式发现覆盖记录无效。")
-    _validate_discovery_coverage(coverage, status, str(prompt_version))
+    execution_summary: dict[str, Any] | None = None
+    if has_execution_contract:
+        if prompt_version != "annual_discovery_v2":
+            raise AnnualReportReadError(422, "annual_discovery_invalid", "执行契约只能绑定 annual_discovery_v2。")
+        execution_summary = _validate_v3_execution_contract(
+            layer.get("execution_contract"),
+            expected_run_id=expected_run_id,
+            expected_company_id=expected_company_id,
+            expected_report_year=expected_report_year,
+            expected_document_id=expected_document_id,
+            expected_sha256=expected_sha256,
+            expected_analysis_mode=expected_analysis_mode,
+            m3_screening=report.get("m3_screening"),
+            coverage=coverage,
+        )
+    _validate_discovery_coverage(
+        coverage,
+        status,
+        str(prompt_version),
+        execution_contract=layer.get("execution_contract") if has_execution_contract else None,
+    )
+    if has_execution_contract and execution_summary is not None:
+        for row in coverage["batch_results"]:
+            batch = execution_summary["batches"].get(row["batch_index"])
+            if batch is not None:
+                batch["accepted_findings"] = row["accepted_findings"]
     if layer.get("fraud_conclusion") is not None:
         raise AnnualReportReadError(422, "annual_discovery_invalid", "开放式发现不能包含舞弊结论。")
     called = layer.get("model_called")
@@ -667,13 +1390,20 @@ def _collect_discovery_evidences(
         raise AnnualReportReadError(422, "annual_discovery_invalid", "未调用状态不能包含模型请求。")
     if status == "not_called" and call_count != 0:
         raise AnnualReportReadError(422, "annual_discovery_invalid", "未调用状态不能包含模型响应。")
-    if coverage["source_status"] == "parsed" and (
+    if has_execution_contract and (
+        execution_summary is None
+        or attempt_count != execution_summary["provider_admission_count"]
+        or call_count != execution_summary["response_count"]
+        or called != (execution_summary["provider_admission_count"] > 0)
+    ):
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度执行契约与当前模型调用计数不一致。")
+    if not has_execution_contract and coverage["source_status"] == "parsed" and (
         attempt_count != coverage["processed_batches"]
         or coverage["successful_batches"] + (coverage.get("partial_batches", 0) if prompt_version == "annual_discovery_v2" else 0) > call_count
         or call_count > attempt_count
     ):
         raise AnnualReportReadError(422, "annual_discovery_invalid", "已解析来源的请求/响应数与结束批次不一致。")
-    if status == "completed" and (
+    if status == "completed" and not has_execution_contract and (
         call_count != coverage["planned_batches"]
         or attempt_count != coverage["planned_batches"]
     ):
@@ -693,7 +1423,7 @@ def _collect_discovery_evidences(
         or sum(len(item) for item in limitations if isinstance(item, str)) > _MAX_DISCOVERY_LIMITATIONS * 400
     ):
         raise AnnualReportReadError(422, "annual_discovery_invalid", "开放式发现条目超过结构或字符上限。")
-    if prompt_version == "annual_discovery_v2":
+    if prompt_version == "annual_discovery_v2" and not has_execution_contract:
         accepted_count_ceiling = sum(
             int(item["accepted_findings"])
             for item in coverage["batch_results"]
@@ -704,7 +1434,13 @@ def _collect_discovery_evidences(
     accepted_batch_count = coverage["successful_batches"] + (
         coverage.get("partial_batches", 0) if prompt_version == "annual_discovery_v2" else 0
     )
-    if accepted_batch_count == 0 and (raw_findings or raw_evidences):
+    if (
+        has_execution_contract
+        and sum(int(item.get("accepted_findings", 0)) for item in coverage["batch_results"])
+        == 0
+        and (raw_findings or raw_evidences)
+        or not has_execution_contract and accepted_batch_count == 0 and (raw_findings or raw_evidences)
+    ):
         raise AnnualReportReadError(
             422,
             "annual_discovery_invalid",
@@ -792,15 +1528,19 @@ def _collect_discovery_evidences(
     cited_by: dict[str, set[str]] = {}
     quotes_by_evidence: dict[str, list[dict[str, str]]] = {}
     finding_ids: set[str] = set()
+    findings_by_batch: dict[int, int] = {}
     total_opinion_chars = 0
     total_quote_chars = 0
     for finding in raw_findings:
         if not isinstance(finding, Mapping):
             raise AnnualReportReadError(422, "annual_discovery_invalid", "开放式发现条目结构无效。")
-        if set(finding) != {
+        finding_fields = {
             "finding_id", "title", "observation", "why_it_matters", "follow_up", "priority",
             "classification", "verification_status", "evidence_ids", "citations",
-        }:
+        }
+        if has_execution_contract:
+            finding_fields.add("batch_index")
+        if set(finding) != finding_fields:
             raise AnnualReportReadError(422, "annual_discovery_invalid", "开放式发现字段集合无效。")
         finding_id = finding.get("finding_id")
         priority = finding.get("priority")
@@ -815,6 +1555,16 @@ def _collect_discovery_evidences(
             or priority not in {"high", "medium", "low"}
         ):
             raise AnnualReportReadError(422, "annual_discovery_invalid", "开放式发现条目标识或状态无效。")
+        if has_execution_contract:
+            batch_index = finding.get("batch_index")
+            batch = execution_summary["batches"].get(batch_index) if type(batch_index) is int else None
+            if (
+                type(batch_index) is not int
+                or batch is None
+                or batch["accepted_findings"] <= 0
+            ):
+                raise AnnualReportReadError(422, "annual_discovery_invalid", "年度发现条目缺少有效的所属批次。")
+            findings_by_batch[batch_index] = findings_by_batch.get(batch_index, 0) + 1
         finding_ids.add(finding_id)
         for field, limit in (("title", 100), ("observation", 600), ("why_it_matters", 400), ("follow_up", 400)):
             value = finding.get(field)
@@ -876,6 +1626,11 @@ def _collect_discovery_evidences(
             raise AnnualReportReadError(422, "annual_discovery_invalid", "开放式发现引用 ID 与证据 ID 列表不一致。")
     if set(evidence_records) != set(cited_by):
         raise AnnualReportReadError(422, "annual_discovery_invalid", "开放式发现包含未被实际引用的证据。")
+    if has_execution_contract and any(
+        findings_by_batch.get(index, 0) != batch["accepted_findings"]
+        for index, batch in execution_summary["batches"].items()
+    ):
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "报告发现数量与 v3 批次去重并集计数不一致。")
     if not evidence_records:
         return ()
 
@@ -923,9 +1678,296 @@ def _annual_discovery_evidence_id(source_sha256: str, page: int, block_index: in
     return f"adisc-{source_sha256[:12]}-p{page}-b{block_index}-c{start_char}-{digest}"
 
 
+def _m3_semantic_binding_sha256(value: object, binding: Mapping[str, Any]) -> str:
+    """Rebuild the execution layer's pure semantic M3 input projection.
+
+    This intentionally excludes generated IDs and verification timestamps so
+    the binding follows financial inputs rather than incidental archive IDs.
+    Keep the selected fields and canonical JSON shape aligned with
+    ``annual_recovery._m3_semantic_binding_sha256``.
+    """
+
+    if not isinstance(value, Mapping):
+        return ""
+    facts: list[dict[str, Any]] = []
+    fields = (
+        "metric_id", "source_document_id", "source_sha256", "company_id",
+        "report_year", "period_start", "period_end", "period_type",
+        "frequency", "comparison_role", "raw_value", "normalized_value",
+        "unit_multiplier", "unit", "currency", "scope", "statement_type",
+        "restatement_status",
+    )
+    for section_name in ("extraction", "explicit_unit_facts"):
+        section = value.get(section_name)
+        rows = section.get("facts") if isinstance(section, Mapping) else None
+        if not isinstance(rows, list):
+            continue
+        for fact in rows:
+            if isinstance(fact, Mapping):
+                facts.append({key: fact.get(key) for key in fields})
+    try:
+        facts.sort(key=lambda row: _canonical_report_bytes(row))
+        projection = {
+            "kind": "fintrace_m3_semantic_binding_v1",
+            "source_sha256": str(binding.get("source_sha256", "")).lower(),
+            "company_id": binding.get("company_id"),
+            "report_year": binding.get("report_year"),
+            "source_document_id": binding.get("source_document_id"),
+            "analysis_mode": binding.get("analysis_mode"),
+            "rule_version": value.get("rule_version"),
+            "facts": facts,
+        }
+        return hashlib.sha256(_canonical_report_bytes(projection)).hexdigest()
+    except AnnualReportReadError:
+        return ""
+
+
+def _validate_v3_execution_contract(
+    value: object,
+    *,
+    expected_run_id: str,
+    expected_company_id: str,
+    expected_report_year: int,
+    expected_document_id: str,
+    expected_sha256: str,
+    expected_analysis_mode: object,
+    m3_screening: object,
+    coverage: Mapping[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or set(value) != _V3_CONTRACT_FIELDS:
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 执行契约字段集合无效。")
+    binding = value.get("binding")
+    if not isinstance(binding, Mapping) or set(binding) != _V3_BINDING_FIELDS:
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 执行绑定字段集合无效。")
+    plan_sha256 = value.get("plan_sha256")
+    identity_sha256 = value.get("identity_sha256")
+    hash_fields = ("plan_sha256", "identity_sha256")
+    if (
+        value.get("kind") != _V3_EXECUTION_KIND
+        or any(not isinstance(value.get(field), str) or _LOWER_SHA256.fullmatch(value[field]) is None for field in hash_fields)
+        or binding.get("plan_sha256") != plan_sha256
+        or binding.get("source_sha256") != expected_sha256
+        or binding.get("company_id") != expected_company_id
+        or binding.get("report_year") != expected_report_year
+        or binding.get("source_document_id") != expected_document_id
+        or binding.get("analysis_mode") not in {"model_investigation", "integrated_analysis"}
+        or binding.get("analysis_mode") != expected_analysis_mode
+        or (
+            binding.get("analysis_mode") == "model_investigation"
+            and binding.get("m3_binding_sha256") is not None
+        )
+        or (
+            binding.get("analysis_mode") == "integrated_analysis"
+            and (
+                not isinstance(binding.get("m3_binding_sha256"), str)
+                or _LOWER_SHA256.fullmatch(binding.get("m3_binding_sha256", "")) is None
+            )
+        )
+        or not isinstance(binding.get("provider_model_fingerprint"), str)
+        or _LOWER_SHA256.fullmatch(binding.get("provider_model_fingerprint", "")) is None
+        or not isinstance(binding.get("prompts_sha256"), str)
+        or _LOWER_SHA256.fullmatch(binding.get("prompts_sha256", "")) is None
+        or not isinstance(binding.get("model"), str)
+        or not binding["model"]
+        or len(binding["model"]) > 128
+        or any(ord(char) < 32 or ord(char) == 127 for char in binding["model"])
+        or not isinstance(binding.get("parser_version"), str)
+        or re.fullmatch(r"[A-Za-z0-9._-]{1,100}", binding["parser_version"]) is None
+        or hashlib.sha256(_canonical_report_bytes(binding)).hexdigest() != identity_sha256
+        or (
+            binding.get("analysis_mode") == "integrated_analysis"
+            and binding.get("m3_binding_sha256") != _m3_semantic_binding_sha256(m3_screening, binding)
+        )
+    ):
+        raise AnnualReportReadError(409, "annual_discovery_binding_mismatch", "年度 v3 执行身份与报告来源不一致。")
+
+    parent_run_id = value.get("parent_run_id")
+    if parent_run_id is not None:
+        parent_run_id = _checked_run_id(parent_run_id)
+        if parent_run_id == expected_run_id:
+            raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 执行契约不能引用自身为父运行。")
+    counter_fields = (
+        "provider_admission_count", "parent_provider_admission_count",
+        "cumulative_provider_admission_count", "response_count",
+    )
+    counters: dict[str, int] = {}
+    for field in counter_fields:
+        counter = value.get(field)
+        if type(counter) is not int or counter < 0 or counter > _MAX_V3_ATTEMPTS_TOTAL * 1000:
+            raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 执行调用计数无效。")
+        counters[field] = counter
+    if (
+        counters["cumulative_provider_admission_count"]
+        != counters["parent_provider_admission_count"] + counters["provider_admission_count"]
+        or parent_run_id is None and counters["parent_provider_admission_count"] != 0
+    ):
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 累计准入计数关系无效。")
+
+    planned_batches = coverage.get("planned_batches")
+    batches = value.get("batches")
+    if (
+        type(planned_batches) is not int
+        or not 0 <= planned_batches <= 128
+        or not isinstance(batches, list)
+        or len(batches) != planned_batches
+    ):
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 批次计划长度无效。")
+    batch_map: dict[int, dict[str, Any]] = {}
+    audit_ids: set[str] = set()
+    admission_ids: set[str] = set()
+    admitted_total = 0
+    response_total = 0
+    attempt_total = 0
+    derived_reused: list[int] = []
+    for position, batch in enumerate(batches, start=1):
+        if not isinstance(batch, Mapping) or set(batch) != _V3_BATCH_FIELDS:
+            raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 批次字段集合无效。")
+        index = batch.get("batch_index")
+        state = batch.get("state")
+        resolution = batch.get("resolution")
+        reason = batch.get("reason")
+        attempts = batch.get("attempts")
+        if (
+            type(index) is not int or index != position
+            or state not in {"succeeded", "partial", "failed", "unattempted"}
+            or resolution not in {"executed", "reused", "unattempted"}
+            or not isinstance(attempts, list)
+            or len(attempts) > _MAX_V3_ATTEMPTS_PER_BATCH
+        ):
+            raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 批次顺序、状态或重试数无效。")
+        if state == "succeeded":
+            valid_reason = reason is None
+        elif state == "partial":
+            valid_reason = reason == "some_findings_rejected"
+        elif state == "failed":
+            valid_reason = isinstance(reason, str) and reason in _V3_BATCH_FAILURES
+        else:
+            valid_reason = isinstance(reason, str) and reason in _V3_UNATTEMPTED_REASONS
+        if not valid_reason:
+            raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 批次原因与状态无效。")
+        if (
+            resolution == "reused"
+            and (state != "succeeded" or reason is not None or attempts)
+            or resolution == "unattempted"
+            and (state != "unattempted" or attempts)
+            or resolution == "executed" and state in {"succeeded", "partial", "failed"} and not attempts
+        ):
+            raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 批次状态与解析方式不一致。")
+        if resolution == "reused":
+            derived_reused.append(index)
+
+        admitted_in_batch = 0
+        responses_in_batch = 0
+        accepted_in_batch = 0
+        previous_attempt = 0
+        for attempt in attempts:
+            if not isinstance(attempt, Mapping) or set(attempt) != _V3_ATTEMPT_FIELDS:
+                raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 尝试字段集合无效。")
+            attempt_index = attempt.get("attempt_index")
+            audit_id = attempt.get("audit_id")
+            admission_id = attempt.get("admission_id")
+            provider_admitted = attempt.get("provider_admitted")
+            response_accepted = attempt.get("response_accepted")
+            attempt_status = attempt.get("status")
+            accepted_findings = attempt.get("accepted_findings")
+            attempt_reason = attempt.get("reason")
+            if (
+                type(attempt_index) is not int or attempt_index != previous_attempt + 1
+                or not _is_uuid4(audit_id)
+                or audit_id in audit_ids
+                or type(provider_admitted) is not bool
+                or (admission_id is not None and not _is_uuid4(admission_id))
+                or (provider_admitted != (admission_id is not None))
+                or admission_id is not None and admission_id in admission_ids
+                or type(response_accepted) is not bool
+                or type(accepted_findings) is not int or not 0 <= accepted_findings <= 6
+            ):
+                raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 尝试标识、计数或准入绑定无效。")
+            if response_accepted:
+                if not provider_admitted or attempt_status != "succeeded" or attempt_reason is not None:
+                    raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 可用响应状态无效。")
+            elif (
+                accepted_findings != 0
+                or attempt_status == "failed" and (not provider_admitted or attempt_reason not in _V3_ATTEMPT_FAILURES)
+                or attempt_status == "rejected" and (provider_admitted or attempt_reason not in _V3_ATTEMPT_FAILURES)
+                or attempt_status not in {"failed", "rejected"}
+            ):
+                raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 失败尝试状态或原因无效。")
+            if resolution == "unattempted" and provider_admitted:
+                raise AnnualReportReadError(422, "annual_discovery_invalid", "未尝试批次不能包含 provider 准入。")
+            previous_attempt = attempt_index
+            attempt_total += 1
+            if attempt_total > _MAX_V3_ATTEMPTS_TOTAL:
+                raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 尝试总数超出上限。")
+            audit_ids.add(str(audit_id))
+            if admission_id is not None:
+                admission_ids.add(str(admission_id))
+            if provider_admitted:
+                admitted_in_batch += 1
+                admitted_total += 1
+            if response_accepted:
+                responses_in_batch += 1
+                response_total += 1
+            accepted_in_batch += accepted_findings
+        if state == "unattempted" and resolution == "executed" and any(
+            attempt["provider_admitted"] for attempt in attempts
+        ):
+            raise AnnualReportReadError(422, "annual_discovery_invalid", "未完成批次不能已有 provider 准入。")
+        batch_map[index] = {
+            "batch_index": index,
+            "state": state,
+            "resolution": resolution,
+            "reason": reason,
+            "attempts": list(attempts),
+            "provider_admission_count": admitted_in_batch,
+            "response_count": responses_in_batch,
+            "attempt_accepted_findings": accepted_in_batch,
+        }
+    if (
+        admitted_total != counters["provider_admission_count"]
+        or response_total != counters["response_count"]
+        or counters["response_count"] > counters["provider_admission_count"]
+    ):
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 执行计数与批次尝试记录不一致。")
+    reused = value.get("reused_batches")
+    if (
+        not isinstance(reused, list)
+        or any(type(index) is not int or index < 1 or index > planned_batches for index in reused)
+        or len(reused) != len(set(reused))
+        or reused != sorted(reused)
+        or reused != derived_reused
+        or (parent_run_id is None and (reused or any(
+            row.get("resolution") == "reused" for row in batch_map.values()
+        )))
+    ):
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 重用批次索引无效。")
+    return {
+        **counters,
+        "parent_run_id": parent_run_id,
+        "batches": batch_map,
+    }
+
+
+def _is_uuid4(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = uuid.UUID(value)
+    except (ValueError, AttributeError, TypeError):
+        return False
+    return parsed.version == 4 and str(parsed) == value
+
+
 def _validate_discovery_coverage(
-    coverage: Mapping[str, Any], status: str, prompt_version: str = "annual_discovery_v1"
+    coverage: Mapping[str, Any],
+    status: str,
+    prompt_version: str = "annual_discovery_v1",
+    *,
+    execution_contract: object = None,
 ) -> None:
+    if execution_contract is not None:
+        _validate_discovery_coverage_v3(coverage, status, execution_contract)
+        return
     is_v2 = prompt_version == "annual_discovery_v2"
     fields = {
         "total_pages", "text_pages", "total_blocks", "total_chars", "planned_batches",
@@ -1142,6 +2184,233 @@ def _validate_discovery_coverage(
         raise AnnualReportReadError(422, "annual_discovery_invalid", "失败状态与已尝试批次结果不一致。")
     if status == "not_called" and source_status == "parsed" and numbers["processed_batches"] != 0:
         raise AnnualReportReadError(422, "annual_discovery_invalid", "未调用状态不能包含已结束的批次。")
+
+
+def _validate_discovery_coverage_v3(
+    coverage: Mapping[str, Any],
+    status: str,
+    execution_contract: object,
+) -> None:
+    """Validate R2 coverage without inheriting v1/v2 prefix/call assumptions."""
+
+    if not isinstance(execution_contract, Mapping):
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 执行契约无效。")
+    fields = {
+        "total_pages", "text_pages", "total_blocks", "total_chars", "planned_batches",
+        "processed_batches", "successful_batches", "failed_batches", "batch_results",
+        "processed_chars", "attempted_chars", "unattempted_batches", "unattempted_chars",
+        "planned_chars", "omitted_chars", "unread_pages", "failed_pages", "no_text_pages",
+        "image_pages", "unread_image_pages", "truncated", "complete", "source_status",
+        "content_status", "time_budget_exhausted", "text_only_scope", "partial_batches",
+    }
+    if set(coverage) != fields:
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 覆盖字段集合无效。")
+    integer_fields = (
+        "total_pages", "text_pages", "total_blocks", "total_chars", "planned_batches",
+        "processed_batches", "successful_batches", "partial_batches", "failed_batches",
+        "processed_chars", "attempted_chars", "unattempted_batches", "unattempted_chars",
+        "planned_chars", "omitted_chars",
+    )
+    numbers: dict[str, int] = {}
+    for field in integer_fields:
+        count = coverage.get(field)
+        if type(count) is not int or count < 0:
+            raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 覆盖计数无效。")
+        numbers[field] = count
+    if numbers["planned_batches"] > 128 or numbers["processed_batches"] > numbers["planned_batches"]:
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 批次数超出上限。")
+    for field in ("truncated", "complete", "time_budget_exhausted"):
+        if type(coverage.get(field)) is not bool:
+            raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 覆盖状态无效。")
+    source_status = coverage.get("source_status")
+    content_status = coverage.get("content_status")
+    if source_status not in {"parsed", "unavailable"} or content_status not in {
+        "text_available", "no_extractable_text", "unavailable",
+    }:
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 来源或内容状态无效。")
+    if not isinstance(coverage.get("text_only_scope"), str) or len(coverage["text_only_scope"]) > 200:
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 文本范围说明无效。")
+    page_list_fields = ("unread_pages", "failed_pages", "no_text_pages", "image_pages", "unread_image_pages")
+    pages: dict[str, list[int]] = {}
+    for field in page_list_fields:
+        value = coverage.get(field)
+        if (
+            not isinstance(value, list)
+            or len(value) > numbers["total_pages"]
+            or any(type(page) is not int or page < 1 or page > numbers["total_pages"] for page in value)
+            or len(set(value)) != len(value)
+            or value != sorted(value)
+        ):
+            raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 页码覆盖列表无效。")
+        pages[field] = value
+    if (
+        numbers["text_pages"] > numbers["total_pages"]
+        or numbers["text_pages"] + len(pages["no_text_pages"]) != numbers["total_pages"]
+        or not set(pages["unread_image_pages"]).issubset(pages["image_pages"])
+        or not set(pages["unread_image_pages"]).issubset(pages["no_text_pages"])
+        or not set(pages["failed_pages"]).issubset(pages["unread_pages"])
+    ):
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 页码覆盖关系无效。")
+
+    contract_batches = execution_contract.get("batches")
+    batch_results = coverage.get("batch_results")
+    if (
+        not isinstance(contract_batches, list)
+        or not isinstance(batch_results, list)
+        or len(contract_batches) != numbers["planned_batches"]
+        or len(batch_results) != numbers["planned_batches"]
+    ):
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 批次结果与计划长度不一致。")
+    result_chars = {key: 0 for key in ("succeeded", "partial", "failed", "unattempted")}
+    result_pages: dict[str, set[int]] = {key: set() for key in result_chars}
+    attempted_chars = 0
+    findings_by_state = {key: 0 for key in result_chars}
+    successful_count = partial_count = failed_count = unattempted_count = 0
+    for index, (contract_batch, result) in enumerate(zip(contract_batches, batch_results), start=1):
+        if not isinstance(contract_batch, Mapping) or not isinstance(result, Mapping):
+            raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 批次结果结构无效。")
+        if set(result) != _V3_COVERAGE_BATCH_FIELDS:
+            raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 覆盖批次字段集合无效。")
+        batch_index = result.get("batch_index")
+        batch_status = result.get("status")
+        reason = result.get("reason")
+        resolution = result.get("resolution")
+        raw_chars = result.get("raw_chars")
+        batch_pages = result.get("pages")
+        accepted = result.get("accepted_findings")
+        inherited = result.get("inherited_findings")
+        rejected = result.get("rejected_findings")
+        restored = result.get("restored_quotes")
+        contract_attempts = contract_batch.get("attempts")
+        batch_attempts = [item for item in contract_attempts if isinstance(item, Mapping)] if isinstance(contract_attempts, list) else []
+        response_count = sum(item.get("response_accepted") is True for item in batch_attempts)
+        admitted_count = sum(item.get("provider_admitted") is True for item in batch_attempts)
+        accepted_from_attempts = sum(
+            int(item.get("accepted_findings", 0))
+            for item in batch_attempts
+            if type(item.get("accepted_findings")) is int
+        )
+        if (
+            batch_index != index
+            or batch_status not in result_chars
+            or result.get("batch_index") != contract_batch.get("batch_index")
+            or batch_status != contract_batch.get("state")
+            or resolution != contract_batch.get("resolution")
+            or reason != contract_batch.get("reason")
+            or type(raw_chars) is not int or not 0 < raw_chars <= 12_000
+            or not isinstance(batch_pages, list) or not batch_pages
+            or any(type(page) is not int or page < 1 or page > numbers["total_pages"] for page in batch_pages)
+            or len(set(batch_pages)) != len(batch_pages)
+            or batch_pages != sorted(batch_pages)
+            or type(accepted) is not int or not 0 <= accepted <= _MAX_DISCOVERY_FINDINGS
+            or type(inherited) is not int or not 0 <= inherited <= _MAX_DISCOVERY_FINDINGS
+            or accepted < inherited
+            or type(rejected) is not int or not 0 <= rejected <= response_count * 6
+            or type(restored) is not int or not 0 <= restored <= response_count * 24
+            or restored > accepted_from_attempts * 4
+            or accepted > inherited + accepted_from_attempts
+        ):
+            raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 批次计数、顺序或契约绑定无效。")
+        state = batch_status
+        if (
+            state == "succeeded" and (reason is not None or rejected != 0)
+            or state == "partial" and (reason != "some_findings_rejected" or rejected == 0)
+            or state == "failed" and (not isinstance(reason, str) or reason not in _V3_BATCH_FAILURES)
+            or state == "failed" and reason == "all_findings_rejected" and rejected == 0
+            or state == "unattempted" and (
+                not isinstance(reason, str) or reason not in _V3_UNATTEMPTED_REASONS
+                or accepted != inherited or rejected != 0 or restored != 0
+            )
+        ):
+            raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 批次状态与安全原因或计数不一致。")
+        if resolution == "reused" and (accepted != inherited or rejected != 0 or restored != 0):
+            raise AnnualReportReadError(422, "annual_discovery_invalid", "重用批次不能虚构本次模型结果。")
+        if resolution == "unattempted" and (accepted != inherited or rejected != 0 or restored != 0):
+            raise AnnualReportReadError(422, "annual_discovery_invalid", "未计划批次不能包含本次发现结果。")
+        if admitted_count:
+            attempted_chars += raw_chars
+        result_chars[state] += raw_chars
+        result_pages[state].update(batch_pages)
+        findings_by_state[state] += accepted
+        if state == "succeeded":
+            successful_count += 1
+        elif state == "partial":
+            partial_count += 1
+        elif state == "failed":
+            failed_count += 1
+        else:
+            unattempted_count += 1
+    processed_batches = successful_count + partial_count + failed_count
+    planned_chars = sum(result_chars.values())
+    unattempted_chars = result_chars["unattempted"]
+    processed_chars = result_chars["succeeded"]
+    omitted_chars = max(numbers["total_chars"] - numbers["planned_chars"], 0) + unattempted_chars
+    if (
+        numbers["successful_batches"] != successful_count
+        or numbers["partial_batches"] != partial_count
+        or numbers["failed_batches"] != failed_count
+        or numbers["processed_batches"] != processed_batches
+        or numbers["unattempted_batches"] != unattempted_count
+        or numbers["planned_chars"] != planned_chars
+        or numbers["processed_chars"] != processed_chars
+        or numbers["attempted_chars"] != attempted_chars
+        or numbers["unattempted_chars"] != unattempted_chars
+        or numbers["omitted_chars"] != omitted_chars
+        or not result_pages["failed"].issubset(pages["failed_pages"])
+        or not result_pages["failed"].issubset(pages["unread_pages"])
+        or not result_pages["unattempted"].issubset(pages["unread_pages"])
+        or result_pages["failed"] != set(pages["failed_pages"])
+        or any(page not in pages["unread_pages"] for page in result_pages["partial"])
+        or coverage["truncated"] != bool(omitted_chars)
+    ):
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 批次覆盖汇总不一致。")
+
+    if source_status == "unavailable":
+        if (
+            content_status != "unavailable"
+            or any(numbers[field] != 0 for field in integer_fields)
+            or any(pages[field] for field in page_list_fields)
+            or coverage["complete"] or coverage["truncated"] or coverage["time_budget_exhausted"]
+            or batch_results or status not in {"failed", "not_called"}
+        ):
+            raise AnnualReportReadError(422, "annual_discovery_invalid", "不可用来源不能包含年度 v3 批次覆盖。")
+    else:
+        if content_status == "unavailable":
+            raise AnnualReportReadError(422, "annual_discovery_invalid", "已解析来源不能使用 unavailable 内容状态。")
+        if content_status == "text_available" and numbers["total_chars"] <= 0:
+            raise AnnualReportReadError(422, "annual_discovery_invalid", "可提取文字状态与年度 v3 字符计数不一致。")
+        if content_status == "no_extractable_text" and numbers["total_chars"] != 0:
+            raise AnnualReportReadError(422, "annual_discovery_invalid", "无可提取文字状态与年度 v3 字符计数不一致。")
+    expected_complete = (
+        source_status == "parsed"
+        and content_status == "text_available"
+        and numbers["total_chars"] > 0
+        and not coverage["truncated"]
+        and not pages["unread_image_pages"]
+        and numbers["planned_chars"] == numbers["total_chars"]
+        and numbers["processed_batches"] == numbers["planned_batches"]
+        and numbers["partial_batches"] == 0
+        and numbers["failed_batches"] == 0
+        and numbers["successful_batches"] == numbers["planned_batches"]
+        and numbers["processed_chars"] == numbers["planned_chars"]
+        and not pages["unread_pages"]
+    )
+    if coverage["complete"] != expected_complete:
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 覆盖完整标志与实际结果不一致。")
+    if status == "completed" and not expected_complete:
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 完成状态与覆盖缺口不一致。")
+    if status == "partial" and (
+        expected_complete or numbers["successful_batches"] + numbers["partial_batches"] == 0
+    ):
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 部分状态缺少可用批次或覆盖缺口。")
+    if status == "failed" and source_status == "parsed" and (
+        numbers["failed_batches"] == 0
+        or numbers["successful_batches"] != 0
+        or numbers["partial_batches"] != 0
+    ):
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 失败状态与批次结果不一致。")
+    if status == "not_called" and source_status == "parsed" and numbers["processed_batches"] != 0:
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v3 未调用状态包含已处理批次。")
 
 
 def _safe_audit_relative_path(value: str) -> bool:

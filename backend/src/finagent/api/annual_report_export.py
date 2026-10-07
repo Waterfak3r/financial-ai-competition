@@ -83,6 +83,7 @@ class AnnualReportExport:
     media_type: str
     filename: str
     content_security_policy: str | None = None
+    snapshot: dict[str, Any] | None = None
 
 
 class AnnualReportExportError(ValueError):
@@ -103,15 +104,26 @@ def export_annual_report(project_root: Path, run_id: str, format: str) -> Annual
     filename_id = _safe_filename_id(archive.run_id)
     if format == "json":
         content = json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False).encode("utf-8")
-        return AnnualReportExport(content, "application/json; charset=utf-8", f"fintrace-annual-{filename_id}.json")
+        return AnnualReportExport(
+            content,
+            "application/json; charset=utf-8",
+            f"fintrace-annual-{filename_id}.json",
+            snapshot=dict(archive.snapshot) if archive.snapshot is not None else None,
+        )
     if format == "markdown":
         markdown = render_safe_markdown(payload)
-        return AnnualReportExport(markdown.encode("utf-8"), "text/markdown; charset=utf-8", f"fintrace-annual-{filename_id}.md")
+        return AnnualReportExport(
+            markdown.encode("utf-8"),
+            "text/markdown; charset=utf-8",
+            f"fintrace-annual-{filename_id}.md",
+            snapshot=dict(archive.snapshot) if archive.snapshot is not None else None,
+        )
     return AnnualReportExport(
         render_html(payload).encode("utf-8"),
         "text/html; charset=utf-8",
         f"fintrace-annual-{filename_id}.html",
         "default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; font-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        snapshot=dict(archive.snapshot) if archive.snapshot is not None else None,
     )
 
 
@@ -141,7 +153,7 @@ def project_export(archive: AnnualReportArchive) -> dict[str, Any]:
         report_year=summary["report_year"],
         document_id=summary["document_id"],
     )
-    return {
+    payload = {
         "schema_version": 1,
         "export_kind": "fintrace_annual_report_export",
         "report": report,
@@ -159,6 +171,12 @@ def project_export(archive: AnnualReportArchive) -> dict[str, Any]:
             "候选线索不是舞弊结论。",
         ],
     }
+    if archive.snapshot is not None:
+        payload["snapshot"] = _pick(
+            archive.snapshot,
+            ("state", "sequence", "is_partial", "parent_run_id"),
+        )
+    return payload
 
 
 def render_safe_markdown(payload: Mapping[str, Any]) -> str:
@@ -179,6 +197,14 @@ def render_safe_markdown(payload: Mapping[str, Any]) -> str:
                 1,
             )
     text += "\n\n" + rendered_report
+    snapshot = payload.get("snapshot")
+    if isinstance(snapshot, Mapping):
+        text += "\n\n## 检查点\n\n"
+        text += f"- 状态：`{_display(snapshot.get('state'))}`\n"
+        text += f"- 序号：`{_display(snapshot.get('sequence'))}`\n"
+        text += f"- 部分快照：`{_display(snapshot.get('is_partial'))}`\n"
+        if snapshot.get("parent_run_id") is not None:
+            text += f"- 父运行：`{_display(snapshot.get('parent_run_id'))}`\n"
     discovery_markdown = _render_discovery_markdown(report.get("model_discovery"))
     if discovery_markdown:
         text += "\n\n" + discovery_markdown
@@ -216,6 +242,14 @@ def render_html(payload: Mapping[str, Any]) -> str:
         ("运行模式", manifest.get("mode")), ("来源文档 ID", manifest.get("document_id")),
         ("来源 SHA256", manifest.get("source_pdf_sha256")),
     ]
+    snapshot = payload.get("snapshot")
+    if isinstance(snapshot, Mapping):
+        rows.extend((
+            ("检查点状态", snapshot.get("state")),
+            ("检查点序号", snapshot.get("sequence")),
+            ("部分快照", snapshot.get("is_partial")),
+            ("父运行 ID", snapshot.get("parent_run_id")),
+        ))
     body = [
         "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">",
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
@@ -590,6 +624,7 @@ def _project_discovery(
     if not isinstance(prompt_version, str) or prompt_version not in {"annual_discovery_v1", "annual_discovery_v2"}:
         return {"status": "limited", "source_binding_status": "matched_but_invalid", "findings": []}, set()
     is_v2 = prompt_version == "annual_discovery_v2"
+    is_v3 = "execution_contract" in value
     status = value.get("status")
     called = value.get("model_called")
     call_count = value.get("model_call_count")
@@ -680,7 +715,7 @@ def _project_discovery(
             or not is_v2 and len(citation_ids) != len(set(citation_ids))
         ):
             return {"status": "limited", "source_binding_status": "matched_but_invalid", "findings": []}, set()
-        projected_findings.append({
+        projected_finding = {
             "finding_id": finding_id,
             "title": title,
             "observation": observation,
@@ -691,8 +726,14 @@ def _project_discovery(
             "verification_status": "unverified",
             "evidence_ids": list(evidence_ids),
             "citations": citation_locations,
-        })
-    if is_v2:
+        }
+        if is_v3:
+            batch_index = finding.get("batch_index")
+            if not _is_nonnegative_int(batch_index):
+                return {"status": "limited", "source_binding_status": "matched_but_invalid", "findings": []}, set()
+            projected_finding["batch_index"] = batch_index
+        projected_findings.append(projected_finding)
+    if is_v2 and not is_v3:
         accepted_ceiling = sum(
             int(item.get("accepted_findings", 0))
             for item in coverage.get("batch_results", [])
@@ -700,7 +741,11 @@ def _project_discovery(
         ) if isinstance(coverage.get("batch_results"), list) else -1
         if len(projected_findings) > accepted_ceiling:
             return {"status": "limited", "source_binding_status": "matched_but_invalid", "findings": []}, set()
-    projected_coverage = _project_discovery_coverage(coverage, str(prompt_version))
+    projected_coverage = _project_discovery_coverage(
+        coverage,
+        str(prompt_version),
+        execution_contract=value.get("execution_contract") if is_v3 else None,
+    )
     if projected_coverage is None:
         return {"status": "limited", "source_binding_status": "matched_but_invalid", "findings": []}, set()
     result: dict[str, Any] = {
@@ -719,12 +764,21 @@ def _project_discovery(
         "reason": value.get("reason") if isinstance(value.get("reason"), str) else None,
         "fraud_conclusion": None,
     }
+    if is_v3:
+        projected_execution = _project_v3_execution_contract(value.get("execution_contract"))
+        if projected_execution is None:
+            return {"status": "limited", "source_binding_status": "matched_but_invalid", "findings": []}, set()
+        result["execution_contract"] = projected_execution
     return result, finding_ids
 
 
 def _project_discovery_coverage(
-    value: Mapping[str, Any], prompt_version: str = "annual_discovery_v1"
+    value: Mapping[str, Any],
+    prompt_version: str = "annual_discovery_v1",
+    *,
+    execution_contract: object = None,
 ) -> dict[str, Any] | None:
+    is_v3 = isinstance(execution_contract, Mapping)
     is_v2 = prompt_version == "annual_discovery_v2"
     fields = (
         "total_pages", "text_pages", "total_blocks", "total_chars", "planned_batches",
@@ -749,10 +803,12 @@ def _project_discovery_coverage(
         batch_fields = ("batch_index", "status", "reason", "pages", "raw_chars")
         if is_v2:
             batch_fields = (*batch_fields, "accepted_findings", "rejected_findings", "restored_quotes")
+        if is_v3:
+            batch_fields = (*batch_fields, "resolution", "inherited_findings")
         row = _pick(item, batch_fields)
         if set(row) != set(batch_fields):
             return None
-        if is_v2:
+        if is_v2 and not is_v3:
             accepted = row.get("accepted_findings")
             rejected = row.get("rejected_findings")
             restored = row.get("restored_quotes")
@@ -811,6 +867,49 @@ def _project_discovery_coverage(
             != value.get("processed_batches")
         ):
             return None
+    return result
+
+
+def _project_v3_execution_contract(value: object) -> dict[str, Any] | None:
+    """Export bounded execution outcomes while dropping audit/admission UUIDs."""
+
+    if not isinstance(value, Mapping) or set(value) != {
+        "kind", "plan_sha256", "identity_sha256", "binding", "parent_run_id",
+        "provider_admission_count", "parent_provider_admission_count",
+        "cumulative_provider_admission_count", "response_count", "reused_batches", "batches",
+    }:
+        return None
+    result = _pick(value, (
+        "kind", "plan_sha256", "identity_sha256", "parent_run_id", "provider_admission_count",
+        "parent_provider_admission_count", "cumulative_provider_admission_count", "response_count",
+        "reused_batches",
+    ))
+    batches = value.get("batches")
+    if not isinstance(batches, list) or len(batches) > 128:
+        return None
+    result["batches"] = []
+    for batch in batches:
+        if not isinstance(batch, Mapping) or set(batch) != {
+            "batch_index", "state", "resolution", "reason", "attempts",
+        }:
+            return None
+        attempts = batch.get("attempts")
+        if not isinstance(attempts, list) or len(attempts) > 64:
+            return None
+        projected_attempts: list[dict[str, Any]] = []
+        for attempt in attempts:
+            if not isinstance(attempt, Mapping) or set(attempt) != {
+                "attempt_index", "audit_id", "admission_id", "provider_admitted", "status",
+                "response_accepted", "accepted_findings", "reason",
+            }:
+                return None
+            projected_attempts.append(_pick(attempt, (
+                "attempt_index", "provider_admitted", "status", "response_accepted",
+                "accepted_findings", "reason",
+            )))
+        projected_batch = _pick(batch, ("batch_index", "state", "resolution", "reason"))
+        projected_batch["attempts"] = projected_attempts
+        result["batches"].append(projected_batch)
     return result
 
 

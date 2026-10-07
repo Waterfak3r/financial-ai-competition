@@ -15,6 +15,13 @@ export interface AnnualAnalysisManifest {
   report_sha256: string;
 }
 
+export interface AnnualAnalysisSnapshot {
+  state: "running" | "cancelled" | "interrupted" | "failed" | "completed" | "completed_with_issues";
+  sequence: number;
+  is_partial: boolean;
+  parent_run_id: string | null;
+}
+
 export interface PdfBox {
   x0: number;
   y0: number;
@@ -243,6 +250,7 @@ export interface AnnualAnalysisResponse {
   manifest: AnnualAnalysisManifest;
   source_provenance: AnnualSourceProvenance;
   verification_evidences: VerificationEvidence[];
+  snapshot?: AnnualAnalysisSnapshot;
   discovery_evidences?: AnnualDiscoveryEvidenceIndex;
 }
 

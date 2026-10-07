@@ -390,7 +390,7 @@ def test_request_persistence_failure_does_not_claim_model_was_called(
     update = _call_model_node(state)  # type: ignore[arg-type]
     result = _result_from_state({**state, **update})
 
-    assert update["model_call_attempt_count"] == 1
+    assert update["model_call_attempt_count"] == 0
     assert update["model_call_count"] == 0
     assert result.to_dict()["model_called"] is False
     assert result.to_dict()["audit_artifacts"][0]["request_path"] is None

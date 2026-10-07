@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -22,6 +23,8 @@ from finagent.llm.chat_completion import ChatCompletion, ChatMessage, ModelRespo
 
 _REDACTED = "[REDACTED]"
 _REPARSE_POINT = 0x400
+_MAX_PROVIDER_ATTEMPTS = 3
+_RETRY_BACKOFF_SECONDS = (0.15, 0.4)
 
 
 class AuditPersistError(Exception):
@@ -52,6 +55,9 @@ class AuditedChatResult:
 
     completion: ChatCompletion
     audit_dir: Path
+    provider_admission_count: int = 1
+    response_count: int = 1
+    attempt_records: tuple[dict[str, object], ...] = ()
 
 
 def audited_complete_chat(
@@ -63,6 +69,8 @@ def audited_complete_chat(
     prompt_version: str,
     timeout_seconds: float | None = None,
     audit_id: str | None = None,
+    call_stage: str | None = None,
+    batch_index: int | None = None,
 ) -> AuditedChatResult:
     """包装 complete_chat。started 落盘后才联网；响应落盘后才返回。"""
 
@@ -75,6 +83,7 @@ def audited_complete_chat(
     audit_dir.mkdir(parents=False, exist_ok=False)
     secret = settings.api_key
     request_record = {
+        "audit_id": identifier,
         "status": "started",
         "started_at": started_at,
         "finished_at": None,
@@ -90,22 +99,245 @@ def audited_complete_chat(
         _write_json(audit_dir / "request.json", request_record, secret)
     except Exception as exc:
         raise AuditPersistError("审计请求写入失败，未调用模型。") from None
-    try:
-        completion = complete_chat(messages, settings, timeout_seconds=timeout_seconds)
-    except Exception as exc:
+    attempt_records: list[dict[str, object]] = []
+    admitted_count = 0
+    response_count = 0
+    timeout = settings.timeout_seconds if timeout_seconds is None else timeout_seconds
+    deadline = time.monotonic() + timeout
+    completion: ChatCompletion | None = None
+    failure: BaseException | None = None
+    for attempt_index in range(1, _MAX_PROVIDER_ATTEMPTS + 1):
+        attempt_audit_id = str(uuid.uuid4())
+        call_context = {
+            "run_id": checked_run.name,
+            "stage": call_stage,
+            "batch_index": batch_index,
+            "audit_id": attempt_audit_id,
+            "gate_key": os.environ.get("FINTRACE_CALL_GATE_KEY"),
+        }
+        attempt_dir = audit_dir / f"attempt-{attempt_index:02d}"
+        try:
+            attempt_dir.mkdir()
+            _write_json(
+                attempt_dir / "request.json",
+                {
+                    "status": "started",
+                    "attempt_index": attempt_index,
+                    "audit_id": attempt_audit_id,
+                    "started_at": _utc_now(),
+                    "prompt_version": version,
+                    "evidence_refs": refs,
+                    "model": settings.model,
+                    "timeout_seconds": max(0.0, deadline - time.monotonic()),
+                    "messages": [{"role": message.role, "content": message.content} for message in messages],
+                    "stream": False,
+                },
+                secret,
+            )
+        except Exception:
+            failure = AuditPersistError("审计请求写入失败，未调用模型。")
+            attempt_records.append(
+                {
+                    "attempt_index": attempt_index,
+                    "audit_id": attempt_audit_id,
+                    "admission_id": None,
+                    "provider_admitted": False,
+                    "response_accepted": False,
+                    "accepted_findings": 0,
+                    "status": "rejected",
+                    "reason": "audit_write_failed",
+                }
+            )
+            break
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            failure = ModelResponseError(
+                "模型调用总时限已到。", category="timeout", provider_admitted=False
+            )
+            attempt_records.append(
+                {
+                    "attempt_index": attempt_index,
+                    "audit_id": attempt_audit_id,
+                    "admission_id": None,
+                    "provider_admitted": False,
+                    "response_accepted": False,
+                    "accepted_findings": 0,
+                    "status": "rejected",
+                    "reason": "call_deadline_exhausted",
+                }
+            )
+            _write_json(
+                attempt_dir / "failure.json",
+                {
+                    "status": "failed",
+                    "audit_id": attempt_audit_id,
+                    "category": "call_deadline_exhausted",
+                    "provider_admitted": False,
+                },
+                secret,
+            )
+            break
+        try:
+            completion = complete_chat(
+                messages,
+                settings,
+                timeout_seconds=remaining,
+                call_context=call_context,
+            )
+        except Exception as exc:
+            failure = exc
+            was_admitted = bool(getattr(exc, "provider_admitted", False))
+            if was_admitted:
+                admitted_count += 1
+            category = _failure_category(exc)
+            attempt_records.append(
+                {
+                    "attempt_index": attempt_index,
+                    "audit_id": attempt_audit_id,
+                    "admission_id": getattr(exc, "admission_id", None),
+                    "provider_admitted": was_admitted,
+                    "response_accepted": False,
+                    "accepted_findings": 0,
+                    "status": "failed" if was_admitted else "rejected",
+                    "reason": category,
+                }
+            )
+            try:
+                _write_json(
+                    attempt_dir / "failure.json",
+                    {
+                        "status": "failed",
+                        "attempt_index": attempt_index,
+                        "audit_id": attempt_audit_id,
+                        "finished_at": _utc_now(),
+                        "category": category,
+                        "provider_admitted": was_admitted,
+                    },
+                    secret,
+                )
+            except Exception:
+                failure = AuditPersistError("审计失败记录写入失败。")
+                break
+            retryable = (
+                isinstance(exc, ModelResponseError)
+                and exc.category in {"connection_error", "http_429", "http_5xx", "timeout"}
+                and was_admitted
+                and attempt_index < _MAX_PROVIDER_ATTEMPTS
+            )
+            if not retryable:
+                break
+            backoff = _RETRY_BACKOFF_SECONDS[attempt_index - 1]
+            remaining = deadline - time.monotonic()
+            if remaining <= backoff:
+                break
+            time.sleep(backoff)
+            continue
+
+        # Network success and durable audit acceptance are separate events.
+        # Never record a successful attempt until its response file is durable.
+        was_admitted = bool(getattr(completion, "provider_admitted", True))
+        admission_id = getattr(completion, "admission_id", None)
+        if not was_admitted or not _is_uuid4(admission_id):
+            completion = None
+            failure = AuditPersistError("模型响应缺少可核验的准入标识。")
+            attempt_records.append(
+                {
+                    "attempt_index": attempt_index,
+                    "audit_id": attempt_audit_id,
+                    "admission_id": None,
+                    "provider_admitted": False,
+                    "response_accepted": False,
+                    "accepted_findings": 0,
+                    "status": "rejected",
+                    "reason": "call_failed",
+                }
+            )
+            break
+        if was_admitted:
+            admitted_count += 1
+        attempt_finished_at = _utc_now()
+        usage = None
+        if completion.usage is not None:
+            usage = {
+                "prompt_tokens": completion.usage.prompt_tokens,
+                "completion_tokens": completion.usage.completion_tokens,
+                "total_tokens": completion.usage.total_tokens,
+            }
+        try:
+            _write_json(
+                attempt_dir / "response.json",
+                {
+                    "status": "succeeded",
+                    "attempt_index": attempt_index,
+                    "audit_id": attempt_audit_id,
+                    "finished_at": attempt_finished_at,
+                    "text": completion.text,
+                    "model": completion.model,
+                    "response_id": completion.response_id,
+                    "usage": usage,
+                    "provider_admitted": was_admitted,
+                    "admission_id": admission_id,
+                },
+                secret,
+            )
+        except Exception:
+            failure = AuditPersistError("审计响应写入失败，本次调用不能记为成功。")
+            completion = None
+            attempt_records.append(
+                {
+                    "attempt_index": attempt_index,
+                    "audit_id": attempt_audit_id,
+                    "admission_id": admission_id,
+                    "provider_admitted": was_admitted,
+                    "response_accepted": False,
+                    "accepted_findings": 0,
+                    "status": "failed",
+                    "reason": "audit_write_failed",
+                }
+            )
+            break
+        response_count += 1
+        attempt_records.append(
+            {
+                "attempt_index": attempt_index,
+                "audit_id": attempt_audit_id,
+                "admission_id": admission_id,
+                "provider_admitted": was_admitted,
+                "response_accepted": True,
+                "accepted_findings": 0,
+                "status": "succeeded",
+                "reason": None,
+            }
+        )
+        failure = None
+        break
+
+    if completion is None:
+        if failure is None:
+            failure = ModelResponseError("模型调用失败。", category="call_failed")
+        try:
+            setattr(failure, "provider_admission_count", admitted_count)
+            setattr(failure, "response_count", response_count)
+            setattr(failure, "attempt_records", tuple(attempt_records))
+        except Exception:
+            pass
         finished_at = _utc_now()
         failure_record = {
             "status": "failed",
             "started_at": started_at,
             "finished_at": finished_at,
             "duration_seconds": _duration_seconds(started_at, finished_at),
-            "category": _failure_category(exc),
+            "category": _failure_category(failure),
+            "provider_admission_count": admitted_count,
+            "response_count": response_count,
+            "attempt_records": attempt_records,
         }
         try:
             _write_json(audit_dir / "failure.json", failure_record, secret)
-        except Exception as write_exc:
+        except Exception:
             raise AuditPersistError("审计失败记录写入失败。") from None
-        raise
+        raise failure
     finished_at = _utc_now()
     usage = None
     if completion.usage is not None:
@@ -123,12 +355,25 @@ def audited_complete_chat(
         "model": completion.model,
         "response_id": completion.response_id,
         "usage": usage,
+        "provider_admission_count": admitted_count,
+        "response_count": response_count,
+        "attempt_records": attempt_records,
     }
     try:
         _write_json(audit_dir / "response.json", response_record, secret)
-    except Exception as exc:
-        raise AuditPersistError("审计响应写入失败，本次调用不能记为成功。") from None
-    return AuditedChatResult(completion=completion, audit_dir=audit_dir)
+    except Exception:
+        error = AuditPersistError("审计响应写入失败，本次调用不能记为成功。")
+        setattr(error, "provider_admission_count", admitted_count)
+        setattr(error, "response_count", response_count)
+        setattr(error, "attempt_records", tuple(attempt_records))
+        raise error from None
+    return AuditedChatResult(
+        completion=completion,
+        audit_dir=audit_dir,
+        provider_admission_count=admitted_count,
+        response_count=response_count,
+        attempt_records=tuple(attempt_records),
+    )
 
 
 def repository_runs_root() -> Path:
@@ -202,6 +447,16 @@ def _require_audit_id(audit_id: str | None) -> str:
     return audit_id
 
 
+def _is_uuid4(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = uuid.UUID(value)
+    except (ValueError, TypeError, AttributeError):
+        return False
+    return parsed.version == 4 and str(parsed) == value
+
+
 def _redact(value: object, secret: str) -> object:
     if isinstance(value, str):
         if secret:
@@ -219,12 +474,25 @@ def _redact(value: object, secret: str) -> object:
 
 
 def _failure_category(exc: BaseException) -> str:
+    if isinstance(exc, AuditPersistError):
+        return "audit_write_failed"
     if isinstance(exc, ModelResponseError):
+        if exc.category != "call_failed":
+            return exc.category
         message = str(exc)
-        if message.startswith("超时时间必须大于 0"):
-            return "invalid_timeout"
         if message.startswith("模型服务返回 HTTP"):
-            return "http_error"
+            status_text = message.removeprefix("模型服务返回 HTTP ").removesuffix("。").strip()
+            try:
+                status = int(status_text)
+            except ValueError:
+                return "http_4xx"
+            return (
+                "http_401" if status == 401
+                else "http_403" if status == 403
+                else "http_429" if status == 429
+                else "http_5xx" if 500 <= status <= 599
+                else "http_4xx"
+            )
         if message == "模型服务请求超时。":
             return "timeout"
         if message == "无法连接模型服务。":

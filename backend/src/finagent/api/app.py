@@ -77,6 +77,10 @@ class AnnualAnalysisJobRequest(BaseModel):
     mode: Literal["deterministic", "m3_screening", "model_investigation", "integrated_analysis"] = "deterministic"
 
 
+class AnnualAnalysisResumeRequest(BaseModel):
+    parent_run_id: str
+
+
 def create_app(project_root: Path | None = None) -> FastAPI:
     root = Path(project_root).resolve() if project_root is not None else Path(__file__).resolve().parents[4]
     app = FastAPI(title="finagent annual precheck", version="0.1.0")
@@ -235,6 +239,7 @@ def create_app(project_root: Path | None = None) -> FastAPI:
                 evidence_refs=[],
                 prompt_version="model-connection-test-v1",
                 timeout_seconds=8.0,
+                call_stage="connection_test",
             )
         except AuditPersistError:
             return _settings_test_result(False, "model_audit_failed", "连接测试未能安全记录，请检查本机运行目录。")
@@ -250,6 +255,31 @@ def create_app(project_root: Path | None = None) -> FastAPI:
     def get_annual_analysis_job(job_id: str) -> dict:
         try:
             return app.state.annual_analysis_jobs.get(job_id)
+        except AnnualAnalysisJobError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": exc.message},
+            ) from None
+
+    @app.post("/v1/annual-analysis-jobs/{job_id}/cancel")
+    def cancel_annual_analysis_job(job_id: str) -> dict:
+        try:
+            return app.state.annual_analysis_jobs.cancel(job_id)
+        except AnnualAnalysisJobError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": exc.message},
+            ) from None
+
+    @app.post("/v1/annual-analysis-jobs/{job_id}/resume", status_code=202)
+    def resume_annual_analysis_job(
+        job_id: str, body: AnnualAnalysisResumeRequest
+    ) -> dict:
+        try:
+            return app.state.annual_analysis_jobs.resume(
+                parent_job_id=job_id,
+                parent_run_id=body.parent_run_id,
+            )
         except AnnualAnalysisJobError as exc:
             raise HTTPException(
                 status_code=exc.status_code,
@@ -445,6 +475,13 @@ def create_app(project_root: Path | None = None) -> FastAPI:
         }
         if exported.content_security_policy is not None:
             headers["Content-Security-Policy"] = exported.content_security_policy
+        if isinstance(exported.snapshot, dict):
+            headers.update({
+                "X-Fintrace-Snapshot-State": str(exported.snapshot.get("state", "")),
+                "X-Fintrace-Snapshot-Sequence": str(exported.snapshot.get("sequence", "")),
+                "X-Fintrace-Snapshot-Is-Partial": str(bool(exported.snapshot.get("is_partial"))).lower(),
+                "X-Fintrace-Snapshot-Parent-Run-Id": str(exported.snapshot.get("parent_run_id") or ""),
+            })
         return Response(content=exported.content, media_type=exported.media_type, headers=headers)
 
     @app.get("/v1/annual-analyses/{run_id:path}")
@@ -456,7 +493,7 @@ def create_app(project_root: Path | None = None) -> FastAPI:
                 status_code=exc.status_code,
                 detail={"code": exc.code, "message": exc.message},
             ) from None
-        return {
+        response = {
             "report": archive.report,
             "manifest": archive.manifest_summary,
             "source_provenance": archive.source_provenance,
@@ -481,6 +518,9 @@ def create_app(project_root: Path | None = None) -> FastAPI:
                 ],
             },
         }
+        if isinstance(archive.snapshot, dict):
+            response["snapshot"] = dict(archive.snapshot)
+        return response
 
     return app
 

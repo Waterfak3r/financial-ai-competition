@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -46,9 +47,16 @@ def _run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch | None = None) -> tuple
 def _patch_chat(monkeypatch: pytest.MonkeyPatch, behavior):
     calls = {"n": 0}
 
-    def fake(messages, settings, *, timeout_seconds=None):
+    def fake(messages, settings, *, timeout_seconds=None, call_context=None):
         calls["n"] += 1
-        return behavior(messages, settings, timeout_seconds)
+        result = behavior(messages, settings, timeout_seconds)
+        if isinstance(result, ChatCompletion) and result.admission_id is None:
+            result = replace(
+                result,
+                provider_admitted=True,
+                admission_id=str(uuid.uuid4()),
+            )
+        return result
 
     monkeypatch.setattr(audit_module, "complete_chat", fake)
     return calls
@@ -104,6 +112,9 @@ def test_local_http_success_redacts_and_omits_base_url(
     assert request["evidence_refs"] == [{"document_id": f"doc-{_REDACTED()}", "page": 12}]
     assert "base_url" not in request
     assert response["status"] == "succeeded"
+    assert result.attempt_records[0]["admission_id"] == response["attempt_records"][0]["admission_id"]
+    assert result.attempt_records[0]["provider_admitted"] is True
+    assert result.attempt_records[0]["response_accepted"] is True
     assert response["text"] == f"答案 {_REDACTED()}"
     assert response["response_id"] == f"id-{_REDACTED()}"
     assert response["started_at"].endswith("+00:00")
@@ -139,7 +150,7 @@ def test_failure_records_category_and_keeps_started(tmp_path: Path, monkeypatch:
     failure = _read(audit_dirs[0] / "failure.json")
     assert request["status"] == "started"
     assert failure["status"] == "failed"
-    assert failure["category"] == "http_error"
+    assert failure["category"] == "http_5xx"
     assert failure["started_at"] == request["started_at"]
     assert failure["finished_at"].endswith("+00:00")
     assert failure["duration_seconds"] >= 0
@@ -197,7 +208,7 @@ def test_request_write_failure_does_not_call_network(
     assert caught.value.__cause__ is None
 
 
-def test_response_write_failure_is_not_success(
+def test_attempt_response_write_failure_is_not_success(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runs_root, run_dir = _run(tmp_path, monkeypatch)
@@ -213,7 +224,7 @@ def test_response_write_failure_is_not_success(
     real_write = audit_module._write_json
 
     def flaky(path: Path, payload: object, secret: str) -> None:
-        if path.name == "response.json":
+        if path.name == "response.json" and path.parent.name == "attempt-01":
             raise OSError("disk")
         real_write(path, payload, secret)
 
@@ -231,7 +242,51 @@ def test_response_write_failure_is_not_success(
     assert caught.value.__cause__ is None
     assert _read(audit_dir / "request.json")["status"] == "started"
     assert not (audit_dir / "response.json").exists()
+    attempt_records = getattr(caught.value, "attempt_records")
+    assert len(attempt_records) == 1
+    assert attempt_records[0]["status"] == "failed"
+    assert attempt_records[0]["reason"] == "audit_write_failed"
+    assert attempt_records[0]["provider_admitted"] is True
+    assert attempt_records[0]["response_accepted"] is False
+    assert attempt_records[0]["admission_id"]
+    assert _read(audit_dir / "failure.json")["provider_admission_count"] == 1
     _assert_no_secret(audit_dir)
+
+
+def test_summary_response_write_failure_keeps_one_durable_attempt_but_no_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs_root, run_dir = _run(tmp_path, monkeypatch)
+    calls = _patch_chat(
+        monkeypatch,
+        lambda messages, settings, timeout_seconds: ChatCompletion("好", "m", "id-1"),
+    )
+    real_write = audit_module._write_json
+
+    def flaky(path: Path, payload: object, secret: str) -> None:
+        if path.name == "response.json" and path.parent.name != "attempt-01":
+            raise OSError("disk")
+        real_write(path, payload, secret)
+
+    monkeypatch.setattr(audit_module, "_write_json", flaky)
+    with pytest.raises(AuditPersistError, match="不能记为成功") as caught:
+        audited_complete_chat(
+            [ChatMessage("user", "你好")],
+            _settings(),
+            run_dir=run_dir,
+            evidence_refs=_refs(),
+            prompt_version="prompt-v1",
+        )
+    audit_dir = next(path for path in run_dir.iterdir() if path.is_dir())
+    assert calls["n"] == 1
+    assert _read(audit_dir / "attempt-01" / "response.json")["status"] == "succeeded"
+    assert not (audit_dir / "response.json").exists()
+    assert getattr(caught.value, "provider_admission_count") == 1
+    assert getattr(caught.value, "response_count") == 1
+    attempt_records = getattr(caught.value, "attempt_records")
+    assert len(attempt_records) == 1
+    assert attempt_records[0]["status"] == "succeeded"
+    assert attempt_records[0]["response_accepted"] is True
 
 
 def test_two_calls_use_distinct_directories(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

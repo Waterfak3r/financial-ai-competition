@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import urllib.request
+import uuid
 
 import pytest
 import pymupdf
@@ -409,9 +410,15 @@ def _patch_local_audit(monkeypatch, runs_root: Path, responder):
     monkeypatch.setattr(annual_discovery, "repository_runs_root", lambda: runs_root)
     monkeypatch.setattr(audited_chat, "repository_runs_root", lambda: runs_root)
 
-    def mocked_complete(messages, settings, *, timeout_seconds=None):
+    def mocked_complete(messages, settings, *, timeout_seconds=None, call_context=None):
         response_text = responder(messages, settings)
-        return ChatCompletion(response_text, settings.model, "local-mock-response")
+        return ChatCompletion(
+            response_text,
+            settings.model,
+            "local-mock-response",
+            provider_admitted=True,
+            admission_id=str(uuid.uuid4()),
+        )
 
     monkeypatch.setattr(chat_completion, "complete_chat", mocked_complete)
     monkeypatch.setattr(audited_chat, "complete_chat", mocked_complete)
@@ -491,6 +498,142 @@ def test_graph_scans_without_fixed_candidates_and_audits_only_safe_source_refs(
     assert "https://model.invalid" not in request_text
     response = response_path.read_text(encoding="utf-8")
     assert "unit-test-secret" not in response
+
+
+def test_v3_public_entry_emits_supported_initial_and_terminal_progress(
+    tmp_path, monkeypatch
+) -> None:
+    pytest.importorskip("langgraph.graph", reason="LangGraph is an optional agent extra")
+    path = tmp_path / "v3-progress.pdf"
+    digest = _make_pdf(path, ["公司披露渠道政策调整，需要结合合同核查。"])
+    report, record = _inputs(path, digest, run_id="annual-discovery-v3-progress")
+    runs_root = tmp_path / "artifacts" / "runs"
+    run_dir = runs_root / report["run_id"]
+    run_dir.mkdir(parents=True)
+    settings = ModelSettings("https://model.invalid/v1", "unit-test-secret", "local-mock")
+    binding = {
+        "source_sha256": digest,
+        "company_id": report["company_id"],
+        "report_year": report["report_year"],
+        "source_document_id": record["document_id"],
+        "analysis_mode": "model_investigation",
+        "provider_model_fingerprint": "a" * 64,
+        "model": settings.model,
+        "prompts_sha256": "b" * 64,
+        "parser_version": "annual-discovery-parser-v2-execution-v3",
+        "plan_sha256": "c" * 64,
+        "m3_binding_sha256": None,
+    }
+
+    def responder(messages, _settings):
+        user = json.loads(messages[1].content)
+        fragment = user["fragments"][0]
+        return _valid_response(fragment["evidence_id"], fragment["raw_text"][:16])
+
+    _patch_local_audit(monkeypatch, runs_root, responder)
+    progress: list[dict[str, object]] = []
+    checkpoints: list[dict[str, object]] = []
+    result = run_annual_discovery(
+        report,
+        path,
+        record,
+        settings,
+        run_dir=run_dir,
+        execution_binding=binding,
+        progress_callback=progress.append,
+        checkpoint_callback=checkpoints.append,
+    )
+    payload = result.to_dict()
+
+    expected_fields = {
+        "event", "status", "batch_index", "planned_batches", "processed_batches",
+        "successful_batches", "partial_batches", "failed_batches", "total_pages", "total_chars",
+    }
+    assert payload["status"] == "completed", payload
+    assert payload["model_call_attempt_count"] == payload["model_call_count"] == 1
+    assert len(payload["findings"]) == 1
+    assert len(checkpoints) >= 3
+    assert checkpoints[0]["execution_contract"]["provider_admission_count"] == 0
+    assert progress
+    assert all(set(event) == expected_fields for event in progress)
+    assert all(event["event"] in {"planned", "batch_started", "batch_finished", "budget_exhausted"} for event in progress)
+    assert all(event["status"] in {"not_called", "running", "completed", "partial", "failed", "budget_exhausted"} for event in progress)
+    assert progress[0]["event"] == "planned"
+    assert progress[0]["status"] == "running"
+    assert progress[0]["batch_index"] == 0
+    assert any(event["event"] == "batch_started" and event["batch_index"] == 1 for event in progress)
+    assert any(event["event"] == "batch_finished" and event["batch_index"] == 1 and event["status"] == "completed" for event in progress)
+    assert progress[-1]["event"] == "batch_finished"
+    assert progress[-1]["status"] == "completed"
+    assert progress[-1]["batch_index"] == 1
+    assert "progress_callback_failed" not in payload["limitations"]
+
+
+def test_v3_public_entry_reuses_parent_batch_and_retains_accepted_finding(tmp_path, monkeypatch) -> None:
+    pytest.importorskip("langgraph.graph", reason="LangGraph is an optional agent extra")
+    path = tmp_path / "v3-parent-retained.pdf"
+    digest = _make_pdf(path, ["公司披露渠道政策调整，需要结合合同核查。"])
+    report, record = _inputs(path, digest, run_id="annual-discovery-v3-child-retained")
+    runs_root = tmp_path / "artifacts" / "runs"
+    run_dir = runs_root / report["run_id"]
+    run_dir.mkdir(parents=True)
+    monkeypatch.setattr(annual_discovery, "repository_runs_root", lambda: runs_root)
+    settings = ModelSettings("https://model.invalid/v1", "unit-test-secret", "local-mock")
+    binding = {
+        "source_sha256": digest,
+        "company_id": report["company_id"],
+        "report_year": report["report_year"],
+        "source_document_id": record["document_id"],
+        "analysis_mode": "model_investigation",
+        "provider_model_fingerprint": "a" * 64,
+        "model": settings.model,
+        "prompts_sha256": "b" * 64,
+        "parser_version": "annual-discovery-parser-v2-execution-v3",
+        "plan_sha256": "c" * 64,
+        "m3_binding_sha256": None,
+    }
+    parent_finding = {
+        "finding_id": "disc:parent-accepted-finding",
+        "batch_index": 1,
+        "title": "父批次已接受的引用",
+        "observation": "该发现已由父运行按原文引用检查接受。",
+        "why_it_matters": "child 续跑不能删除父运行已接受的内容。",
+        "follow_up": "后续核对原始来源。",
+        "priority": "medium",
+        "classification": "unverified_model_finding",
+        "verification_status": "unverified",
+        "evidence_ids": [],
+        "citations": [],
+    }
+    parent_discovery = {
+        "kind": "fintrace_annual_discovery",
+        "run_id": "annual-discovery-v3-parent-retained",
+        "findings": [parent_finding],
+        "execution_contract": {
+            "batches": [{"batch_index": 1, "state": "succeeded"}],
+        },
+    }
+    checkpoints: list[dict[str, object]] = []
+    result = run_annual_discovery(
+        report,
+        path,
+        record,
+        settings,
+        run_dir=run_dir,
+        execution_binding=binding,
+        parent_discovery=parent_discovery,
+        parent_provider_admission_count=4,
+        checkpoint_callback=checkpoints.append,
+    ).to_dict()
+
+    assert result["status"] == "completed"
+    assert result["findings"] == [parent_finding]
+    assert result["model_call_attempt_count"] == result["model_call_count"] == 0
+    assert result["execution_contract"]["parent_run_id"] == parent_discovery["run_id"]
+    assert result["execution_contract"]["parent_provider_admission_count"] == 4
+    assert result["execution_contract"]["reused_batches"] == [1]
+    assert checkpoints
+    assert checkpoints[0]["findings"] == [parent_finding]
 
 
 def test_clean_mock_can_return_no_findings_without_fabricating_a_risk(tmp_path, monkeypatch) -> None:
