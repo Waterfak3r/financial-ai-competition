@@ -10,6 +10,8 @@ import pymupdf
 import pytest
 
 from finagent.retrieval.annual_context import retrieve_annual_context
+from finagent.ingestion.parse_text_pdf import parse_text_pdf
+from finagent.retrieval import annual_context
 
 
 DOC_ID = "test-doc-2024"
@@ -140,6 +142,31 @@ def test_retrieval_is_bounded_provenance_rich_and_deterministic(tmp_path: Path) 
         "revenue_up_cash_down",
     }
     assert all("不表示因果解释" in item.selection_reason for item in first.snippets)
+
+
+def test_retrieval_reuses_source_bound_parsed_pdf_without_reopening(tmp_path: Path, monkeypatch) -> None:
+    pdf_path, report, source_record = _fixture(tmp_path)
+    parsed = parse_text_pdf(pdf_path, DOC_ID)
+    expected = retrieve_annual_context(report, pdf_path, source_record)
+
+    def unexpected_reparse(*_args, **_kwargs):
+        raise AssertionError("parsed_pdf retrieval must not reopen the source PDF")
+
+    monkeypatch.setattr(annual_context, "parse_text_pdf", unexpected_reparse)
+    reused = retrieve_annual_context(report, pdf_path, source_record, parsed_pdf=parsed)
+
+    assert reused == expected
+    assert reused.status == "retrieved"
+
+
+def test_retrieval_rejects_parsed_pdf_from_another_source(tmp_path: Path) -> None:
+    pdf_path, report, source_record = _fixture(tmp_path)
+    parsed = parse_text_pdf(pdf_path, "other-document")
+
+    result = retrieve_annual_context(report, pdf_path, source_record, parsed_pdf=parsed)
+
+    assert result.status == "abstained"
+    assert result.reason == "source_parse_identity_mismatch"
 
 
 def test_hash_mismatch_abstains_before_retrieval(tmp_path: Path) -> None:

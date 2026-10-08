@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 from pathlib import Path
+import threading
 import urllib.request
 import uuid
 
@@ -14,14 +15,19 @@ from finagent.agents import annual_discovery
 from finagent.agents.annual_discovery import (
     parse_annual_discovery_response,
     parse_annual_discovery_response_v2,
+    parse_annual_discovery_response_v3,
     run_annual_discovery,
 )
 from finagent.audit import audited_chat
 from finagent.core.model_settings import ModelSettings
 from finagent.llm.chat_completion import ChatCompletion, ModelResponseError
 from finagent.retrieval.annual_discovery_context import (
+    COMPACT_PLAN_VERSION,
     DiscoveryBatch,
     DiscoveryFragment,
+    _batch_aliases,
+    annual_discovery_plan_projection,
+    build_annual_discovery_context,
 )
 
 PNG_1X1 = bytes.fromhex(
@@ -186,6 +192,64 @@ def test_v2_parser_restores_only_unique_whitespace_variants_and_counts_them() ->
     assert len(parsed.findings) == 1
     assert parsed.findings[0].citations == ((evidence_id, "甲　乙在2025年度调整了交易安排"),)
     assert parsed.restored_quotes == 1
+
+
+def test_v3_aliases_remain_unambiguous_across_high_batch_and_fragment_indices() -> None:
+    fragments = tuple(
+        DiscoveryFragment(
+            evidence_id=f"adisc-{index:016x}",
+            pdf_page=1,
+            block_index=index,
+            start_char=index,
+            bbox=(0.0, 0.0, 1.0, 1.0),
+            raw_text=f"原文{index}",
+        )
+        for index in range(27)
+    )
+    batch_one = _batch_aliases(fragments, 1)
+    batch_forty_six = _batch_aliases(fragments[:1], 46)
+    batch_128 = _batch_aliases(fragments[:1], 128)
+
+    assert batch_one[-1][1] == "b1-aa"
+    assert batch_forty_six[0][1] == "b1a-a"
+    assert batch_128[0][1] == "b3k-a"
+    assert len({alias for _evidence_id, alias in (*batch_one, *batch_forty_six, *batch_128)}) == 29
+
+
+def test_v3_parser_maps_only_current_batch_alias_and_validates_exact_quote() -> None:
+    fragment = _batch(raw_text="客户甲在2025年度调整了交易安排。金额为120万元。").fragments[0]
+    alias_one = _batch_aliases((fragment,), 1)[0][1]
+    alias_46 = _batch_aliases((fragment,), 46)[0][1]
+    batch = DiscoveryBatch(
+        46,
+        (fragment,),
+        len(fragment.raw_text),
+        1200,
+        plan_version=COMPACT_PLAN_VERSION,
+        aliases=((fragment.evidence_id, alias_46),),
+    )
+    base = json.loads(_valid_response(fragment.evidence_id, "客户甲在2025年度调整了交易安排"))["findings"][0]
+    finding = {key: value for key, value in base.items() if key != "citations"}
+    finding["citations"] = [{
+        "fragment_alias": alias_46,
+        "quote": "客户甲在2025年度调整了交易安排",
+    }]
+    parsed = parse_annual_discovery_response_v3(
+        json.dumps({"findings": [finding], "limitations": []}, ensure_ascii=False), batch
+    )
+    cross_batch = copy.deepcopy(finding)
+    cross_batch["citations"][0]["fragment_alias"] = alias_one
+    rejected = parse_annual_discovery_response_v3(
+        json.dumps({"findings": [cross_batch], "limitations": []}, ensure_ascii=False), batch
+    )
+    empty = parse_annual_discovery_response_v3('{"findings":[],"limitations":[]}', batch)
+
+    assert len(parsed.findings) == 1
+    assert parsed.findings[0].citations == ((fragment.evidence_id, "客户甲在2025年度调整了交易安排"),)
+    assert rejected.findings == ()
+    assert rejected.rejected_findings == 1
+    assert empty.findings == ()
+    assert empty.rejected_findings == 0
 
 
 @pytest.mark.parametrize(
@@ -410,7 +474,9 @@ def _patch_local_audit(monkeypatch, runs_root: Path, responder):
     monkeypatch.setattr(annual_discovery, "repository_runs_root", lambda: runs_root)
     monkeypatch.setattr(audited_chat, "repository_runs_root", lambda: runs_root)
 
-    def mocked_complete(messages, settings, *, timeout_seconds=None, call_context=None):
+    def mocked_complete(
+        messages, settings, *, timeout_seconds=None, call_context=None, abort_event=None
+    ):
         response_text = responder(messages, settings)
         return ChatCompletion(
             response_text,
@@ -634,6 +700,466 @@ def test_v3_public_entry_reuses_parent_batch_and_retains_accepted_finding(tmp_pa
     assert result["execution_contract"]["reused_batches"] == [1]
     assert checkpoints
     assert checkpoints[0]["findings"] == [parent_finding]
+
+
+def test_v4_langgraph_preserves_resume_budget_scope_and_monotonic_timing(tmp_path, monkeypatch) -> None:
+    pytest.importorskip("langgraph.graph", reason="LangGraph is an optional agent extra")
+    path = tmp_path / "v4-budget-state.pdf"
+    digest = _make_pdf(path, ["公司调整部分交易安排，需结合合同及附注核查。"])
+    runs_root = tmp_path / "artifacts" / "runs"
+    settings = ModelSettings("https://model.invalid/v1", "unit-test-secret", "local-mock")
+    clock = {"now": 100.0}
+    monkeypatch.setattr(annual_discovery, "_monotonic_clock", lambda: clock["now"])
+
+    def responder(_messages, _settings):
+        clock["now"] += 2.375
+        return json.dumps({"findings": [], "limitations": []}, ensure_ascii=False)
+
+    _patch_local_audit(monkeypatch, runs_root, responder)
+
+    def binding_for(report, record):
+        return {
+            "source_sha256": digest,
+            "company_id": report["company_id"],
+            "report_year": report["report_year"],
+            "source_document_id": record["document_id"],
+            "analysis_mode": "model_investigation",
+            "provider_model_fingerprint": "a" * 64,
+            "model": settings.model,
+            "prompts_sha256": "b" * 64,
+            "parser_version": "annual-discovery-parser-v3-execution-v4",
+            "plan_sha256": "c" * 64,
+            "m3_binding_sha256": None,
+            "plan_version": "annual_discovery_plan_v3",
+            "execution_version": "execution_v4",
+        }
+
+    new_report, new_record = _inputs(path, digest, run_id="annual-discovery-v4-new-budget")
+    new_run_dir = runs_root / new_report["run_id"]
+    new_run_dir.mkdir(parents=True)
+    initial_context = build_annual_discovery_context(
+        new_report,
+        path,
+        new_record,
+        system_prompt=annual_discovery._load_prompt("annual_discovery_v3"),
+        model_name=settings.model,
+        plan_version=COMPACT_PLAN_VERSION,
+    )
+    plan_sha256 = hashlib.sha256(json.dumps(
+        annual_discovery_plan_projection(initial_context),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")).hexdigest()
+    initial_binding = binding_for(new_report, new_record)
+    initial_binding["plan_sha256"] = plan_sha256
+    initial_snapshot = annual_discovery.build_annual_discovery_initial_snapshot(
+        new_report,
+        path,
+        new_record,
+        settings,
+        run_dir=new_run_dir,
+        execution_binding=initial_binding,
+    )
+    assert initial_snapshot["execution_contract"]["parent_run_id"] is None
+    assert initial_snapshot["execution_contract"]["phase_budget"]["scope"] == "new_run"
+    assert initial_snapshot["execution_contract"]["timing"]["discovery_elapsed_seconds"] == 0.0
+    assert initial_snapshot["model_call_attempt_count"] == 0
+
+    new_checkpoints: list[dict[str, object]] = []
+    new_result = run_annual_discovery(
+        new_report,
+        path,
+        new_record,
+        settings,
+        run_dir=new_run_dir,
+        execution_binding=binding_for(new_report, new_record),
+        checkpoint_callback=new_checkpoints.append,
+        main_soft_deadline=clock["now"] + 30.0,
+    ).to_dict()
+
+    child_report, child_record = _inputs(path, digest, run_id="annual-discovery-v4-resume-budget")
+    child_run_dir = runs_root / child_report["run_id"]
+    child_run_dir.mkdir(parents=True)
+    resumed_checkpoints: list[dict[str, object]] = []
+    parent_discovery = {
+        "kind": "fintrace_annual_discovery",
+        "run_id": "annual-discovery-v4-parent-budget",
+        "findings": [],
+        "execution_contract": {
+            "kind": "fintrace_annual_discovery_execution_v4",
+            "batches": [],
+        },
+    }
+    resumed_result = run_annual_discovery(
+        child_report,
+        path,
+        child_record,
+        settings,
+        run_dir=child_run_dir,
+        execution_binding=binding_for(child_report, child_record),
+        parent_discovery=parent_discovery,
+        parent_provider_admission_count=4,
+        checkpoint_callback=resumed_checkpoints.append,
+        main_soft_deadline=clock["now"] + 30.0,
+    ).to_dict()
+
+    new_contract = new_result["execution_contract"]
+    resumed_contract = resumed_result["execution_contract"]
+    assert new_result["status"] == resumed_result["status"] == "completed"
+    assert new_contract["phase_budget"]["scope"] == "new_run"
+    assert resumed_contract["parent_run_id"] == parent_discovery["run_id"]
+    assert resumed_contract["phase_budget"]["scope"] == "resume"
+    assert new_contract["timing"]["discovery_elapsed_seconds"] == 2.375
+    assert resumed_contract["timing"]["discovery_elapsed_seconds"] == 2.375
+    assert new_contract["timing"]["main_work_remaining_seconds"] == 27.625
+    assert resumed_contract["timing"]["main_work_remaining_seconds"] == 27.625
+    assert new_checkpoints[0]["execution_contract"]["phase_budget"]["scope"] == "new_run"
+    assert new_checkpoints[0]["execution_contract"]["timing"]["discovery_elapsed_seconds"] == 0.0
+    assert resumed_checkpoints[0]["execution_contract"]["phase_budget"]["scope"] == "resume"
+    assert resumed_checkpoints[0]["execution_contract"]["timing"]["discovery_elapsed_seconds"] == 0.0
+
+
+def _controlled_v4_inputs(tmp_path: Path, run_id: str, *, page_count: int = 6):
+    pages = [
+        f"第{index}页披露渠道政策变化，需要结合合同及附注核查。" + chr(0x4E00 + index) * 8800
+        for index in range(1, page_count + 1)
+    ]
+    path = tmp_path / f"{run_id}.pdf"
+    digest = _make_pdf(path, pages)
+    report, record = _inputs(path, digest, run_id=run_id)
+    runs_root = tmp_path / "artifacts" / "runs"
+    run_dir = runs_root / run_id
+    run_dir.mkdir(parents=True)
+    settings = ModelSettings("https://model.invalid/v1", "unit-test-secret", "local-mock")
+    context = build_annual_discovery_context(
+        report,
+        path,
+        record,
+        system_prompt=annual_discovery._load_prompt("annual_discovery_v3"),
+        model_name=settings.model,
+        plan_version=COMPACT_PLAN_VERSION,
+    )
+    plan_sha256 = hashlib.sha256(json.dumps(
+        annual_discovery_plan_projection(context),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")).hexdigest()
+    binding = {
+        "source_sha256": digest,
+        "company_id": report["company_id"],
+        "report_year": report["report_year"],
+        "source_document_id": record["document_id"],
+        "analysis_mode": "model_investigation",
+        "provider_model_fingerprint": "a" * 64,
+        "model": settings.model,
+        "prompts_sha256": "b" * 64,
+        "parser_version": "annual-discovery-parser-v3-execution-v4",
+        "plan_sha256": plan_sha256,
+        "m3_binding_sha256": None,
+        "plan_version": "annual_discovery_plan_v3",
+        "execution_version": "execution_v4",
+    }
+    return path, digest, report, record, runs_root, run_dir, settings, binding, context
+
+
+def _patch_controlled_v4_audit(monkeypatch, runs_root: Path, complete_chat):
+    from finagent.llm import chat_completion
+
+    runs_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(annual_discovery, "repository_runs_root", lambda: runs_root)
+    monkeypatch.setattr(audited_chat, "repository_runs_root", lambda: runs_root)
+    monkeypatch.setattr(chat_completion, "complete_chat", complete_chat)
+    monkeypatch.setattr(audited_chat, "complete_chat", complete_chat)
+
+
+@pytest.mark.parametrize(
+    "stop_mode",
+    ["release", "cancel", "stage_deadline", "whole_deadline", "task_quota", "ledger_quota"],
+)
+def test_v4_quota_close_drains_admitted_calls_and_records_later_stops(
+    tmp_path, monkeypatch, stop_mode
+) -> None:
+    pytest.importorskip("langgraph.graph", reason="LangGraph is an optional agent extra")
+    (
+        path, _digest, report, record, runs_root, run_dir, settings, binding, context,
+    ) = _controlled_v4_inputs(tmp_path, f"annual-discovery-quota-{stop_mode}")
+    assert len(context.batches) >= 4
+
+    release_admitted = threading.Event()
+    first_two_entered = threading.Event()
+    quota_closed = threading.Event()
+    later_stop_checkpoint = threading.Event()
+    cancel_requested = threading.Event()
+    lock = threading.Lock()
+    call_indexes: list[int] = []
+    aborted_indexes: list[int] = []
+    checkpoints: list[dict[str, object]] = []
+    clock = {"now": 100.0}
+    quota_error_category = {
+        "task_quota": "task_budget_exhausted",
+        "ledger_quota": "ledger_budget_exhausted",
+    }.get(stop_mode, "stage_budget_exhausted")
+    expected_quota_close_reason = (
+        "discovery_stage_budget_exhausted"
+        if quota_error_category == "stage_budget_exhausted"
+        else "provider_budget_exhausted"
+    )
+
+    def controlled_complete(
+        messages, call_settings, *, timeout_seconds=None, call_context=None, abort_event=None
+    ):
+        user = json.loads(messages[1].content)
+        batch_index = user["batch_index"]
+        with lock:
+            call_indexes.append(batch_index)
+            if batch_index in {1, 2} and all(item in call_indexes for item in (1, 2)):
+                first_two_entered.set()
+        if batch_index in {1, 2}:
+            while True:
+                if abort_event is not None and abort_event.is_set():
+                    with lock:
+                        aborted_indexes.append(batch_index)
+                    raise ModelResponseError(
+                        "controlled request cancelled",
+                        category="cancelled",
+                        provider_admitted=True,
+                        admission_id=str(uuid.uuid4()),
+                    )
+                if release_admitted.wait(0.005):
+                    return ChatCompletion(
+                        json.dumps({"findings": [], "limitations": []}),
+                        call_settings.model,
+                        "controlled-success",
+                        provider_admitted=True,
+                        admission_id=str(uuid.uuid4()),
+                    )
+        if batch_index == 3:
+            if not first_two_entered.wait(3):
+                raise RuntimeError("held calls did not enter the controlled connector")
+            raise ModelResponseError(
+                "controlled stage cap reached",
+                category=quota_error_category,
+                provider_admitted=False,
+            )
+        raise AssertionError(f"unexpected model dispatch for batch {batch_index}")
+
+    def checkpoint(snapshot):
+        checkpoints.append(snapshot)
+        scheduler = snapshot["execution_contract"]["scheduler"]
+        if (
+            scheduler["dispatch_closed_reason"] == expected_quota_close_reason
+            and scheduler["time_deadline_reason"] is None
+            and scheduler["inflight_count"] == 2
+        ):
+            quota_closed.set()
+        if scheduler["inflight_count"] == 2 and (
+            scheduler["dispatch_closed_reason"] == "user_cancelled"
+            or scheduler["time_deadline_reason"] in {
+                "discovery_stage_budget_exhausted",
+                "workflow_time_budget_exhausted",
+            }
+        ):
+            later_stop_checkpoint.set()
+
+    monkeypatch.setattr(annual_discovery, "_monotonic_clock", lambda: clock["now"])
+    _patch_controlled_v4_audit(monkeypatch, runs_root, controlled_complete)
+    result_holder: list[dict[str, object]] = []
+    error_holder: list[BaseException] = []
+
+    if stop_mode == "stage_deadline":
+        discovery_deadline, main_deadline = 102.0, 130.0
+    elif stop_mode == "whole_deadline":
+        discovery_deadline, main_deadline = 130.0, 102.0
+    else:
+        discovery_deadline, main_deadline = 130.0, None
+
+    def invoke_graph():
+        try:
+            result_holder.append(run_annual_discovery(
+                report,
+                path,
+                record,
+                settings,
+                run_dir=run_dir,
+                execution_binding=binding,
+                max_concurrency=3,
+                checkpoint_callback=checkpoint,
+                cancel_check=cancel_requested.is_set,
+                discovery_deadline=discovery_deadline,
+                main_soft_deadline=main_deadline,
+            ).to_dict())
+        except BaseException as exc:
+            error_holder.append(exc)
+
+    worker = threading.Thread(target=invoke_graph, name="controlled-annual-discovery-test")
+    worker.start()
+    try:
+        assert quota_closed.wait(5), "quota-only close checkpoint with two held calls was not published"
+        if stop_mode in {"release", "task_quota", "ledger_quota"}:
+            release_admitted.set()
+        elif stop_mode == "cancel":
+            cancel_requested.set()
+            assert later_stop_checkpoint.wait(2), "user cancellation was not published during drain"
+        else:
+            clock["now"] = 103.0
+            assert later_stop_checkpoint.wait(2), "actual deadline upgrade was not published during drain"
+        worker.join(timeout=5)
+        assert not worker.is_alive(), "LangGraph scan did not drain its controlled calls"
+    finally:
+        release_admitted.set()
+        worker.join(timeout=5)
+
+    assert not error_holder, error_holder
+    assert result_holder
+    payload = result_holder[0]
+    scheduler = payload["execution_contract"]["scheduler"]
+    assert quota_closed.is_set()
+    assert scheduler["inflight_drained"] is True
+    assert scheduler["inflight_count"] == 0
+    assert payload["execution_contract"]["provider_admission_count"] == 2
+    assert payload["coverage"]["time_budget_exhausted"] is (stop_mode in {"stage_deadline", "whole_deadline"})
+    assert [
+        snapshot["execution_contract"]["scheduler"]["checkpoint_publications"]
+        for snapshot in checkpoints
+    ] == sorted({
+        snapshot["execution_contract"]["scheduler"]["checkpoint_publications"]
+        for snapshot in checkpoints
+    })
+    assert call_indexes.count(1) == call_indexes.count(2) == 1
+    assert call_indexes.count(3) == 1
+    assert not any(index >= 4 for index in call_indexes)
+
+    quota_row = next(
+        item for item in payload["coverage"]["batch_results"] if item["batch_index"] == 3
+    )
+    assert quota_row["reason"] == expected_quota_close_reason
+    if stop_mode in {"release", "task_quota", "ledger_quota"}:
+        assert set(aborted_indexes) == set()
+        assert scheduler["dispatch_closed_reason"] == expected_quota_close_reason
+        assert scheduler["time_deadline_reason"] is None
+        assert payload["model_call_count"] == payload["model_call_attempt_count"] == 2
+        assert payload["coverage"]["successful_batches"] == 2
+        assert payload["status"] == "partial"
+        quota_checkpoint = next(
+            snapshot for snapshot in checkpoints
+            if snapshot["execution_contract"]["scheduler"]["dispatch_closed_reason"] == expected_quota_close_reason
+            and snapshot["execution_contract"]["scheduler"]["time_deadline_reason"] is None
+            and snapshot["execution_contract"]["scheduler"]["inflight_count"] == 2
+        )
+        assert all(
+            item["reason"] == expected_quota_close_reason
+            for item in payload["coverage"]["batch_results"]
+            if item["status"] == "unattempted"
+        )
+    elif stop_mode == "cancel":
+        assert set(aborted_indexes) == {1, 2}
+        assert scheduler["dispatch_closed_reason"] == "user_cancelled"
+        assert scheduler["time_deadline_reason"] is None
+    elif stop_mode == "stage_deadline":
+        assert set(aborted_indexes) == {1, 2}
+        assert scheduler["dispatch_closed_reason"] == "discovery_stage_budget_exhausted"
+        assert scheduler["time_deadline_reason"] == "discovery_stage_budget_exhausted"
+    else:
+        assert set(aborted_indexes) == {1, 2}
+        assert scheduler["dispatch_closed_reason"] == "workflow_time_budget_exhausted"
+        assert scheduler["time_deadline_reason"] == "workflow_time_budget_exhausted"
+    if stop_mode not in {"release", "task_quota", "ledger_quota"}:
+        assert later_stop_checkpoint.is_set()
+        assert payload["model_call_attempt_count"] == 2
+        quota_checkpoint = next(
+            snapshot for snapshot in checkpoints
+            if snapshot["execution_contract"]["scheduler"]["dispatch_closed_reason"] == expected_quota_close_reason
+            and snapshot["execution_contract"]["scheduler"]["time_deadline_reason"] is None
+            and snapshot["execution_contract"]["scheduler"]["inflight_count"] == 2
+        )
+    if stop_mode not in {"release", "task_quota", "ledger_quota"}:
+        upgraded_checkpoint = next(
+            snapshot for snapshot in checkpoints
+            if snapshot["execution_contract"]["scheduler"]["inflight_count"] == 2
+            and (
+                snapshot["execution_contract"]["scheduler"]["dispatch_closed_reason"] == "user_cancelled"
+                or snapshot["execution_contract"]["scheduler"]["time_deadline_reason"] is not None
+            )
+        )
+        assert (
+            upgraded_checkpoint["execution_contract"]["scheduler"]["checkpoint_publications"]
+            > quota_checkpoint["execution_contract"]["scheduler"]["checkpoint_publications"]
+        )
+
+
+@pytest.mark.parametrize("failure_mode", ["authentication", "retry"])
+def test_v4_fail_fast_and_retry_attempt_accounting_are_preserved(
+    tmp_path, monkeypatch, failure_mode
+) -> None:
+    pytest.importorskip("langgraph.graph", reason="LangGraph is an optional agent extra")
+    (
+        path, _digest, report, record, runs_root, run_dir, settings, binding, context,
+    ) = _controlled_v4_inputs(
+        tmp_path,
+        f"annual-discovery-{failure_mode}-accounting",
+        page_count=5 if failure_mode == "authentication" else 1,
+    )
+    if failure_mode == "authentication":
+        assert len(context.batches) > 1
+    else:
+        assert len(context.batches) == 1
+    calls: list[int] = []
+
+    def controlled_complete(
+        messages, call_settings, *, timeout_seconds=None, call_context=None, abort_event=None
+    ):
+        batch_index = json.loads(messages[1].content)["batch_index"]
+        calls.append(batch_index)
+        if failure_mode == "authentication":
+            raise ModelResponseError(
+                "controlled authentication failure",
+                category="http_401",
+                status_code=401,
+                provider_admitted=False,
+            )
+        if len(calls) == 1:
+            raise ModelResponseError(
+                "controlled transient failure",
+                category="http_5xx",
+                status_code=503,
+                provider_admitted=True,
+                admission_id=str(uuid.uuid4()),
+            )
+        return ChatCompletion(
+            json.dumps({"findings": [], "limitations": []}),
+            call_settings.model,
+            "controlled-retry-success",
+            provider_admitted=True,
+            admission_id=str(uuid.uuid4()),
+        )
+
+    _patch_controlled_v4_audit(monkeypatch, runs_root, controlled_complete)
+    result = run_annual_discovery(
+        report,
+        path,
+        record,
+        settings,
+        run_dir=run_dir,
+        execution_binding=binding,
+        max_concurrency=1,
+    ).to_dict()
+
+    if failure_mode == "authentication":
+        assert calls == [1]
+        assert result["model_call_attempt_count"] == result["model_call_count"] == 0
+        assert result["execution_contract"]["scheduler"]["dispatch_closed_reason"] == "authentication_failure_stopped"
+    else:
+        assert calls == [1, 1]
+        assert result["model_call_attempt_count"] == 2
+        assert result["model_call_count"] == 1
+        attempts = result["execution_contract"]["batches"][0]["attempts"]
+        assert [item["reason"] for item in attempts] == ["http_5xx", None]
+        assert [item["provider_admitted"] for item in attempts] == [True, True]
+        assert result["coverage"]["successful_batches"] == 1
 
 
 def test_clean_mock_can_return_no_findings_without_fabricating_a_risk(tmp_path, monkeypatch) -> None:

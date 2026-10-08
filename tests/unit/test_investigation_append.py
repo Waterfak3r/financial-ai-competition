@@ -180,6 +180,36 @@ def test_optional_investigation_binds_source_and_preserves_unverified_status(
     assert "local-test-secret" not in json.dumps(investigation)
 
 
+def test_invoke_agent_passes_existing_parsed_pdf_to_retrieval_graph(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from types import SimpleNamespace
+
+    parsed_pdf = object()
+    captured: dict[str, Any] = {}
+
+    def run_annual_investigation(*_args: Any, **kwargs: Any) -> _FakeResult:
+        captured.update(kwargs)
+        return _FakeResult({})
+
+    monkeypatch.setattr(
+        appendix.importlib,
+        "import_module",
+        lambda _name: SimpleNamespace(run_annual_investigation=run_annual_investigation),
+    )
+
+    appendix._invoke_agent(
+        {},
+        archived_pdf_path=tmp_path / "source.pdf",
+        source_record={},
+        settings=_settings(),
+        run_dir=tmp_path,
+        parsed_pdf=parsed_pdf,
+    )
+
+    assert captured["parsed_pdf"] is parsed_pdf
+
+
 def _review_reuse_fixture(
     tmp_path: Path,
 ) -> tuple[
@@ -1011,6 +1041,62 @@ def test_fatal_candidate_rejection_skips_review_and_remains_resumable(
     assert result["final_review"]["reason"] == "ledger_provider_mismatch"
     assert annual_recovery._investigation_has_unfinished_items(fixed) is True
     assert checkpoints[-1]["model_review"]["status"] == "not_called"
+
+
+@pytest.mark.parametrize("stage_reason", ["stage_budget_exhausted", "call_deadline_exhausted"])
+def test_fixed_stage_budget_exhaustion_keeps_review_reservation_available(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stage_reason: str
+) -> None:
+    repository, artifacts_root, run_dir, source_pdf, _record_path, report = _fixture(tmp_path)
+    identity = appendix._report_identity(report)
+    monkeypatch.setattr(appendix, "_repository_root", lambda: repository)
+    monkeypatch.setattr(
+        annual_recovery, "build_annual_recovery_binding", lambda *_args, **_kwargs: {"binding": "stable"}
+    )
+    discovery = {
+        "kind": "fintrace_annual_discovery",
+        **identity,
+        "status": "completed",
+        "model_called": True,
+        "model_call_count": 1,
+        "model_call_attempt_count": 1,
+        "coverage": {"planned_batches": 1},
+        "findings": [],
+        "evidences": [],
+        "audit_artifacts": [],
+        "execution_contract": {"batches": []},
+    }
+    fixed = _successful_payload(report)
+    fixed.update(status="abstained", reason=stage_reason)
+    review_calls: list[str] = []
+    monkeypatch.setattr(appendix, "_invoke_discovery", lambda *_args, **_kwargs: discovery)
+    monkeypatch.setattr(appendix, "_invoke_agent", lambda *_args, **_kwargs: _FakeResult(fixed))
+    monkeypatch.setattr(appendix, "_call_control_requested", lambda: False)
+    monkeypatch.setattr(
+        appendix,
+        "_invoke_review",
+        lambda *args, **kwargs: (review_calls.append("review"), _successful_review(*args, **kwargs))[1],
+    )
+
+    result = appendix._run_recoverable_appendix(
+        report,
+        state={"archive_path": "runs/investigation.json", "source_binding": {}},
+        identity=identity,
+        binding_source_report=report,
+        archived_pdf_path=source_pdf,
+        source_record={"document_id": identity["source_document_id"]},
+        settings=_settings(),
+        run_dir=run_dir,
+        artifacts_root=artifacts_root,
+        request_mode="model_investigation",
+        request_identity={"mode": "model_investigation"},
+        resume_parent_run_id=None,
+        progress_callback=None,
+        checkpoint_callback=None,
+    )
+
+    assert review_calls == ["review"]
+    assert result["final_review"]["status"] == "completed"
 
 
 def test_rejected_resume_persists_own_zero_call_v3_snapshot_without_parent_inheritance(

@@ -6,11 +6,14 @@ import argparse
 import atexit
 import hashlib
 import json
+import math
 import os
 import re
 import stat
 import subprocess
 import sys
+import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -29,6 +32,19 @@ from finagent.core.annual_checkpoints import (  # noqa: E402
     save_annual_checkpoint,
 )
 from finagent.core.annual_recovery import build_annual_recovery_binding  # noqa: E402
+from finagent.core.annual_work_budget import (  # noqa: E402
+    NEW_RUN_ATTEMPT_BUDGET,
+    NEW_RUN_STAGE_ATTEMPT_BUDGETS,
+    RESUME_ATTEMPT_BUDGET,
+    RESUME_STAGE_ATTEMPT_BUDGETS,
+    runtime_stage_time_limits,
+)
+from finagent.core.model_call_ledger import (  # noqa: E402
+    ModelCallAdmissionError,
+    close_admission_gate,
+    open_admission_gate,
+    select_call_gate_database,
+)
 from finagent.api.m3_annual import (  # noqa: E402
     failed_m3_annual_screening,
     run_m3_annual_screening,
@@ -80,12 +96,18 @@ _PROVENANCE_FILES = (
     "backend/src/finagent/audit/audited_chat.py",
     "backend/src/finagent/core/model_settings.py",
     "backend/src/finagent/core/sample_provenance.py",
+    "backend/src/finagent/core/annual_work_budget.py",
+    "backend/src/finagent/core/annual_recovery.py",
+    "backend/src/finagent/core/model_call_ledger.py",
+    "backend/src/finagent/api/annual_report_read.py",
+    "backend/src/finagent/api/annual_analysis_jobs.py",
     "backend/src/finagent/llm/chat_completion.py",
     "config/prompts/annual_investigation_v1.md",
     "config/prompts/annual_review_v1.md",
     "config/prompts/annual_review_v2.md",
     "config/prompts/annual_discovery_v1.md",
     "config/prompts/annual_discovery_v2.md",
+    "config/prompts/annual_discovery_v3.md",
 )
 
 
@@ -193,7 +215,141 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _annual_runtime_budget(with_model: bool) -> dict[str, object] | None:
+    if not with_model:
+        return None
+    soft_raw = os.environ.get("FINTRACE_ANNUAL_MAIN_SOFT_DEADLINE_MONOTONIC")
+    hard_raw = os.environ.get("FINTRACE_ANNUAL_MAIN_HARD_DEADLINE_MONOTONIC")
+    limit_raw = os.environ.get("FINTRACE_ANNUAL_MAIN_LIMIT_SECONDS")
+    stages_raw = os.environ.get("FINTRACE_ANNUAL_STAGE_TIME_LIMITS_SECONDS")
+    supplied = (soft_raw, hard_raw, limit_raw, stages_raw)
+    if all(value is None for value in supplied):
+        started = time.monotonic()
+        main_limit = 300
+        return {
+            "main_soft_deadline": started + main_limit - 15,
+            "main_hard_deadline": started + main_limit,
+            "main_limit_seconds": main_limit,
+            "stage_time_limits_seconds": runtime_stage_time_limits(main_limit),
+        }
+    if any(value is None for value in supplied):
+        raise ValueError("年度分析 API 运行时限传递不完整。")
+    try:
+        soft_deadline = float(soft_raw)
+        hard_deadline = float(hard_raw)
+        main_limit = int(limit_raw)
+        stage_time_limits = json.loads(stages_raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        raise ValueError("年度分析 API 运行时限传递无效。") from None
+    if (
+        not math.isfinite(soft_deadline)
+        or not math.isfinite(hard_deadline)
+        or not 60 <= main_limit <= 300
+        or abs((hard_deadline - soft_deadline) - 15.0) > 1e-6
+        or not isinstance(stage_time_limits, dict)
+        or set(stage_time_limits) != {
+            "annual_discovery", "annual_investigation", "annual_issue_grouping", "annual_review",
+        }
+        or any(type(value) is not int or value <= 0 for value in stage_time_limits.values())
+        or sum(stage_time_limits.values()) > main_limit - 15
+    ):
+        raise ValueError("年度分析 API 运行时限超出受控范围。")
+    return {
+        "main_soft_deadline": soft_deadline,
+        "main_hard_deadline": hard_deadline,
+        "main_limit_seconds": main_limit,
+        "stage_time_limits_seconds": stage_time_limits,
+    }
+
+
+@contextmanager
+def _annual_cli_admission_gate(
+    *,
+    run_id: str,
+    run_dir: Path,
+    source_sha256: str,
+    resume: bool,
+    progress_job_id: str | None,
+):
+    """Enforce the versioned task/stage caps for every standalone model attempt.
+
+    API-managed jobs own their gate and atomic counters. The CLI validates that
+    exact contract and leaves it open for the API manager to close. A standalone
+    invocation creates a fresh gate key in the configured shared ledger, or a
+    run-local database when no shared ledger is configured.
+    """
+
+    stage_limits = dict(
+        RESUME_STAGE_ATTEMPT_BUDGETS if resume else NEW_RUN_STAGE_ATTEMPT_BUDGETS
+    )
+    task_limit = RESUME_ATTEMPT_BUDGET if resume else NEW_RUN_ATTEMPT_BUDGET
+    expected_stages = json.dumps(stage_limits, sort_keys=True, separators=(",", ":"))
+    if progress_job_id is not None:
+        try:
+            configured_stages = json.loads(os.environ.get("FINTRACE_CALL_GATE_STAGE_LIMITS", ""))
+            configured_task = os.environ.get("FINTRACE_CALL_GATE_TASK_LIMIT")
+            gate_database = os.environ.get("FINTRACE_CALL_GATE_DB")
+            gate_key = os.environ.get("FINTRACE_CALL_GATE_KEY")
+            active_source = os.environ.get("FINTRACE_ACTIVE_SOURCE_SHA256", "").lower()
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raise ValueError("年度分析任务准入预算传递无效。") from None
+        if (
+            not isinstance(gate_database, str) or not gate_database
+            or gate_key != progress_job_id
+            or configured_task != str(task_limit)
+            or configured_stages != stage_limits
+            or json.dumps(configured_stages, sort_keys=True, separators=(",", ":")) != expected_stages
+            or active_source != source_sha256.lower()
+        ):
+            raise ValueError("年度分析任务准入预算传递无效。")
+        yield
+        return
+
+    gate_environment = (
+        "FINTRACE_CALL_GATE_DB",
+        "FINTRACE_CALL_GATE_KEY",
+        "FINTRACE_CALL_GATE_TASK_LIMIT",
+        "FINTRACE_CALL_GATE_STAGE_LIMITS",
+    )
+    if any(os.environ.get(name) is not None for name in gate_environment):
+        raise ValueError("独立 CLI 不能复用未绑定任务的模型准入门。")
+    try:
+        database_path = select_call_gate_database(
+            ROOT, run_dir, allow_external_job_dir=True
+        )
+        open_admission_gate(database_path, run_id)
+    except ModelCallAdmissionError as exc:
+        raise ValueError("年度分析模型准入门不可用。") from exc
+
+    managed_environment = {
+        "FINTRACE_CALL_GATE_DB": str(database_path.resolve()),
+        "FINTRACE_CALL_GATE_KEY": run_id,
+        "FINTRACE_CALL_GATE_TASK_LIMIT": str(task_limit),
+        "FINTRACE_CALL_GATE_STAGE_LIMITS": expected_stages,
+        "FINTRACE_ACTIVE_SOURCE_SHA256": source_sha256.lower(),
+    }
+    previous_environment = {name: os.environ.get(name) for name in managed_environment}
+    os.environ.update(managed_environment)
+    close_error: ModelCallAdmissionError | None = None
+    try:
+        yield
+    finally:
+        try:
+            close_admission_gate(database_path, run_id)
+        except ModelCallAdmissionError as exc:
+            close_error = exc
+        finally:
+            for name, previous in previous_environment.items():
+                if previous is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = previous
+        if close_error is not None:
+            raise ValueError("年度分析模型准入门无法封闭。") from close_error
+
+
 def _run(args: argparse.Namespace) -> int:
+    runtime_budget = _annual_runtime_budget(args.with_model)
     source_pdf = args.source_pdf.expanduser().resolve()
     if not source_pdf.is_file():
         raise ValueError(f"找不到原始 PDF：{source_pdf}")
@@ -334,39 +490,49 @@ def _run(args: argparse.Namespace) -> int:
             # The AI investigation sees only the standard, deterministically
             # verified report. M3 stays an independently archived audit layer.
             investigation_started = True
-            investigation = run_annual_investigation_appendix(
-                base_report_payload,
-                archived_pdf_path=input_copy,
-                original_pdf_path=source_pdf,
-                source_record_path=args.source_record.expanduser().resolve(),
+            with _annual_cli_admission_gate(
+                run_id=run_id,
                 run_dir=run_dir,
-                artifacts_root=artifacts_root,
-                progress_callback=_progress_writer(
-                    run_dir,
-                    job_progress_path,
-                    run_id=run_id,
-                    company_id=args.company_id,
-                    report_year=args.report_year,
-                    document_id=args.document_id,
-                    source_sha256=actual_copy_sha256,
-                    job_id=progress_job_id,
-                ),
-                request_mode=effective_request_mode if recovery_enabled else None,
-                m3_screening=m3_screening,
-                resume_parent_run_id=(getattr(args, "resume_parent_run_id", None) if recovery_enabled else None),
-                request_identity=({
-                    "company_id": args.company_id,
-                    "report_year": args.report_year,
-                    "document_id": args.document_id,
-                    "source_pdf_path": source_pdf.relative_to(ROOT / "data" / "raw").as_posix(),
-                    "sha256": actual_copy_sha256,
-                    "mode": effective_request_mode,
-                } if recovery_enabled else None),
-                checkpoint_callback=(lambda report, state, parent: _save_cli_checkpoint(
-                    report, state=state, parent_run_id=parent, run_id=run_id,
-                    source_sha256=actual_copy_sha256, artifacts_root=artifacts_root,
-                ) if recovery_enabled else None),
-            )
+                source_sha256=actual_copy_sha256,
+                resume=bool(getattr(args, "resume_parent_run_id", None)),
+                progress_job_id=progress_job_id,
+            ):
+                investigation = run_annual_investigation_appendix(
+                    base_report_payload,
+                    archived_pdf_path=input_copy,
+                    original_pdf_path=source_pdf,
+                    source_record_path=args.source_record.expanduser().resolve(),
+                    run_dir=run_dir,
+                    artifacts_root=artifacts_root,
+                    progress_callback=_progress_writer(
+                        run_dir,
+                        job_progress_path,
+                        run_id=run_id,
+                        company_id=args.company_id,
+                        report_year=args.report_year,
+                        document_id=args.document_id,
+                        source_sha256=actual_copy_sha256,
+                        job_id=progress_job_id,
+                    ),
+                    request_mode=effective_request_mode if recovery_enabled else None,
+                    m3_screening=m3_screening,
+                    resume_parent_run_id=(getattr(args, "resume_parent_run_id", None) if recovery_enabled else None),
+                    request_identity=({
+                        "company_id": args.company_id,
+                        "report_year": args.report_year,
+                        "document_id": args.document_id,
+                        "source_pdf_path": source_pdf.relative_to(ROOT / "data" / "raw").as_posix(),
+                        "sha256": actual_copy_sha256,
+                        "mode": effective_request_mode,
+                    } if recovery_enabled else None),
+                    checkpoint_callback=(lambda report, state, parent: _save_cli_checkpoint(
+                        report, state=state, parent_run_id=parent, run_id=run_id,
+                        source_sha256=actual_copy_sha256, artifacts_root=artifacts_root,
+                    ) if recovery_enabled else None),
+                    parsed_pdf=result.parsed_pdf,
+                    main_soft_deadline=(runtime_budget["main_soft_deadline"] if runtime_budget is not None else None),
+                    stage_time_limits_seconds=(runtime_budget["stage_time_limits_seconds"] if runtime_budget is not None else None),
+                )
             discovery = investigation.get("discovery")
             if isinstance(discovery, dict):
                 _write_json_new(run_dir / "discovery.json", discovery)

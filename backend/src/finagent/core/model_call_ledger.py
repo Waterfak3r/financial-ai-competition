@@ -27,7 +27,12 @@ _CONFIG_ENV = "FINTRACE_MODEL_CALL_LEDGER_CONFIG"
 _SOURCE_ENV = "FINTRACE_ACTIVE_SOURCE_SHA256"
 _GATE_DB_ENV = "FINTRACE_CALL_GATE_DB"
 _GATE_KEY_ENV = "FINTRACE_CALL_GATE_KEY"
+_TASK_LIMIT_ENV = "FINTRACE_CALL_GATE_TASK_LIMIT"
+_STAGE_LIMITS_ENV = "FINTRACE_CALL_GATE_STAGE_LIMITS"
 _REPARSE_POINT = 0x400
+_ANNUAL_CALL_STAGES = frozenset({
+    "annual_discovery", "annual_investigation", "annual_issue_grouping", "annual_review",
+})
 
 
 class ModelCallAdmissionError(Exception):
@@ -112,6 +117,7 @@ def reserve_provider_attempt(
             raise ModelCallAdmissionError("ledger_config_invalid")
 
     admission_id = str(uuid.uuid4())
+    call_limits = _call_limits_from_environment()
     _with_immediate_transaction(
         database_path,
         deadline_monotonic,
@@ -124,6 +130,7 @@ def reserve_provider_attempt(
             gate_key=gate_key if raw_gate_db else None,
             context=context,
             admission_id=admission_id,
+            call_limits=call_limits,
         ),
         create_parent=True,
     )
@@ -279,7 +286,12 @@ def ledger_attempt_count(database_path: Path) -> int:
         raise ModelCallLedgerReadError("ledger database is unreadable") from None
 
 
-def select_call_gate_database(project_root: Path, job_dir: Path) -> Path:
+def select_call_gate_database(
+    project_root: Path,
+    job_dir: Path,
+    *,
+    allow_external_job_dir: bool = False,
+) -> Path:
     """Select the configured shared goal ledger or a job-local isolated DB."""
 
     config = _read_ledger_config()
@@ -290,7 +302,7 @@ def select_call_gate_database(project_root: Path, job_dir: Path) -> Path:
         job = Path(job_dir).resolve(strict=True)
     except (OSError, RuntimeError):
         raise ModelCallAdmissionError("ledger_config_invalid") from None
-    if not job.is_relative_to(root):
+    if not job.is_relative_to(root) and not allow_external_job_dir:
         raise ModelCallAdmissionError("ledger_config_invalid")
     return job / "call-gate.sqlite3"
 
@@ -315,6 +327,40 @@ def read_gate_admission_count(database_path: Path, gate_key: str) -> int:
             if row is None or type(row[0]) is not int or row[0] < 0:
                 raise ModelCallLedgerReadError("ledger count is invalid")
             return row[0]
+    except (ModelCallAdmissionError, ModelCallLedgerReadError):
+        raise
+    except (OSError, sqlite3.Error, ValueError):
+        raise ModelCallLedgerReadError("ledger database is unreadable") from None
+
+
+def read_gate_stage_admission_counts(database_path: Path, gate_key: str) -> dict[str, int]:
+    """Return the durable per-stage admission counts for one task gate."""
+
+    if not isinstance(gate_key, str) or not gate_key or len(gate_key) > 256:
+        raise ModelCallAdmissionError("ledger_config_invalid")
+    database = _absolute_safe_path(Path(database_path), create_parent=False)
+    if not database.is_file():
+        raise ModelCallLedgerReadError("ledger database is missing")
+    try:
+        with closing(
+            sqlite3.connect(f"file:{_sqlite_uri_path(database)}?mode=ro", uri=True, timeout=1.0)
+        ) as connection:
+            _require_schema(connection)
+            rows = connection.execute(
+                "SELECT stage, COUNT(*) FROM provider_attempts WHERE gate_key = ? GROUP BY stage",
+                (gate_key,),
+            ).fetchall()
+            counts = {
+                "annual_discovery": 0,
+                "annual_investigation": 0,
+                "annual_issue_grouping": 0,
+                "annual_review": 0,
+            }
+            for stage, count in rows:
+                if stage not in counts or type(count) is not int or count < 0:
+                    raise ModelCallLedgerReadError("ledger stage count is invalid")
+                counts[stage] = count
+            return counts
     except (ModelCallAdmissionError, ModelCallLedgerReadError):
         raise
     except (OSError, sqlite3.Error, ValueError):
@@ -386,6 +432,27 @@ def _active_source(config: Mapping[str, Any] | None) -> str | None:
     return source_sha
 
 
+def _call_limits_from_environment() -> dict[str, Any] | None:
+    raw_task = os.environ.get(_TASK_LIMIT_ENV)
+    raw_stages = os.environ.get(_STAGE_LIMITS_ENV)
+    if raw_task is None and raw_stages is None:
+        return None
+    if raw_task is None or raw_stages is None or re.fullmatch(r"[1-9][0-9]{0,3}", raw_task) is None:
+        raise ModelCallAdmissionError("call_budget_config_invalid")
+    try:
+        stage_limits = json.loads(raw_stages)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        raise ModelCallAdmissionError("call_budget_config_invalid") from None
+    if (
+        not isinstance(stage_limits, dict)
+        or set(stage_limits) != _ANNUAL_CALL_STAGES
+        or any(type(limit) is not int or not 0 <= limit <= int(raw_task) for limit in stage_limits.values())
+        or sum(stage_limits.values()) != int(raw_task)
+    ):
+        raise ModelCallAdmissionError("call_budget_config_invalid")
+    return {"task_limit": int(raw_task), "stage_limits": stage_limits}
+
+
 def _validate_call_context(call_context: Mapping[str, Any] | None, *, required: bool) -> dict[str, Any]:
     if call_context is None and not required:
         return {}
@@ -402,7 +469,7 @@ def _validate_call_context(call_context: Mapping[str, Any] | None, *, required: 
     if (
         not isinstance(run_id, str) or not run_id or len(run_id) > 128
         or not isinstance(stage, str) or stage not in {
-            "annual_discovery", "annual_investigation", "annual_review", "connection_test"
+            "annual_discovery", "annual_investigation", "annual_issue_grouping", "annual_review", "connection_test"
         }
         or not isinstance(gate_key, str) or not gate_key or len(gate_key) > 256
         or not _valid_uuid4(audit_id)
@@ -429,6 +496,7 @@ def _reserve_in_transaction(
     gate_key: str | None,
     context: Mapping[str, Any],
     admission_id: str,
+    call_limits: Mapping[str, Any] | None,
 ) -> None:
     _ensure_schema(connection, allow_create=allow_schema_creation)
     if config is not None:
@@ -439,6 +507,20 @@ def _reserve_in_transaction(
         ).fetchone()
         if gate is None or int(gate[0]) != 0:
             raise ModelCallAdmissionError("call_gate_closed")
+        if call_limits is not None:
+            task_count = int(connection.execute(
+                "SELECT COUNT(*) FROM provider_attempts WHERE gate_key = ?", (gate_key,)
+            ).fetchone()[0])
+            if task_count >= call_limits["task_limit"]:
+                raise ModelCallAdmissionError("task_budget_exhausted")
+            stage_limit = call_limits["stage_limits"].get(context["stage"])
+            if stage_limit is not None:
+                stage_count = int(connection.execute(
+                    "SELECT COUNT(*) FROM provider_attempts WHERE gate_key = ? AND stage = ?",
+                    (gate_key, context["stage"]),
+                ).fetchone()[0])
+                if stage_count >= stage_limit:
+                    raise ModelCallAdmissionError("stage_budget_exhausted")
     if config is not None:
         count = int(
             connection.execute(

@@ -88,6 +88,7 @@ def complete_chat(
     *,
     timeout_seconds: float | None = None,
     call_context: dict[str, object] | None = None,
+    abort_event: object | None = None,
 ) -> ChatCompletion:
     """向 settings 的根地址追加 /chat/completions 并等待文本响应。"""
 
@@ -100,7 +101,7 @@ def complete_chat(
     ):
         raise ModelResponseError("超时时间必须大于 0。", category="invalid_timeout")
     deadline = time.monotonic() + float(timeout)
-    if _call_cancelled():
+    if _call_cancelled() or _abort_event_is_set(abort_event):
         raise ModelResponseError("模型调用已取消。", category="cancelled")
     payload = _request_payload(messages, settings.model)
     if time.monotonic() >= deadline:
@@ -168,7 +169,7 @@ def complete_chat(
         writer.start()
         reader.start()
         while process.poll() is None:
-            if _call_cancelled():
+            if _call_cancelled() or _abort_event_is_set(abort_event):
                 _stop_worker(process)
                 raise ModelResponseError(
                     "模型调用已取消。",
@@ -271,7 +272,10 @@ def complete_chat(
                 )
             if kind == "admission":
                 code = result.get("code")
-                if code not in {"call_gate_closed", "ledger_unavailable"}:
+                if code not in {
+                    "call_gate_closed", "ledger_unavailable", "ledger_budget_exhausted",
+                    "stage_budget_exhausted", "task_budget_exhausted", "call_budget_config_invalid",
+                }:
                     code = "ledger_unavailable"
                 raise ModelResponseError(
                     "模型请求在联网前被共享调用账本拒绝。", category=code,
@@ -350,6 +354,11 @@ def _call_cancelled() -> bool:
         except OSError:
             return True
     return False
+
+
+def _abort_event_is_set(value: object | None) -> bool:
+    checker = getattr(value, "is_set", None)
+    return bool(checker()) if callable(checker) else False
 
 
 def _stop_worker(process: subprocess.Popen[bytes]) -> None:

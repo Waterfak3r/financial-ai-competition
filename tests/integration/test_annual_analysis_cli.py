@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import uuid
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -14,12 +15,108 @@ from pathlib import Path
 import pytest
 from scripts import analyze_annual as annual_cli
 from finagent.core.annual_checkpoints import load_current_annual_checkpoint
+from finagent.core.model_call_ledger import ModelCallAdmissionError, reserve_provider_attempt
 import finagent.core.annual_checkpoints as checkpoints
 
 _ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = _ROOT / "scripts" / "analyze_annual.py"
 _PDF = _ROOT / "data" / "raw" / "603288" / "2024" / "cninfo-1222994233" / "1222994233.PDF"
 _RUN_ID = re.compile(r"\brun_id=(annual-analysis-[0-9a-f-]+)\b")
+
+
+@pytest.mark.parametrize("resume,task_limit", [(False, 30), (True, 20)])
+def test_standalone_cli_atomically_enforces_fixed_task_and_stage_caps(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    resume: bool,
+    task_limit: int,
+) -> None:
+    for key in (
+        "FINTRACE_MODEL_CALL_LEDGER_CONFIG",
+        "FINTRACE_CALL_GATE_DB",
+        "FINTRACE_CALL_GATE_KEY",
+        "FINTRACE_CALL_GATE_TASK_LIMIT",
+        "FINTRACE_CALL_GATE_STAGE_LIMITS",
+        "FINTRACE_ACTIVE_SOURCE_SHA256",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    run_dir = tmp_path / "outside-project" / "run"
+    run_dir.mkdir(parents=True)
+    run_id = f"annual-analysis-gate-{uuid.uuid4()}"
+    source_sha = "c" * 64
+    stage_limits = (
+        annual_cli.RESUME_STAGE_ATTEMPT_BUDGETS
+        if resume else annual_cli.NEW_RUN_STAGE_ATTEMPT_BUDGETS
+    )
+
+    with annual_cli._annual_cli_admission_gate(
+        run_id=run_id,
+        run_dir=run_dir,
+        source_sha256=source_sha,
+        resume=resume,
+        progress_job_id=None,
+    ):
+        database = Path(os.environ["FINTRACE_CALL_GATE_DB"])
+        assert database == run_dir / "call-gate.sqlite3"
+        assert os.environ["FINTRACE_CALL_GATE_TASK_LIMIT"] == str(task_limit)
+        assert json.loads(os.environ["FINTRACE_CALL_GATE_STAGE_LIMITS"]) == stage_limits
+        for stage, limit in stage_limits.items():
+            for index in range(limit):
+                reserve_provider_attempt(
+                    "http://127.0.0.1:9/v1",
+                    "offline-cli-budget-test",
+                    call_context={
+                        "run_id": run_id,
+                        "stage": stage,
+                        "batch_index": index + 1 if stage == "annual_discovery" else None,
+                        "audit_id": str(uuid.uuid4()),
+                        "gate_key": run_id,
+                    },
+                )
+        with pytest.raises(ModelCallAdmissionError, match="task_budget_exhausted"):
+            reserve_provider_attempt(
+                "http://127.0.0.1:9/v1",
+                "offline-cli-budget-test",
+                call_context={
+                    "run_id": run_id,
+                    "stage": "annual_review",
+                    "batch_index": None,
+                    "audit_id": str(uuid.uuid4()),
+                    "gate_key": run_id,
+                },
+            )
+
+    assert "FINTRACE_CALL_GATE_DB" not in os.environ
+    assert "FINTRACE_ACTIVE_SOURCE_SHA256" not in os.environ
+    with pytest.raises(ModelCallAdmissionError, match="call_gate_closed"):
+        annual_cli.open_admission_gate(database, run_id)
+
+
+def test_api_managed_cli_validates_and_preserves_parent_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    job_id = "annual-job-" + "a" * 32
+    database = tmp_path / "parent.sqlite3"
+    source_sha = "d" * 64
+    monkeypatch.setenv("FINTRACE_CALL_GATE_DB", str(database))
+    monkeypatch.setenv("FINTRACE_CALL_GATE_KEY", job_id)
+    monkeypatch.setenv("FINTRACE_CALL_GATE_TASK_LIMIT", "30")
+    monkeypatch.setenv(
+        "FINTRACE_CALL_GATE_STAGE_LIMITS",
+        json.dumps(annual_cli.NEW_RUN_STAGE_ATTEMPT_BUDGETS, sort_keys=True, separators=(",", ":")),
+    )
+    monkeypatch.setenv("FINTRACE_ACTIVE_SOURCE_SHA256", source_sha)
+
+    with annual_cli._annual_cli_admission_gate(
+        run_id="annual-analysis-parent-gate-test",
+        run_dir=tmp_path,
+        source_sha256=source_sha,
+        resume=False,
+        progress_job_id=job_id,
+    ):
+        assert os.environ["FINTRACE_CALL_GATE_DB"] == str(database)
+        assert not database.exists()
+
 
 
 def test_cli_archives_real_pdf_through_confirmed_v2_report(tmp_path: Path) -> None:

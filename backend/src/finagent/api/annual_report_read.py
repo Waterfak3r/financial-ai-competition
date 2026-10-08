@@ -19,6 +19,9 @@ from finagent.core.annual_checkpoints import (
     _load_current_annual_checkpoint_with_verified_source,
 )
 from finagent.core.sample_provenance import resolve_sample_provenance
+from finagent.core.annual_work_budget import (
+    archived_budget_contract_v1,
+)
 from finagent.core.safe_paths import PathBoundaryError, validate_run_id
 from finagent.api.narrative_reading_context import build_reading_context
 from finagent.ingestion.parse_text_pdf import parse_text_pdf
@@ -38,7 +41,7 @@ _MAX_DISCOVERY_EVIDENCE_CHARS = 4_000_000
 _MAX_DISCOVERY_OPINION_CHARS = 1_200_000
 _MAX_DISCOVERY_LIMITATIONS = 1_100
 _MAX_DISCOVERY_QUOTE_CHARS = 300
-_DISCOVERY_PROMPT_VERSIONS = frozenset({"annual_discovery_v1", "annual_discovery_v2"})
+_DISCOVERY_PROMPT_VERSIONS = frozenset({"annual_discovery_v1", "annual_discovery_v2", "annual_discovery_v3"})
 _V2_SAFE_BATCH_FAILURES = frozenset(
     {
         "all_findings_rejected",
@@ -71,8 +74,17 @@ _V3_UNATTEMPTED_REASONS = frozenset({
     "authentication_failure_stopped", "consecutive_transport_failures_stopped",
     "parent_call_gate_closed",
 })
+_V4_UNATTEMPTED_REASONS = _V3_UNATTEMPTED_REASONS | frozenset({
+    "discovery_stage_budget_exhausted",
+})
+_V4_DISPATCH_CLOSE_REASONS = frozenset({
+    "discovery_stage_budget_exhausted", "workflow_time_budget_exhausted",
+    "provider_budget_exhausted", "user_cancelled", "authentication_failure_stopped",
+    "provider_admission_rejected", "consecutive_transport_failures_stopped",
+})
 _V3_BATCH_FAILURES = _V2_SAFE_BATCH_FAILURES | frozenset({"audit_write_failed"})
 _V3_EXECUTION_KIND = "fintrace_annual_discovery_execution_v3"
+_V4_EXECUTION_KIND = "fintrace_annual_discovery_execution_v4"
 _V3_BINDING_FIELDS = {
     "source_sha256", "company_id", "report_year", "source_document_id", "analysis_mode",
     "provider_model_fingerprint", "model", "prompts_sha256", "parser_version", "plan_sha256",
@@ -83,6 +95,8 @@ _V3_CONTRACT_FIELDS = {
     "provider_admission_count", "parent_provider_admission_count",
     "cumulative_provider_admission_count", "response_count", "reused_batches", "batches",
 }
+_V4_CONTRACT_FIELDS = _V3_CONTRACT_FIELDS | {"scheduler", "phase_budget", "timing"}
+_V4_BINDING_FIELDS = _V3_BINDING_FIELDS | {"plan_version", "execution_version"}
 _V3_BATCH_FIELDS = {"batch_index", "state", "resolution", "reason", "attempts"}
 _V3_ATTEMPT_FIELDS = {
     "attempt_index", "audit_id", "admission_id", "provider_admitted", "status",
@@ -409,8 +423,23 @@ def _validate_v3_parent_archive(
     if not isinstance(parent_discovery, Mapping):
         raise AnnualReportReadError(409, "annual_discovery_parent_invalid", "年度 v3 父运行缺少发现报告。")
     parent_contract = parent_discovery.get("execution_contract")
-    if not isinstance(parent_contract, Mapping) or set(parent_contract) != _V3_CONTRACT_FIELDS:
-        raise AnnualReportReadError(409, "annual_discovery_parent_invalid", "年度 v3 父运行缺少严格执行绑定。")
+    if not isinstance(current_contract, Mapping):
+        raise AnnualReportReadError(409, "annual_discovery_parent_invalid", "年度子运行缺少严格执行绑定。")
+    current_kind = current_contract.get("kind")
+    if current_kind == _V3_EXECUTION_KIND:
+        expected_contract_fields = _V3_CONTRACT_FIELDS
+    elif current_kind == _V4_EXECUTION_KIND:
+        expected_contract_fields = _V4_CONTRACT_FIELDS
+    else:
+        raise AnnualReportReadError(409, "annual_discovery_parent_invalid", "年度父子运行使用了未知执行版本。")
+    if (
+        not isinstance(current_contract, Mapping)
+        or set(current_contract) != expected_contract_fields
+        or not isinstance(parent_contract, Mapping)
+        or set(parent_contract) != expected_contract_fields
+        or parent_contract.get("kind") != current_kind
+    ):
+        raise AnnualReportReadError(409, "annual_discovery_parent_invalid", "年度父子运行缺少同版本的严格执行绑定。")
     if (
         parent.run_id == current_run_id
         or parent.report.get("source_sha256") != current_report.get("source_sha256")
@@ -1348,19 +1377,41 @@ def _collect_discovery_evidences(
         raise AnnualReportReadError(422, "annual_discovery_invalid", "年度开放式发现覆盖记录无效。")
     execution_summary: dict[str, Any] | None = None
     if has_execution_contract:
-        if prompt_version != "annual_discovery_v2":
-            raise AnnualReportReadError(422, "annual_discovery_invalid", "执行契约只能绑定 annual_discovery_v2。")
-        execution_summary = _validate_v3_execution_contract(
-            layer.get("execution_contract"),
-            expected_run_id=expected_run_id,
-            expected_company_id=expected_company_id,
-            expected_report_year=expected_report_year,
-            expected_document_id=expected_document_id,
-            expected_sha256=expected_sha256,
-            expected_analysis_mode=expected_analysis_mode,
-            m3_screening=report.get("m3_screening"),
-            coverage=coverage,
-        )
+        if prompt_version == "annual_discovery_v2":
+            execution_summary = _validate_v3_execution_contract(
+                layer.get("execution_contract"),
+                expected_run_id=expected_run_id,
+                expected_company_id=expected_company_id,
+                expected_report_year=expected_report_year,
+                expected_document_id=expected_document_id,
+                expected_sha256=expected_sha256,
+                expected_analysis_mode=expected_analysis_mode,
+                m3_screening=report.get("m3_screening"),
+                coverage=coverage,
+            )
+        elif prompt_version == "annual_discovery_v3":
+            raw_contract = layer.get("execution_contract")
+            execution_summary = _validate_v4_execution_contract(
+                raw_contract,
+                expected_run_id=expected_run_id,
+                expected_company_id=expected_company_id,
+                expected_report_year=expected_report_year,
+                expected_document_id=expected_document_id,
+                expected_sha256=expected_sha256,
+                expected_analysis_mode=expected_analysis_mode,
+                m3_screening=report.get("m3_screening"),
+                coverage=coverage,
+            )
+            scheduler = raw_contract.get("scheduler") if isinstance(raw_contract, Mapping) else None
+            dispatch_reason = scheduler.get("dispatch_closed_reason") if isinstance(scheduler, Mapping) else None
+            if (
+                dispatch_reason is not None
+                and status in {"not_called", "partial", "failed"}
+                and reason != dispatch_reason
+            ):
+                raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v4 发现原因与调度闭合原因不一致。")
+        else:
+            raise AnnualReportReadError(422, "annual_discovery_invalid", "该提示词版本不能包含年度执行契约。")
     _validate_discovery_coverage(
         coverage,
         status,
@@ -1399,7 +1450,7 @@ def _collect_discovery_evidences(
         raise AnnualReportReadError(422, "annual_discovery_invalid", "年度执行契约与当前模型调用计数不一致。")
     if not has_execution_contract and coverage["source_status"] == "parsed" and (
         attempt_count != coverage["processed_batches"]
-        or coverage["successful_batches"] + (coverage.get("partial_batches", 0) if prompt_version == "annual_discovery_v2" else 0) > call_count
+        or coverage["successful_batches"] + (coverage.get("partial_batches", 0) if prompt_version in {"annual_discovery_v2", "annual_discovery_v3"} else 0) > call_count
         or call_count > attempt_count
     ):
         raise AnnualReportReadError(422, "annual_discovery_invalid", "已解析来源的请求/响应数与结束批次不一致。")
@@ -1423,7 +1474,7 @@ def _collect_discovery_evidences(
         or sum(len(item) for item in limitations if isinstance(item, str)) > _MAX_DISCOVERY_LIMITATIONS * 400
     ):
         raise AnnualReportReadError(422, "annual_discovery_invalid", "开放式发现条目超过结构或字符上限。")
-    if prompt_version == "annual_discovery_v2" and not has_execution_contract:
+    if prompt_version in {"annual_discovery_v2", "annual_discovery_v3"} and not has_execution_contract:
         accepted_count_ceiling = sum(
             int(item["accepted_findings"])
             for item in coverage["batch_results"]
@@ -1432,7 +1483,7 @@ def _collect_discovery_evidences(
         if len(raw_findings) > accepted_count_ceiling:
             raise AnnualReportReadError(422, "annual_discovery_invalid", "归档发现数量超过批次验收计数。")
     accepted_batch_count = coverage["successful_batches"] + (
-        coverage.get("partial_batches", 0) if prompt_version == "annual_discovery_v2" else 0
+        coverage.get("partial_batches", 0) if prompt_version in {"annual_discovery_v2", "annual_discovery_v3"} else 0
     )
     if (
         has_execution_contract
@@ -1581,7 +1632,7 @@ def _collect_discovery_evidences(
             raise AnnualReportReadError(422, "annual_discovery_invalid", "开放式发现文本超过专用总字符上限。")
         citations = finding.get("citations")
         evidence_ids = finding.get("evidence_ids")
-        is_v2 = prompt_version == "annual_discovery_v2"
+        is_v2 = prompt_version in {"annual_discovery_v2", "annual_discovery_v3"}
         if (
             not isinstance(citations, list)
             or not 1 <= len(citations) <= 4
@@ -1720,6 +1771,205 @@ def _m3_semantic_binding_sha256(value: object, binding: Mapping[str, Any]) -> st
         return hashlib.sha256(_canonical_report_bytes(projection)).hexdigest()
     except AnnualReportReadError:
         return ""
+
+
+def _validate_v4_execution_contract(
+    value: object,
+    *,
+    expected_run_id: str,
+    expected_company_id: str,
+    expected_report_year: int,
+    expected_document_id: str,
+    expected_sha256: str,
+    expected_analysis_mode: object,
+    m3_screening: object,
+    coverage: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Validate the versioned v4 envelope, then reuse v3 batch invariants."""
+
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != _V4_CONTRACT_FIELDS
+        or value.get("kind") != _V4_EXECUTION_KIND
+    ):
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v4 执行契约字段集合无效。")
+    binding = value.get("binding")
+    if (
+        not isinstance(binding, Mapping)
+        or set(binding) != _V4_BINDING_FIELDS
+        or binding.get("plan_version") != "annual_discovery_plan_v3"
+        or binding.get("execution_version") != "execution_v4"
+        or binding.get("parser_version") != "annual-discovery-parser-v3-execution-v4"
+        or not isinstance(value.get("identity_sha256"), str)
+        or _LOWER_SHA256.fullmatch(value.get("identity_sha256", "")) is None
+        or hashlib.sha256(_canonical_report_bytes(binding)).hexdigest() != value.get("identity_sha256")
+    ):
+        raise AnnualReportReadError(409, "annual_discovery_binding_mismatch", "年度 v4 执行身份或版本不一致。")
+
+    phase_budget = value.get("phase_budget")
+    if not isinstance(phase_budget, Mapping):
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v4 阶段预算无效。")
+    scope = phase_budget.get("scope")
+    if scope not in {"new_run", "resume"}:
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v4 预算范围无效。")
+    expected_scope = "resume" if value.get("parent_run_id") is not None else "new_run"
+    if scope != expected_scope:
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v4 预算范围与父运行关系不一致。")
+    expected_budget = archived_budget_contract_v1(scope=scope)
+    if dict(phase_budget) != expected_budget:
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v4 阶段预算与受控配置不一致。")
+
+    scheduler = value.get("scheduler")
+    scheduler_fields = {
+        "requested_max_concurrency", "effective_max_concurrency", "inflight_peak",
+        "checkpoint_coordinator_count", "checkpoint_publications", "dispatch_closed_reason",
+        "time_deadline_reason", "inflight_drained", "inflight_count",
+    }
+    if not isinstance(scheduler, Mapping) or set(scheduler) != scheduler_fields:
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v4 调度记录字段集合无效。")
+    requested = scheduler.get("requested_max_concurrency")
+    effective = scheduler.get("effective_max_concurrency")
+    peak = scheduler.get("inflight_peak")
+    publications = scheduler.get("checkpoint_publications")
+    active = scheduler.get("inflight_count")
+    closed_reason = scheduler.get("dispatch_closed_reason")
+    time_deadline_reason = scheduler.get("time_deadline_reason")
+    if (
+        type(requested) is not int or not 1 <= requested <= 3
+        or type(effective) is not int or not 1 <= effective <= 3
+        or type(peak) is not int or not 0 <= peak <= effective
+        or type(scheduler.get("checkpoint_coordinator_count")) is not int
+        or scheduler.get("checkpoint_coordinator_count") != 1
+        or type(publications) is not int or publications < 0
+        or type(active) is not int or not 0 <= active <= peak
+        or type(scheduler.get("inflight_drained")) is not bool
+        or scheduler.get("inflight_drained") != (active == 0)
+        or closed_reason is not None and closed_reason not in _V4_DISPATCH_CLOSE_REASONS
+        or time_deadline_reason not in {
+            None, "discovery_stage_budget_exhausted", "workflow_time_budget_exhausted",
+        }
+        or time_deadline_reason is not None and time_deadline_reason != closed_reason
+        or closed_reason == "workflow_time_budget_exhausted"
+        and time_deadline_reason != "workflow_time_budget_exhausted"
+    ):
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v4 调度边界无效。")
+
+    timing = value.get("timing")
+    timing_fields = {
+        "source_parse_seconds", "planning_seconds", "source_parse_reused",
+        "discovery_elapsed_seconds", "main_work_remaining_seconds",
+    }
+    if not isinstance(timing, Mapping) or set(timing) != timing_fields:
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v4 计时字段集合无效。")
+    for name in ("source_parse_seconds", "planning_seconds", "discovery_elapsed_seconds"):
+        elapsed = timing.get(name)
+        if type(elapsed) not in {int, float} or not math.isfinite(float(elapsed)) or elapsed < 0:
+            raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v4 阶段耗时无效。")
+    remaining = timing.get("main_work_remaining_seconds")
+    if remaining is not None and (
+        type(remaining) not in {int, float} or not math.isfinite(float(remaining)) or remaining < 0
+    ):
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v4 剩余时限无效。")
+    if type(timing.get("source_parse_reused")) is not bool:
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v4 解析复用标记无效。")
+
+    # Preserve the original v4 digest check above. Only after it succeeds is
+    # the v4 envelope projected to the immutable v3 batch validator's shape.
+    raw_batches = value.get("batches")
+    coverage_rows = coverage.get("batch_results")
+    if not isinstance(raw_batches, list):
+        raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v4 批次计划无效。")
+    coverage_by_index = {
+        row.get("batch_index"): row
+        for row in coverage_rows
+        if isinstance(row, Mapping) and type(row.get("batch_index")) is int
+    } if isinstance(coverage_rows, list) else {}
+    for raw_batch in raw_batches:
+        if not isinstance(raw_batch, Mapping):
+            continue  # The immutable v3 validator below reports the structural error.
+        attempts = raw_batch.get("attempts")
+        if not isinstance(attempts, list):
+            continue
+        accepted_responses = 0
+        for raw_attempt in attempts:
+            if not isinstance(raw_attempt, Mapping):
+                continue  # The immutable v3 validator below reports the structural error.
+            accepted = raw_attempt.get("accepted_findings")
+            response_accepted = raw_attempt.get("response_accepted")
+            if response_accepted is True:
+                accepted_responses += 1
+                if type(accepted) is not int or not 0 <= accepted <= 3:
+                    raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v4 单次响应发现数超出三条上限。")
+        row = coverage_by_index.get(raw_batch.get("batch_index"))
+        if not isinstance(row, Mapping):
+            continue  # The coverage validator below reports missing or malformed rows.
+        accepted_total = row.get("accepted_findings")
+        rejected = row.get("rejected_findings")
+        restored = row.get("restored_quotes")
+        inherited = row.get("inherited_findings")
+        if not all(type(item) is int and item >= 0 for item in (accepted_total, rejected, restored, inherited)):
+            continue  # The legacy validator below reports the structural error.
+        if raw_batch.get("resolution") == "reused":
+            # A v4 resume may safely reuse a strict v3 parent that allowed six
+            # findings per batch; no new v4 response or quote repair occurred.
+            if accepted_total > 6 or rejected != 0 or restored != 0:
+                raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v4 复用批次发现计数无效。")
+            continue
+        new_accepted = accepted_total - inherited
+        if (
+            new_accepted < 0
+            or new_accepted > accepted_responses * 3
+            or rejected > accepted_responses * 3
+            or new_accepted + rejected > accepted_responses * 3
+            or restored > accepted_responses * 12
+        ):
+            raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v4 响应发现数或引用修复数超出上限。")
+
+    # Preserve the original v4 digest check above. Only after it succeeds is
+    # the v4 envelope projected to the immutable v3 batch validator's shape.
+    normalized_binding = {key: binding[key] for key in _V3_BINDING_FIELDS}
+    normalized = {key: value[key] for key in _V3_CONTRACT_FIELDS}
+    normalized["kind"] = _V3_EXECUTION_KIND
+    normalized["binding"] = normalized_binding
+    normalized["identity_sha256"] = hashlib.sha256(
+        _canonical_report_bytes(normalized_binding)
+    ).hexdigest()
+    normalized_batches: list[dict[str, Any]] = []
+    for raw_batch in normalized["batches"]:
+        if not isinstance(raw_batch, Mapping):
+            raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v4 批次结构无效。")
+        batch_copy = dict(raw_batch)
+        if batch_copy.get("state") == "unattempted" and batch_copy.get("reason") not in _V4_UNATTEMPTED_REASONS:
+            raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v4 未尝试批次原因无效。")
+        if batch_copy.get("reason") == "discovery_stage_budget_exhausted":
+            batch_copy["reason"] = "provider_budget_exhausted"
+        attempts = batch_copy.get("attempts")
+        if isinstance(attempts, list):
+            translated: list[dict[str, Any]] = []
+            for raw_attempt in attempts:
+                if not isinstance(raw_attempt, Mapping):
+                    raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v4 尝试结构无效。")
+                attempt = dict(raw_attempt)
+                reason = attempt.get("reason")
+                if reason in {"stage_budget_exhausted", "task_budget_exhausted"}:
+                    if attempt.get("provider_admitted") is not False or attempt.get("status") != "rejected":
+                        raise AnnualReportReadError(422, "annual_discovery_invalid", "预算拒绝不能有 provider 准入。")
+                    attempt["reason"] = "ledger_budget_exhausted"
+                translated.append(attempt)
+            batch_copy["attempts"] = translated
+        normalized_batches.append(batch_copy)
+    normalized["batches"] = normalized_batches
+    return _validate_v3_execution_contract(
+        normalized,
+        expected_run_id=expected_run_id,
+        expected_company_id=expected_company_id,
+        expected_report_year=expected_report_year,
+        expected_document_id=expected_document_id,
+        expected_sha256=expected_sha256,
+        expected_analysis_mode=expected_analysis_mode,
+        m3_screening=m3_screening,
+        coverage=coverage,
+    )
 
 
 def _validate_v3_execution_contract(
@@ -1966,9 +2216,53 @@ def _validate_discovery_coverage(
     execution_contract: object = None,
 ) -> None:
     if execution_contract is not None:
-        _validate_discovery_coverage_v3(coverage, status, execution_contract)
+        if isinstance(execution_contract, Mapping) and execution_contract.get("kind") == _V4_EXECUTION_KIND:
+            scheduler = execution_contract.get("scheduler")
+            dispatch_reason = scheduler.get("dispatch_closed_reason") if isinstance(scheduler, Mapping) else None
+            time_reason = scheduler.get("time_deadline_reason") if isinstance(scheduler, Mapping) else None
+            time_exhausted = coverage.get("time_budget_exhausted")
+            if (
+                type(time_exhausted) is not bool
+                or time_exhausted != (time_reason is not None)
+                or time_reason is not None and time_reason != dispatch_reason
+                or dispatch_reason == "workflow_time_budget_exhausted"
+                and time_reason != "workflow_time_budget_exhausted"
+            ):
+                raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v4 时间覆盖与停止原因不一致。")
+            projected_contract = dict(execution_contract)
+            projected_batches: list[dict[str, Any]] = []
+            for batch in execution_contract.get("batches", []):
+                if not isinstance(batch, Mapping):
+                    raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v4 批次结构无效。")
+                projected = dict(batch)
+                if projected.get("reason") == "discovery_stage_budget_exhausted":
+                    projected["reason"] = "provider_budget_exhausted"
+                projected_batches.append(projected)
+            projected_contract["batches"] = projected_batches
+            projected_coverage = dict(coverage)
+            projected_rows: list[dict[str, Any]] = []
+            for row in coverage.get("batch_results", []):
+                if not isinstance(row, Mapping):
+                    raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v4 覆盖批次结构无效。")
+                projected = dict(row)
+                if projected.get("reason") == "discovery_stage_budget_exhausted":
+                    projected["reason"] = "provider_budget_exhausted"
+                projected_rows.append(projected)
+            projected_coverage["batch_results"] = projected_rows
+            _validate_discovery_coverage_v3(projected_coverage, status, projected_contract)
+            unattempted = [
+                row for row in execution_contract.get("batches", [])
+                if isinstance(row, Mapping) and row.get("state") == "unattempted"
+                and row.get("reason") != "awaiting_model"
+            ]
+            if unattempted and dispatch_reason is None:
+                raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v4 未尝试批次缺少调度关闭原因。")
+            if dispatch_reason is not None and any(row.get("reason") != dispatch_reason for row in unattempted):
+                raise AnnualReportReadError(422, "annual_discovery_invalid", "年度 v4 未尝试批次与调度关闭原因不一致。")
+        else:
+            _validate_discovery_coverage_v3(coverage, status, execution_contract)
         return
-    is_v2 = prompt_version == "annual_discovery_v2"
+    is_v2 = prompt_version in {"annual_discovery_v2", "annual_discovery_v3"}
     fields = {
         "total_pages", "text_pages", "total_blocks", "total_chars", "planned_batches",
         "processed_batches", "successful_batches", "failed_batches", "batch_results",

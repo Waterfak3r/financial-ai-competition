@@ -16,7 +16,8 @@ from datetime import date
 from pathlib import Path
 from typing import Literal
 
-import pymupdf
+from finagent.ingestion.parse_text_pdf import parse_text_pdf
+from finagent.schemas.text_pdf import ParsedTextPdf
 
 SUPPORTED_SIGNAL_IDS = frozenset({"profit_up_cash_down", "revenue_up_cash_down"})
 REPORT_KIND = "fintrace_annual_analysis_report"
@@ -157,6 +158,7 @@ def retrieve_annual_context(
     max_snippets: int = DEFAULT_MAX_SNIPPETS,
     max_chars_per_snippet: int = DEFAULT_MAX_SNIPPET_CHARS,
     max_total_chars: int = DEFAULT_MAX_TOTAL_CHARS,
+    parsed_pdf: ParsedTextPdf | None = None,
 ) -> AnnualContextResult:
     """Retrieve bounded context for current candidate signals from one local PDF.
 
@@ -254,16 +256,28 @@ def retrieve_annual_context(
             source_sha256=source_sha256,
         )
 
-    try:
-        with pymupdf.open(source_path) as document:
-            blocks = _read_blocks(document)
-    except Exception:
+    if parsed_pdf is None:
+        try:
+            parsed_pdf = parse_text_pdf(source_path, source_document_id)
+        except Exception:
+            return _abstain(
+                "source_pdf_unreadable",
+                signal_ids=signal_ids,
+                source_document_id=source_document_id,
+                source_sha256=source_sha256,
+            )
+    if (
+        not isinstance(parsed_pdf, ParsedTextPdf)
+        or parsed_pdf.document_id != source_document_id
+        or parsed_pdf.source_sha256.lower() != source_sha256
+    ):
         return _abstain(
-            "source_pdf_unreadable",
+            "source_parse_identity_mismatch",
             signal_ids=signal_ids,
             source_document_id=source_document_id,
             source_sha256=source_sha256,
         )
+    blocks = _read_parsed_blocks(parsed_pdf)
     if not blocks:
         return _abstain(
             "source_pdf_has_no_text_blocks",
@@ -477,15 +491,25 @@ def _source_identity_error(
     return None
 
 
-def _read_blocks(document: pymupdf.Document) -> tuple[_Block, ...]:
-    blocks: list[_Block] = []
-    for page_number, page in enumerate(document, start=1):
-        for ordinal, item in enumerate(page.get_text("blocks")):
-            if len(item) < 5 or not isinstance(item[4], str) or item[4] == "":
-                continue
-            bbox = tuple(float(value) for value in item[:4])
-            blocks.append(_Block(page_number, ordinal, bbox, item[4]))
-    return tuple(blocks)
+def _read_parsed_blocks(parsed_pdf: ParsedTextPdf) -> tuple[_Block, ...]:
+    """Project the already identity-checked canonical PDF parse into retrieval blocks."""
+
+    return tuple(
+        _Block(
+            page.page_number,
+            block.block_index,
+            (
+                block.bbox.x0,
+                block.bbox.y0,
+                block.bbox.x1,
+                block.bbox.y1,
+            ),
+            block.text,
+        )
+        for page in parsed_pdf.pages
+        for block in page.blocks
+        if block.text != ""
+    )
 
 
 def _locate_sections(blocks: tuple[_Block, ...]) -> tuple[_Section, ...]:

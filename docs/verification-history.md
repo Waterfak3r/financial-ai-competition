@@ -347,3 +347,123 @@ R2 由本会话明确配置的 `gpt-6-luna`、`max` 子代理实施代码及运�
 原始保护基线共 703 个文件；最终主控核对缺失/变化零。用户初始产品路线/验收文档修改、计划书 Word 删除与另名文件、原 PDF 均保留；本阶段仅暂存本任务文件及主控新增验收段落，不纳入其他未提交内容，不 push。tmp 默认保留。正式产物位于 `artifacts/evaluations/annual-recovery-r2-20261006/`，主控[最终阶段审阅](../artifacts/evaluations/annual-recovery-controller-20261006/r2-accepted-review.json)记录保护证据、验收范围和本地提交身份。
 
 本 goal 真实配置服务请求累计 **0/80**，剩余 **80**；尚未读取真实模型配置。R3 同源输入压缩与有限主报告预算、R4 全部发现归并、R5 普通入口及 R6 两份新在线结果仍待执行。当前源码不表示 15/90/300 秒真实性能目标已通过；最终完整后端套件、前端构建和最终浏览器矩阵留在 R6 最终代码上验收。真人财务复核及其他外部交付关卡保持未通过状态。
+
+<a id="annual-analysis-recovery-r3"></a>
+
+## 2026-10-07–08 R3 请求压缩与阶段预算（离线工程验收通过）
+
+R3 代码及运行验证由本会话新的、明确配置为 `gpt-6-luna` / `max` 的执行代理完成；主控负责方案、正式文档及差异和证据审阅。本节按发生顺序保留中间失败及修正，最后的实际 HTTP/Popen/API/CLI 与浏览器证据已审阅通过；离线工程通过不代表真实供应方性能或语义质量通过。预算、版本与独立 CLI 的边界分别见[发现契约](annual-discovery.md)和[架构](architecture.md)，真实 15/90/300 秒目标留在 R6。
+
+### 同源请求规模对照
+
+最终测量使用新 `annual_discovery_v3` 提示词、`annual_discovery_plan_v3` 和完整 Chat Completions 请求 JSON，模型名为离线占位值 `offline-sizing-only`。两份实际 PDF 的源 SHA、文字字符、UTF-8 正文和页面与旧计划一致；没有关键词过滤或文字截断。旧基线、紧凑原型和最终请求分别保存，原型使用 v2-sizing-only，不能替代最终请求。正式[最终测量](../artifacts/evaluations/annual-recovery-r3-20261006/attempt-03-final-v3-payload-measure.json) SHA 为 `eb3992e1f53ebf6b15b1ce35f89301299af35bc026bae3071baa479607806ec9`，主控已阅读并核对输入及实现哈希。
+
+| 输入 | 原文字符 / 片段 | 旧→最终批次 | 请求字符（旧→最终） | 请求 UTF-8 字节（旧→最终） |
+| --- | --- | --- | --- | --- |
+| 海天 2024 | 204321 / 6856 | 42→18 | 989966→403633 | 1300706→669469 |
+| 茅台 2025 | 151314 / 3289 | 23→13 | 540285→263369 | 761342→466750 |
+
+两份最终规划均保留全部可提取文字、遗漏零。海天本次解析 0.439628 秒、规划 1.978184 秒；茅台解析 0.156394 秒、规划 0.699967 秒，两份测量 wall time 3.305523 秒。每份在此离线测量中先解析一次、规划复用对象，不据此宣称整个 CLI 只打开一次 PDF，也不把不同缓存状态下的解析时间差当作供应方提速。海天一批完整请求正好 24000 字符；R6 须在读取实际配置后用真实模型名重新离线规划，外发前核对限额。
+
+扫描 31 次，加每份固定调查 2、归并/补证预留 8、评审 2，正常规划额度为 **55/60**，整个 goal 另留 **20** 次失败续跑额度。归并/补证仍是 R4 预留，未实施。每批严格最多三条使总输出机会随批次数下降，原文覆盖不能证明问题发现质量不变；后部事项、跨章节及新在线原文对照另验收。
+
+### 已核对的源码与定向检查
+
+浏览器续跑修复前的 [attempt-10 CLI 身份](../artifacts/evaluations/annual-recovery-r3-20261006/attempt-10-source-docstring-identity/cli-runtime-identity.json) 为 74 文件，源码 manifest `f55244503dbec6b13d01d8938ae841ac85926d607bafefc4bfd31fe1ad09c2aa`，加载代码 `1cdb31badb813cc01057b1e4507c003908563d7e2c77c3ad0861eb9937603ab0`，loaded_source_match=true、model_calls=0。主控独立逐文件重算 manifest 一致。attempt-08 及前面的单位检查使用先前身份，仅差预算函数说明字符串的档案/live 边界澄清；原证据保持各自身份，不覆盖。实际 API 身份由相应隔离服务记录，后续修复身份另列，不据此给旧证据换版本。
+
+- [attempt-05](../artifacts/evaluations/annual-recovery-r3-20261006/attempt-05-backend-unit-regression-after-mock-fix/)：上下文、发现、调查附加、账本和严格读档 **138 passed / 8.07 秒**；主控核对原始日志、JUnit 与当时文件哈希。包括修改 live 默认值后旧 v4 档案预算仍能严格读取。attempt-04 的 **6 failed、132 passed** 保留，原因是旧测试替身未接受新增 abort_event 参数；修正替身后复测通过，不删失败。
+- [attempt-06](../artifacts/evaluations/annual-recovery-r3-20261006/attempt-06-cli-atomic-budget-gate/)：独立 CLI 默认原子首次/续跑门及 API-owned gate 核对 **3 passed / 1.00 秒、14 deselected**。它是该门控定向检查，不冒称完整实际 CLI 故障矩阵。
+- [attempt-07](../artifacts/evaluations/annual-recovery-r3-20261006/attempt-07-reader-export-regression/)：reader/API/export 定向回归 **64 passed / 20.70 秒**。JSON 保留 v4 安全 budget/scheduler/timing；Markdown/HTML 当前只显示状态、覆盖与限制，未实现预算摘要，三格式实际下载仍待浏览器核对。
+- [前端最终静态检查](../artifacts/evaluations/annual-recovery-r3-20261006/frontend-budget-ui/final-attempt-20261007-01/)：typecheck/build 均 exit 0；主控阅读原始 stdout/stderr/exit 文件，核对八个源码/依赖清单及实际 JS/CSS 哈希。JS 为 547727 字节，仍有既有超过 500 kB 的 chunk 提示；此记录不代表浏览器已通过。
+- attempt-09 仅回补此前 **49 passed** 的回溯元数据；该轮没有可核对的正式原始 console 文件或 JUnit，不与以上当前可核对结果合并计数，也未为补日志重复业务测试。
+
+实际运行失败及成功关卡将逐项按唯一 attempt 保存；测试环境、夹具或观察器失败不记为产品通过，生产缺陷在同阶段修正后重新核对。当前真实配置服务请求累计仍为 **0/80**，剩余 **80**；未读取本机真实模型配置。历史归档、两份真实 PDF 与用户初始未提交改动保持保护，R3 尚未暂存或 commit。
+
+### 实际 CLI 与本机 HTTP 健康场景
+
+[healthy-010](../artifacts/evaluations/annual-recovery-r3-20261006/runtime-budget/healthy-010-20261007T213034-1a32a329/) 为原创模拟 36 页 PDF 的实际独立 CLI/Popen 和 loopback HTTP 验收，**1 passed / 12.80 秒**，JUnit 12.710 秒，outer runner exit 0。业务 CLI 自然 exit 0，用时 **5.683142 秒**；11/11 批次的 120040 个可提取字符成功处理，扫描 11 次、评审 1 次，与主控只读 SQLite 准入计数一致。本机 HTTP 并发峰值 3，首三批完成顺序为 2→3→1，后续批次在第一批未结束时滚动补位。请求保持挂起时实际观测到三个 worker 的 PID、父 PID 及创建身份，随后全部退出；单协调者发布、inflight drained=true，截止原因 null，未截断。
+
+默认独立 CLI 的 new_run 额度为 task 30、阶段 18/2/8/2，档案工作预算为 300/285/15 秒；harness 未注入任务或阶段准入额度。actual CLI 使用新冻结 fingerprint 准入。最终快照为 completed_with_issues / sequence 18 / is_partial=false（原创材料存在基础财务缺口）；评审 completed/insufficient_evidence。此材料未提取出固定调查候选，调查零次，**不作为调查阶段验收**。直接调用导出层生成的 JSON/Markdown/HTML 状态、覆盖与快照一致，主控阅读正文并核对实际三文件字节和 SHA；这不是浏览器下载验收。JSON 有 v4 scheduler 和 phase_budget，Markdown/HTML 未声称有预算摘要。
+
+此前 healthy-001 的导入环境错误、healthy-003 的短命 worker 观察失败、healthy-004 的旧 evidence_id 响应格式及其余观察器/断言调整均保留原失败 attempt。healthy-005 先通过核心运行关卡，healthy-010 补齐正文一致性与进程退出证据；不合并为多个独立场景通过。新的阶段耗尽、故障及浏览器关卡仍在执行，R3 整体保持未通过。
+
+### 阶段额度与时间故障关卡
+
+- [discovery-cap-002](../artifacts/evaluations/annual-recovery-r3-20261006/runtime-budget/discovery-cap-002-20261007T213714-025f8132/)：实际独立 CLI 新任务的默认原子扫描额度关卡通过，raw stdout **1 passed / 13.27 秒**、JUnit 13.181 秒；业务 CLI 自然 exit 2、8.653601 秒。为确定边界显式并发 1；扫描实际 HTTP 与只读 SQLite 同为 18。批次一直接成功，批次二至九各经过 429/503 后一次成功重试，批次十收到 429 后下一次准入拒绝，批次十一没有 HTTP：共九个错误响应（429 五次、503 四次）、八次成功重试。九条合格发现保留；扫描 stage cap 不标为时间耗尽，time_deadline_reason=null。评审仍独立完成，真实 loopback 与准入均一次；三种直接导出与严格 reader 状态/覆盖一致。discovery-cap-001 的连续故障夹具触发全流程停止，未到阶段 cap，作为原始失败保留。
+- [stage-deadline-001](../artifacts/evaluations/annual-recovery-r3-20261006/runtime-budget/stage-deadline-001-20261007T213921-115e8e58/)：实际 CLI 的受控三秒扫描截止关卡通过，JUnit **1 passed / 10.501 秒**；业务 CLI 自然 exit 2、6.122815 秒。一批成功后第二个实际 HTTP 挂起；观测 worker 创建身份后，阶段截止使其退出，调度 drained/inflight=0，time_deadline_reason 与停止原因均为 discovery_stage_budget_exhausted。扫描准入两次，评审独立完成一次。终态后放行迟到响应，服务端确认客户端已断开，主控独立重算 run/report 树哈希与前后记录完全相同。该关卡使用受控 owner 60 秒和短阶段 override，不证明默认 150 秒或真实供应方耗时；三路并发异常停止另验收。
+
+浏览器 attempt-03 揭示前端真实缺陷：合法 v4 未尝试批次保留 awaiting_model 行级初始原因，而顶层已有 stage cap；前端严格字段集合与顶层一致性检查拒绝报告，预算面板可见但正文不可见。原截图/DOM/failed 结果保留，执行端按后端版本契约最小修复后再验收，不能把该尝试写成浏览器通过。[失败证据](../artifacts/evaluations/annual-recovery-r3-20261006/frontend-budget-ui/browser-attempt-20261007-03/)。主控本次复核 3635 个原始及 R2 已归档保护文件，变化、缺失和不安全路径均零。
+
+### 固定调查与并发故障的实际运行
+
+- [sample-stage-003](../artifacts/evaluations/annual-recovery-r3-20261006/runtime-budget/sample-stage-003-20261007T134535-568d39dc/) 使用既有原创模拟年报的隔离派生 PDF，追加虚构经营讨论及附注，以产生两个可调查候选；不冒称原注册样例未变化。JUnit **1 passed / 7.902 秒**；业务 CLI 自然 exit 0、4.041748 秒，实际 HTTP 与主控只读 SQLite 同为扫描 1、固定调查 2、评审 1。全文扫描合法空发现，固定调查和评审完成。三种直接导出均为 completed / sequence 10 / is_partial=false，主控重算实际文件长度与 SHA 和清单一致。sample-stage-001 缺少调查材料、sample-stage-002 夹具语法错误的原失败证据保留。
+- [investigation-retry-001](../artifacts/evaluations/annual-recovery-r3-20261006/runtime-budget/investigation-retry-001-20261007T134819-92f19a4c/)：raw stdout **1 passed / 7.26 秒**、JUnit 7.165 秒；业务 CLI 自然 exit 0、4.186718 秒。首个固定候选收到 429 后重试成功，实际两次调查准入均纳入预算；第二候选因现有 MAX_MODEL_CALLS 达到次数上限而没有 HTTP，原因是 model_call_budget_exhausted，不能将其写为账本 stage gate 拒绝。评审仍独立完成一次；实际 HTTP 与主控只读账本均为扫描 1、调查 2、评审 1。
+- [auth-three-inflight-002](../artifacts/evaluations/annual-recovery-r3-20261006/runtime-budget/auth-three-inflight-002-20261007T135009-e0322fcc/)：raw stdout **1 passed / 12.78 秒**、JUnit 12.679 秒；业务 CLI 自然 exit 2、5.646782 秒。本机 HTTP 和只读账本均为三次扫描准入、峰值 3；一个 401 后 **0.623522 秒** CLI 退出，另两个挂起 worker 的父 PID、创建身份和退出已观测，没有第四个请求、重试或评审。停止原因为 authentication_failure_stopped，time_deadline_reason=null。终态后放行两个迟到响应，服务端确认连接已断开，主控独立重算实际 run/report 树哈希与前后记录一致。结果中的 worker_lifetime_after_observation_seconds 以进程查询完成后的单调起点计，与两个 UTC 观察时间差不是同一指标，不混用。auth-three-inflight-001 的观察窗口过短失败保留。
+
+这些均为隔离 loopback 夹具，不是新真实供应方运行，不计入用户授权的 80 次额度；原始源码身份为 f5524450…09c2aa，不能代替后续修复版本的验证。
+
+### 2026-10-08 浏览器续跑揭示的生产缺陷
+
+[browser-attempt-04](../artifacts/evaluations/annual-recovery-r3-20261006/frontend-budget-ui/browser-attempt-20261007-04/) 在修正前端 v4 解析边界后，已有父报告正文可以实际加载；1440 与 390 像素视口的正文、实时预算和归档配置可见，窄屏 DOM 记录没有横向溢出。此尝试经实际 UI 创建子 job `annual-job-8ad5e8f788e249a78cadc8efbe44f7aa`，run `annual-analysis-b95131df-6625-4b12-95d3-c3d7f18a323a`，父 run 为 `annual-analysis-37b3e5b0-baa4-45c1-8409-887664fe52d2`。运行时预算是续跑 task 20、扫描 14；实际扫描准入 14、评审 1，但最终状态 **failed / archive_incompatible**，错误为 analysis_archive_invalid（annual_discovery_parent_invalid），三格式下载关卡未完成。不得把有预算截图或模型阶段结束写成浏览器验收通过。
+
+主控已独立读取原 job、父子 discovery.json 和当前实现，定位两处生产缺陷：父链校验仍硬编码 v3 字段集合，拒绝合法 v4 父报告；LangGraph TypedDict 未声明 phase_budget 与 discovery_started_at，导致 invoke 输入被丢弃，子归档误记首次预算、阶段耗时为零。子报告实际上保留父成功批次的 reused 行；失败 job 的可用性投影中 reused_batch_count=0 不能反过来证明未复用。原失败归档保持不变，在 R3 内定向修复并以新源码身份重新验证，**阶段仍未通过、未提交**。真实配置服务累计 **0/80**，剩余 **80**，没有读取真实模型配置。
+
+
+### 续跑契约修复与新源码冻结
+
+[attempt-11](../artifacts/evaluations/annual-recovery-r3-20261006/attempt-11-resume-contract-repair-20261008/) 最小修复两个生产文件：严格父档读取按实际 v3/v4 精确字段选择并拒绝未知/跨版本；LangGraph 状态显式保留阶段预算和扫描单调时钟起点，缺少必需时序状态时失败，不再默默回落到首次默认值或零耗时。已接受的父关系决定 resume scope；拒绝父绑定时建立的零调用初始快照不冒充合法续跑。来源、原文引用、恢复绑定和审计检查仍保留。
+
+修复后的定向回归 attempt-04-regression-fix-02 原始 stdout 为 **86 passed / 7.71 秒**，JUnit 为 **86/0 failed/0 error/0 skipped、7.630 秒**，exit 0。此前 bootstrap、六项失败及一项失败的夹具调整记录保持原样。包含真实 LangGraph 入口配合受控时钟的预算/耗时状态检查，以及合法 v4 父子、未知版本、跨版本、来源和引用篡改检查；这仍是离线测试，不替代实际 CLI 或浏览器续跑。
+
+attempt-05-no-model-cli-freeze 的实际 CLI 身份为 **74 文件、manifest `89e68023523f16cf7f5d8ed47ead99830fd423254c0f1a52aa8c1e201f366a7f`**，加载代码 `96b0cab971a963c04381c901e7e0348bef7583752ed9e6a9f3c261fa8dc98d66`，fingerprint `bf5a35028170d28f9e1dfd6541eb027a1f81c5017787809cd870f5d3b4c03bc0`，loaded_source_match=true、model_calls=0。主控重算全部实际文件和 aggregate 一致，与 f552 只有上述两个生产文件变化。此前故障证据保留 f552 身份；新冻结版本的实际续跑、整份截止、API 排队计时和三格式浏览器下载继续验收。
+
+[浏览器 attempt-05](../artifacts/evaluations/annual-recovery-r3-20261006/frontend-budget-ui/browser-attempt-20261008-05/) 在 Chrome 启动前因 runner 的预期 Markdown SHA 拼写错误失败，未记作浏览器通过。主控重算隔离父 job、JSON 和 Markdown 原始字节；键及另两个 SHA 均匹配，Markdown 实际 SHA 为 `4d9da428d9bfcb56ab8b2489649f87e7c126a1d5235b94c0eece1dfd61777e15`。原失败证据保留；后续使用新 attempt，不改旧归档或失败记录。该次 typecheck/build 均 exit 0。当前 R3 仍未通过或提交，真实服务 **0/80、剩余 80**，未读取真实模型配置。
+
+
+### 新冻结版本的实际续跑、整份截止与 API 计时
+
+以下三项实际 Popen/HTTP 验收均使用新 **89e680** / 74 文件冻结版本和原创模拟材料，仅访问隔离 loopback 服务；外部供应方请求零。主控阅读实际 runner、原始 stdout、JUnit、进程记录及 HTTP，并只读 SQLite、重算归档/导出原始字节；不将这些模拟运行写成真实年报在线验收。
+
+- [resume-scope20](../artifacts/evaluations/annual-recovery-r3-20261006/runtime-budget/resume-scope20-20261008T023814560Z-efac5f9e/)：JUnit **1 passed / 12.109 秒**，outer runner 13.313471 秒；父 CLI 自然 exit 2、3.984083 秒，子 CLI 自然 exit 0、3.374386 秒。父扫描 11 次、评审一次，批次一响应结构不合格，其余十批成功；子任务仅实际请求批次一和评审，共 **2 次**，批次二至十一全部复用。续跑 scope 为 resume，task cap 20、扫描 cap 14，真实档案扫描耗时 0.54015 秒；11/11 批完整成功、文字覆盖完整。主控重算父 run/report 树与 before 一致，三格式文件 SHA 与清单一致，状态/覆盖/sequence 8 封存快照一致。
+- [whole-work-deadline](../artifacts/evaluations/annual-recovery-r3-20261006/runtime-budget/whole-work-deadline-20261008T023935939Z-7d37adba/)：JUnit **1 passed / 8.758 秒**，outer 10.016047 秒；业务 CLI 自然 exit 2、5.521247 秒。受控 owner 60 秒、harness 起点五秒整份软截止、扫描阶段 40 秒；唯一计划批已准入并挂起，实际 HTTP/SQLite 扫描同为一次。调度停止及时间原因均为 workflow_time_budget_exhausted，而不是扫描阶段耗尽；worker 创建身份/退出已观察，迟到响应客户端断开，主控重算终态 run/report 树不变，三格式状态/覆盖与严格 reader 一致。它证明所有计划已派发时整份截止仍能结束，不代表默认 300 秒或真实供应方性能。
+- [api-queue-timing](../artifacts/evaluations/annual-recovery-r3-20261006/runtime-budget/api-queue-timing-20261008T024139668Z-2022491a/)：JUnit **1 passed / 18.620 秒**，outer 19.791900 秒。实际 Uvicorn PID 14640、loopback 53628，模拟服务 53627，实际 API-owned CLI 为 PID 38704、21324；调用 Popen 返回时硬/软截止余量约 **59.989/44.989 秒、59.983/44.983 秒**，发布余量均为 15 秒。第二个任务排队时 running elapsed 为零，queue 从 0.033 增至 0.341 秒；实际运行后两任务终态耗时 **5.457/4.337 秒**，重复 GET 不再增长。每任务扫描一、固定调查二、评审一，HTTP 合计八次全部 200，两个只读 SQLite 各四次同阶段准入。主控重算实际 84 个 job/run/report 文件及 source PDF/source record 哈希全部一致。API 加载代码 `72b80d918fbff0a8f44c93b80932dbd1de52227ce6bb2fb7397dd3457e340fcc` 与 CLI 的 role-specific 加载哈希分别记录，两者共同 manifest 和 loaded_source_match 一致。短耗时仅验证冻结；超过 owner 的不裁剪实测保留 R2 历史身份。
+
+API 的[首次失败 attempt](../artifacts/evaluations/annual-recovery-r3-20261006/runtime-budget/api-queue-timing-20261008T024055138Z-2aa3d0d0/) 在 Uvicorn 导入 Windows asyncio 时退出：观察器把 subprocess.Popen 包成普通函数，破坏其类继承语义。原始 **1 failed** 与退出记录保留，未有业务请求；修正独占测试观察器为原 Popen 子类后才得到上述成功，不改生产实现以迎合观察器。
+
+
+### 新源码上的父报告浏览器与只读复核
+
+[attempt-08](../artifacts/evaluations/annual-recovery-r3-20261006/frontend-budget-ui/browser-attempt-20261008-08/) 已实际使用 Chrome 154 在 **1440 桌面 / 390 窄屏**打开既有 R3 模拟父报告，并点击三个 UI 下载。主控查看预算截图及 DOM；两种宽度的 document/body 均无横向溢出，正文可读，无 JS page error、无 POST 或新任务。实际下载 JSON/Markdown/HTML 分别 **47880/5553/10617 字节**，主控重算文件 SHA 与下载清单一致；三格式均为 completed_with_issues / sequence 26 / is_partial=false，保留扫描 partial 和 18/49 已结束、16 成功、2 失败、31 未尝试及完整字符账。父档案仍如实保留修复前的零扫描耗时，不改历史值。
+
+attempt-08 总 runner 结果仍是 **failed**：最后错误要求两次动态 job GET 的整份响应字节相等。该尝试只保存响应 SHA，未保存完整 before/after JSON，不能事后声称已经捕获其精确字段差异。随后保存的独立连续 GET 只观察到 recovery_progress.updated_at 变化，源码确实按当前 UTC 生成该投影字段。新的[attempt-11 只读复核](../artifacts/evaluations/annual-recovery-r3-20261006/frontend-budget-ui/browser-attempt-20261008-11/parent-stable-readonly-recheck.json) 按源、状态、快照、覆盖、终态 elapsed/queue 等稳定字段检查 **56/56**，重验 attempt-08 已捕获的实际图片/DOM/下载文件，不再启动浏览器或重复下载。主控再次重算原始父 job/run/report **122 个文件**，before/after/current 全相同，report API projection SHA 与修复前只读记录一致，模型请求零。新 API/CLI 共同源码 manifest 为 89e680，加载哈希分别按角色核对。
+
+attempt-06 的 planned_chars 期望漏字段以及只读守恒关系的本地观察器错误记录均保留；不把修正观察器写成生产实现修复。实际页面续跑子任务仍需独立新证据，R3 此时仍未提交。
+
+### 并发封顶取消在途请求：新增失败与修正关卡
+
+[attempt-13](../artifacts/evaluations/annual-recovery-r3-20261006/frontend-budget-ui/browser-attempt-20261008-13/) 实际页面续跑创建子 job `annual-job-db94172a1b6640f1b2eb00fa02b16fe4`、run `annual-analysis-c97340a5-e9e2-4a51-aa6c-05a10549ff36`，仍使用 89e680 源码身份。父成功批次 1–16 复用；本次扫描 **14 次准入、12 个耐久响应**，批次 29、30 已准入却以 cancelled 失败。下一批次 31 因阶段次数额度拒绝，没有准入。实际发现耗时 **5.933921 秒**、整份工作剩余 **36.696063 秒**，time_deadline_reason=null，不能归因为时间超限。job 实际运行 9.876604 秒；加上评审一次，总准入 15。runner 原错误要求 response_count 等于 14，其失败记录保留；在本次受控无其他故障的场景里，两个取消仍是实际生产缺陷，不能只修观察器后宣称通过。
+
+主控与执行端只读源码确认因果链：阶段次数拒绝触发 stop_dispatch，后者无条件设置共享 abort event；活跃模型 worker 收到该事件后被终止并记 cancelled。达到次数上限应停止新派发及重试准入，已准入调用仍须在既有阶段/整份截止内收束；取消、鉴权、安全拒绝、连续故障及真实时间截止仍需要中止在途。原单并发封顶测试没有覆盖这一三并发情形。R3 内追加定向修复，以及封顶后成功收束和封顶后仍能按取消/时间截止退出的关卡，不扩大额度、不改旧父子归档。
+
+[attempt-14](../artifacts/evaluations/annual-recovery-r3-20261006/frontend-budget-ui/browser-attempt-20261008-14/) 对同一子报告进行只读浏览器/下载和尾部审计，无新 POST。主控查看 1440/390 预算截图，三格式实际下载分别 **46532/5588/10626 字节**，均为 completed_with_issues / sequence 22 / is_partial=false，并保留扫描 28 成功、2 失败、19 未尝试的覆盖账。is_partial=false 表示快照已封存，不代表 AI 扫描完整。两条取消耗时 **0.228527/0.105949 秒**；mock journal 仅有 12 条扫描和 1 条评审成功响应，没有请求身份的连接重置日志不能分别证明两条请求是否均到达服务。该次整体状态保留 failed_backend_child_outcome，UI/下载子关卡不能替代调度关卡。真实供应方仍 **0/80，剩余 80**，未读取本机真实模型配置。
+
+[attempt-15 修复](../artifacts/evaluations/annual-recovery-r3-20261006/attempt-15-quota-drain-repair-20261008/) 分离次数关闭与在途中止；收束循环在 wait 前后持续检查取消及实际截止，停止升级立即保存检查点。扫描次数封顶保留 discovery_stage_budget_exhausted，task/ledger 次数封顶保留 provider_budget_exhausted；安全 gate 关闭不冒充次数额度耗尽。未尝试批次明确保留扫描阶段封顶原因，不再被白名单回落为 awaiting_model。来源、引用、预算数值及版本均未放宽。
+
+最终聚焦回归 **8 passed / 3.04 秒**，JUnit 2.957 秒；发现引擎单元全文件 **57 passed / 3.45 秒**，JUnit **57/0 failed/0 error/0 skipped、3.360 秒**，均 exit 0。受控 LangGraph 测试涵盖阶段/task/ledger 封顶后正常收束、封顶后用户取消、阶段及整份截止，另覆盖 401 停止和 503 重试计账。此前成功的聚焦及 55 项运行保留，最终计数不累加重复运行。
+
+新无模型 CLI PID 15704 的 **74 文件 manifest 为 `56c6fd3072261cec207b4ebcaceee523edb151512de36a4a331662867a0e7cd4`**，CLI 加载代码仍为 `96b0cab971a963c04381c901e7e0348bef7583752ed9e6a9f3c261fa8dc98d66`、fingerprint 为 `ebd20106ed025294eb6c34236725fb16ebf66e102846a70984bf39f6abaae987`，loaded_source_match=true、model_calls=0。主控重算全部文件/aggregate 一致，并相对保存的 89e680 实际运行副本审阅唯一生产文件差异。此时实际并发封顶/迟到响应和新冻结浏览器续跑仍在验收，不能据单元通过写成 R3 已通过。
+
+
+### 最终三并发封顶、截止及浏览器关卡
+
+新 56c6fd 冻结下的[标准 18 次封顶后收束](../artifacts/evaluations/annual-recovery-r3-20261006/runtime-budget/stage-quota-drain-20261008T041738Z-8ef1d1c4/) 使用原创 90 页、26 批材料；没有注入扫描次数上限。实际 HTTP 与主控只读 SQLite 均为扫描 18、评审 1，HTTP 峰值 3。live sequence 19 在额度关闭时仍有两个活跃 worker、time_deadline_reason=null；释放后 18 批全部成功、失败零、8 批未尝试，已处理/本次尝试字符同为 215600，遗漏 89228。最终在途零并排空。业务 CLI PID 14112 自然 exit 2、10.966624 秒；raw stdout **1 passed / 18.75 秒**、JUnit **18.658 秒**、outer 20.124083 秒。三格式原始字节由主控重算，均为 completed_with_issues / sequence 26 / is_partial=false。
+
+[封顶后实际扫描截止](../artifacts/evaluations/annual-recovery-r3-20261006/runtime-budget/stage-quota-deadline-20261008T042311Z-c3d748aa/) 同样使用标准 18 次准入上限；受控 owner 60 秒、工作 45 秒、阶段 20/12/8/5 秒。实际 Popen 硬/软剩余 59.552069/44.552069 秒，差值 15 秒；归档 V1 默认仍为 300/285 和阶段 150/60/35/25，不能把默认配置当成本次实际期限。额度关闭 sequence 19 的时间原因为空，在途两条；**15.644828 秒**后 sequence 20 记录真实扫描截止，在途仍为两条。业务 CLI PID 30920 自然 exit 2、**23.401252 秒**，两 worker 的创建身份及退出已观察。终态扫描成功 16、失败 2、未尝试 8，review 一次完成；18 扫描和 1 评审由实际 HTTP 与只读 SQLite 双重核对。终态后释放两条挂起响应，客户端均已断连，未有 response_finished；主控重算实际 run/report 树与迟到前后记录相同，三格式同为 sequence 27 封存快照。raw stdout **1 passed / 30.86 秒**、JUnit **30.781 秒**、outer 32.019548 秒。这证明短期限故障收尾，不代替默认 300 秒或真实供应方测量。
+
+[cap4 守卫失败尝试](../artifacts/evaluations/annual-recovery-r3-20261006/runtime-budget/stage-quota-drain-20261008T035551Z-a41f2c7/) 保留 1 failed：测试注入未绑定的独立 CLI 准入门，应用在 HTTP 外发前拒绝，实际请求零；随后改用标准 18 次额度，没有修改生产准入规则。[首次 deadline 失败尝试](../artifacts/evaluations/annual-recovery-r3-20261006/runtime-budget/stage-quota-deadline-20261008T041858Z-9b3f0d2a/) 保留 **1 failed / 30.51 秒**：前面的截止升级、worker 退出及迟到冻结检查已经执行，但末尾错误断言归档默认 300 应为运行时 60。只修测试观察口径后获得上述新尝试，不回写旧结果。主控自己的只读核对亦曾使用错误的 tmp 基目录和整份摘要相等，均在写入通过结论前纠正为 command.json 的实际 cwd 及完整导出中的对应字段；不将观察器问题记为生产缺陷。
+
+[浏览器 attempt-15](../artifacts/evaluations/annual-recovery-r3-20261006/frontend-budget-ui/browser-attempt-20261008-15/) runner exit 0；唯一实际 UI resume POST 返回 202，产生 job `annual-job-eaa0345c6e6642a6beb24fff0e56d810`、run `annual-analysis-0cfbb4f3-fd2f-4627-a592-a983b1fcb349`。原父成功批次 1–16 复用，没有重复扫描；仅新扫描 17–30，14 次全部响应成功，加评审一次共准入 **15/20**。合并覆盖 49 批中成功 30、失败零、未尝试 19；累计处理 354780 / 569400 字符，本次尝试 165564 字符，遗漏 214620。job 实际运行 **11.173 秒**、排队 0.613 秒；扫描 **7.152866 秒**，峰值 3、最终在途零/排空、没有时间耗尽。API PID 62108 的实际加载身份及 CLI 身份共同绑定 56c6fd，活跃任务最终零；没有读取真实配置。
+
+主控查看 1440 桌面与 390 窄屏截图、实际 DOM/网络记录；正文及两种预算面板可读，没有横向溢出或 JS page error。该次没有捕获运行中 child 截图，不将最终截图当作增量截图；增量行为另由先前专项和轮询时间线证明。JSON/Markdown/HTML 下载 **47003/5499/10555 字节**，SHA 分别 `9258a3bcc668c8175b546e3a3ed189a5b75bcff857b8be93eefb738ae57db531`、`40710ae8f1e6a788b31791fd425aa7edf889e8032f9eeb44fce7a43925226ca5`、`048e9fcc4160b84a464056bd0a35927a388715102e5f9483850e7ef6d30e68c9`，主控实际重算一致；三下载及响应头同为 completed_with_issues / sequence 22 / is_partial=false / 原父 run，覆盖字段一致。封存不等于全文完成，也不等于发现了合格问题。
+
+主控再次重算隔离父 122 个文件、两个既有 child 各 102 个文件，共 **326 个**保持不变；R3 入口保护的原始与 R2 正式证据 **3635 个文件**无变化或缺失，用户原路线文档及验收记录前缀保留。前端 typecheck/build 的实际成功记录及七个源码 SHA 未因新浏览器尝试改变。综合本节定向回归、实际故障矩阵、源码审阅及三格式浏览器证据，R3 离线工程关卡接受，随后仅暂存本任务文件做本地 commit。旧失败和各冻结身份仍独立保留；R4/R5、最终源码完整检查与 R6 新在线验收未完成。真实供应方累计仍 **0/80，剩余 80**。

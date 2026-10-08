@@ -19,6 +19,7 @@ from finagent.core.model_call_ledger import (
     ledger_attempt_count,
     open_admission_gate,
     provider_model_fingerprint,
+    read_gate_admission_count,
     reserve_provider_attempt,
 )
 
@@ -142,6 +143,78 @@ def test_cancel_gate_rejects_every_new_admission_after_persisted_close(
             "SELECT status FROM provider_attempts WHERE gate_key = ?", ("annual-job-test",)
         ).fetchall()
     assert statuses == [("reserved",)]
+
+
+def test_task_and_stage_caps_are_atomic_and_count_each_retry_admission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "stage-budget.sqlite3"
+    gate_key = "annual-job-budget"
+    open_admission_gate(database, gate_key)
+    monkeypatch.delenv("FINTRACE_MODEL_CALL_LEDGER_CONFIG", raising=False)
+    monkeypatch.setenv("FINTRACE_CALL_GATE_DB", str(database))
+    monkeypatch.setenv("FINTRACE_CALL_GATE_KEY", gate_key)
+    monkeypatch.setenv("FINTRACE_CALL_GATE_TASK_LIMIT", "3")
+    monkeypatch.setenv(
+        "FINTRACE_CALL_GATE_STAGE_LIMITS",
+        json.dumps({
+            "annual_discovery": 2,
+            "annual_investigation": 1,
+            "annual_issue_grouping": 0,
+            "annual_review": 0,
+        }),
+    )
+    _reserve(gate_key, batch_index=1)
+    _reserve(gate_key, batch_index=2)
+
+    with pytest.raises(ModelCallAdmissionError) as stage_rejected:
+        _reserve(gate_key, batch_index=3)
+    assert stage_rejected.value.code == "stage_budget_exhausted"
+
+    investigation_context = _context(gate_key, batch_index=1)
+    investigation_context["stage"] = "annual_investigation"
+    reserve_provider_attempt(_BASE_URL, _MODEL, call_context=investigation_context)
+    with pytest.raises(ModelCallAdmissionError) as task_rejected:
+        reserve_provider_attempt(_BASE_URL, _MODEL, call_context=investigation_context)
+    assert task_rejected.value.code == "task_budget_exhausted"
+    assert read_gate_admission_count(database, gate_key) == 3
+
+
+def test_stage_cap_is_shared_atomically_by_concurrent_attempts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "concurrent-stage-budget.sqlite3"
+    gate_key = "annual-job-concurrent-budget"
+    open_admission_gate(database, gate_key)
+    monkeypatch.delenv("FINTRACE_MODEL_CALL_LEDGER_CONFIG", raising=False)
+    monkeypatch.setenv("FINTRACE_CALL_GATE_DB", str(database))
+    monkeypatch.setenv("FINTRACE_CALL_GATE_KEY", gate_key)
+    monkeypatch.setenv("FINTRACE_CALL_GATE_TASK_LIMIT", "3")
+    monkeypatch.setenv(
+        "FINTRACE_CALL_GATE_STAGE_LIMITS",
+        json.dumps({
+            "annual_discovery": 2,
+            "annual_investigation": 1,
+            "annual_issue_grouping": 0,
+            "annual_review": 0,
+        }),
+    )
+    outcomes: list[str] = []
+    lock = threading.Lock()
+
+    def call(index: int) -> None:
+        try:
+            value = _reserve(gate_key, batch_index=index + 1)
+        except ModelCallAdmissionError as exc:
+            value = exc.code
+        with lock:
+            outcomes.append(value)
+
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        list(pool.map(call, range(12)))
+    assert len([value for value in outcomes if value not in {"stage_budget_exhausted"}]) == 2
+    assert outcomes.count("stage_budget_exhausted") == 10
+    assert read_gate_admission_count(database, gate_key) == 2
 
 
 def test_existing_partial_schema_is_not_recreated_as_empty_ledger(

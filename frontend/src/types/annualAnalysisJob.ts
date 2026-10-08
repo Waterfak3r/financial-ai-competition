@@ -82,6 +82,52 @@ export interface AnnualAnalysisRecoveryProgress {
   updated_at: string;
 }
 
+export type AnnualAnalysisBudgetScope = "new_run" | "resume";
+
+export type AnnualAnalysisBudgetStageStatus =
+  | "not_started"
+  | "planned"
+  | "running"
+  | "completed"
+  | "partial"
+  | "budget_exhausted"
+  | "reserved";
+
+export interface AnnualAnalysisStageBudget {
+  time_limit_seconds: number;
+  attempt_limit: number;
+  planned_attempts: number | null;
+  admitted_attempts: number;
+  status: AnnualAnalysisBudgetStageStatus;
+}
+
+export interface AnnualAnalysisProviderAttemptLimits {
+  task_default_new_run: 30;
+  task_default_resume: 20;
+  task_effective: 30 | 20;
+  shared_goal_limit: number | null;
+  shared_goal_remaining_at_start: number | null;
+}
+
+export interface AnnualAnalysisBudget {
+  schema_version: "annual_analysis_budget_v1";
+  scope: AnnualAnalysisBudgetScope;
+  main_report_limit_seconds: number;
+  work_deadline_seconds: number;
+  finalization_reserve_seconds: 15;
+  elapsed_running_seconds: number;
+  queue_seconds: number;
+  provider_attempt_limits: AnnualAnalysisProviderAttemptLimits;
+  provider_admission_count: number;
+  provider_attempts_remaining: number;
+  stages: {
+    annual_discovery: AnnualAnalysisStageBudget;
+    annual_investigation: AnnualAnalysisStageBudget;
+    annual_issue_grouping: AnnualAnalysisStageBudget;
+    annual_review: AnnualAnalysisStageBudget;
+  };
+}
+
 export interface AnnualAnalysisDiscoveryProgress {
   event: "planned" | "batch_started" | "batch_finished" | "budget_exhausted";
   status: "not_called" | "running" | "completed" | "partial" | "failed" | "budget_exhausted";
@@ -111,4 +157,5 @@ export interface AnnualAnalysisJob {
   recovery?: AnnualAnalysisRecovery;
   recovery_progress?: AnnualAnalysisRecoveryProgress;
   recovery_capability?: AnnualAnalysisRecoveryCapability;
+  analysis_budget?: AnnualAnalysisBudget;
 }

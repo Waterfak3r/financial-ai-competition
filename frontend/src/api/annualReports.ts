@@ -24,10 +24,14 @@ import type {
   AnnualDiscoveryCoverage,
   AnnualDiscoveryEvidence,
   AnnualDiscoveryExecutionContract,
-  AnnualDiscoveryExecutionBinding,
+  AnnualDiscoveryExecutionBindingV3,
+  AnnualDiscoveryExecutionBindingV4,
   AnnualDiscoveryEvidenceIndex,
   AnnualDiscoveryFinding,
   AnnualModelDiscovery,
+  AnnualDiscoveryPhaseBudget,
+  AnnualDiscoveryExecutionScheduler,
+  AnnualDiscoveryExecutionTiming,
 } from "../types/discoveryEvidence";
 
 const ANNUAL_ANALYSIS_PATH = "/api/v1/annual-analyses";
@@ -65,6 +69,11 @@ const SAFE_UNATTEMPTED_BATCH_REASONS = new Set([
   "awaiting_model", "workflow_time_budget_exhausted", "user_cancelled", "provider_budget_exhausted",
   "provider_admission_rejected", "authentication_failure_stopped", "consecutive_transport_failures_stopped",
   "parent_call_gate_closed",
+]);
+const SAFE_V4_UNATTEMPTED_BATCH_REASONS = new Set([
+  "awaiting_model", "discovery_stage_budget_exhausted", "workflow_time_budget_exhausted", "user_cancelled",
+  "provider_budget_exhausted", "provider_admission_rejected", "authentication_failure_stopped",
+  "consecutive_transport_failures_stopped",
 ]);
 const SAFE_V3_BATCH_FAILURE_REASONS = new Set([
   "all_findings_rejected", "batch_missing", "definitive_conclusion_forbidden", "findings_invalid",
@@ -460,7 +469,7 @@ function readModelDiscovery(
   const promptVersion = requireString(value.prompt_version, `${path}.prompt_version`);
   if (
     value.kind !== "fintrace_annual_discovery" ||
-    promptVersion !== "annual_discovery_v1" && promptVersion !== "annual_discovery_v2" ||
+    promptVersion !== "annual_discovery_v1" && promptVersion !== "annual_discovery_v2" && promptVersion !== "annual_discovery_v3" ||
     status !== "completed" && status !== "partial" && status !== "failed" && status !== "not_called" ||
     requireString(value.run_id, `${path}.run_id`) !== expected.runId ||
     requireString(value.company_id, `${path}.company_id`) !== expected.companyId ||
@@ -477,20 +486,36 @@ function readModelDiscovery(
   }
   const reason = nullableString(value.reason, `${path}.reason`);
   if (reason !== null && !/^[a-z][a-z0-9_]{0,99}$/.test(reason)) throw invalidResponse(`${path}.reason`);
-  const executionV3 = Object.prototype.hasOwnProperty.call(value, "execution_contract");
-  if (executionV3 && promptVersion !== "annual_discovery_v2") {
-    throw invalidResponse(`${path}.execution_contract 只能绑定 annual_discovery_v2`);
+  const hasExecutionContract = Object.prototype.hasOwnProperty.call(value, "execution_contract");
+  if (
+    hasExecutionContract && promptVersion !== "annual_discovery_v2" && promptVersion !== "annual_discovery_v3" ||
+    !hasExecutionContract && promptVersion === "annual_discovery_v3"
+  ) {
+    throw invalidResponse(`${path}.execution_contract 与发现提示词版本不匹配`);
   }
-  const coverage = readDiscoveryCoverage(value.coverage, `${path}.coverage`, status, promptVersion, executionV3);
-  const executionContract = executionV3
-    ? readExecutionContract(value.execution_contract, `${path}.execution_contract`, coverage, expected)
+  const coverage = readDiscoveryCoverage(value.coverage, `${path}.coverage`, status, promptVersion, hasExecutionContract);
+  const executionContract = hasExecutionContract
+    ? readExecutionContract(value.execution_contract, `${path}.execution_contract`, coverage, expected, promptVersion)
     : undefined;
+  if (executionContract?.kind === "fintrace_annual_discovery_execution_v4") {
+    const closedReason = executionContract.scheduler.dispatch_closed_reason;
+    const timeDeadlineReason = executionContract.scheduler.time_deadline_reason;
+    if (
+      closedReason !== null && (status === "not_called" || status === "partial" || status === "failed") && reason !== closedReason ||
+      coverage.time_budget_exhausted !== (timeDeadlineReason !== null) ||
+      closedReason === "discovery_stage_budget_exhausted" && reason !== closedReason ||
+      reason === "discovery_stage_budget_exhausted" && closedReason !== reason ||
+      closedReason === "workflow_time_budget_exhausted" &&
+        (reason !== closedReason || timeDeadlineReason !== closedReason) ||
+      reason === "workflow_time_budget_exhausted" && closedReason !== reason
+    ) throw invalidResponse(`${path} 的发现耗尽原因与执行调度记录不一致`);
+  }
   if (executionContract === undefined) {
     if (
       status === "not_called" && (modelCallAttemptCount !== 0 || modelCallCount !== 0) ||
       coverage.source_status === "parsed" && (
         modelCallAttemptCount !== coverage.processed_batches ||
-        coverage.successful_batches + (promptVersion === "annual_discovery_v2" ? coverage.partial_batches ?? 0 : 0) > modelCallCount ||
+        coverage.successful_batches + (promptVersion !== "annual_discovery_v1" ? coverage.partial_batches ?? 0 : 0) > modelCallCount ||
         modelCallCount > modelCallAttemptCount
       ) ||
       status === "completed" && (
@@ -542,9 +567,9 @@ function readModelDiscovery(
     findings.length > 768 || evidences.length > 3072 || totalOpinionChars > 1_200_000 ||
     totalQuoteChars > 768 * 4 * 300 || [...evidenceById.keys()].some((id) => !citedEvidenceIds.has(id)) ||
     citedEvidenceIds.size !== evidenceById.size ||
-    coverage.successful_batches + (promptVersion === "annual_discovery_v2" ? coverage.partial_batches ?? 0 : 0) === 0 &&
+    coverage.successful_batches + (promptVersion !== "annual_discovery_v1" ? coverage.partial_batches ?? 0 : 0) === 0 &&
       (findings.length > 0 || evidences.length > 0) ||
-    promptVersion === "annual_discovery_v2" &&
+    promptVersion !== "annual_discovery_v1" &&
       findings.length > coverage.batch_results.reduce((sum, batch) => sum + (batch.accepted_findings ?? 0), 0)
   ) throw invalidResponse(`${path} 的发现数量、意见、引用或证据不一致`);
   if (executionContract !== undefined) {
@@ -571,10 +596,23 @@ function readModelDiscovery(
       .filter((batch) => batch.resolution === "executed" && batch.attempts.length > 0)
       .map((batch) => batch.batch_index));
     const actualAuditBatches = new Set(auditArtifacts.map((artifact) => artifact.batch_index));
-    if (
-      expectedAuditBatches.size !== actualAuditBatches.size ||
-      [...expectedAuditBatches].some((batchIndex) => !actualAuditBatches.has(batchIndex))
-    ) throw invalidResponse(`${path}.audit_artifacts 与 v3 执行批次不一致`);
+    if (executionContract.kind === "fintrace_annual_discovery_execution_v3") {
+      if (
+        expectedAuditBatches.size !== actualAuditBatches.size ||
+        [...expectedAuditBatches].some((batchIndex) => !actualAuditBatches.has(batchIndex))
+      ) throw invalidResponse(`${path}.audit_artifacts 与 v3 执行批次不一致`);
+    } else {
+      const unexpectedArtifacts = auditArtifacts.filter((artifact) => !expectedAuditBatches.has(artifact.batch_index));
+      if (
+        [...expectedAuditBatches].some((batchIndex) => !actualAuditBatches.has(batchIndex)) ||
+        unexpectedArtifacts.some((artifact) => {
+          const batch = executionContract.batches[artifact.batch_index - 1];
+          return executionContract.scheduler.dispatch_closed_reason === null ||
+            batch === undefined || batch.resolution !== "unattempted" || batch.state !== "unattempted" ||
+            batch.attempts.length !== 0 || artifact.status !== "failed" || artifact.response_path !== null;
+        })
+      ) throw invalidResponse(`${path}.audit_artifacts 与 v4 执行边界不一致`);
+    }
   }
   const limitations = requireArray(value.limitations, `${path}.limitations`).map((item, index) => {
     const text = requireString(item, `${path}.limitations[${index}]`);
@@ -612,27 +650,40 @@ function readExecutionContract(
   path: string,
   coverage: AnnualDiscoveryCoverage,
   expected: { runId: string; companyId: string; reportYear: number; sourceDocumentId: string; sourceSha256: string },
+  promptVersion: AnnualModelDiscovery["prompt_version"],
 ): AnnualDiscoveryExecutionContract {
   const record = requireRecord(value, path);
+  const isV4 = promptVersion === "annual_discovery_v3";
   exactKeys(record, [
     "kind", "plan_sha256", "identity_sha256", "binding", "parent_run_id", "provider_admission_count",
     "parent_provider_admission_count", "cumulative_provider_admission_count", "response_count",
     "reused_batches", "batches",
+    ...(isV4 ? ["scheduler", "phase_budget", "timing"] : []),
   ], path);
   const planSha256 = requireString(record.plan_sha256, `${path}.plan_sha256`).toLowerCase();
   const identitySha256 = requireString(record.identity_sha256, `${path}.identity_sha256`).toLowerCase();
-  const binding = readExecutionBinding(record.binding, `${path}.binding`, expected);
+  const binding = isV4
+    ? readExecutionBindingV4(record.binding, `${path}.binding`, expected)
+    : readExecutionBindingV3(record.binding, `${path}.binding`, expected);
+  const phaseBudget = isV4 ? readDiscoveryPhaseBudget(record.phase_budget, `${path}.phase_budget`) : undefined;
+  const scheduler = isV4 ? readExecutionScheduler(record.scheduler, `${path}.scheduler`) : undefined;
+  const timing = isV4 ? readExecutionTiming(record.timing, `${path}.timing`) : undefined;
   const parentRunId = nullableString(record.parent_run_id, `${path}.parent_run_id`);
   const providerAdmissionCount = safeNonNegativeInteger(record.provider_admission_count, `${path}.provider_admission_count`);
   const parentProviderAdmissionCount = safeNonNegativeInteger(record.parent_provider_admission_count, `${path}.parent_provider_admission_count`);
   const cumulativeProviderAdmissionCount = safeNonNegativeInteger(record.cumulative_provider_admission_count, `${path}.cumulative_provider_admission_count`);
   const responseCount = safeNonNegativeInteger(record.response_count, `${path}.response_count`);
+  const validAttemptReasons = isV4
+    ? new Set([...SAFE_EXECUTION_ATTEMPT_REASONS, "stage_budget_exhausted", "task_budget_exhausted"])
+    : SAFE_EXECUTION_ATTEMPT_REASONS;
   if (
-    record.kind !== "fintrace_annual_discovery_execution_v3" ||
+    record.kind !== (isV4 ? "fintrace_annual_discovery_execution_v4" : "fintrace_annual_discovery_execution_v3") ||
+    isV4 !== (promptVersion === "annual_discovery_v3") ||
     !SHA256_PATTERN.test(planSha256) || !SHA256_PATTERN.test(identitySha256) ||
     planSha256 !== binding.plan_sha256.toLowerCase() ||
     (parentRunId !== null && (!RUN_ID_PATTERN.test(parentRunId) || parentRunId === expected.runId)) ||
     (parentRunId === null && parentProviderAdmissionCount !== 0) ||
+    (isV4 && ((phaseBudget?.scope === "resume") !== (parentRunId !== null))) ||
     cumulativeProviderAdmissionCount !== parentProviderAdmissionCount + providerAdmissionCount ||
     responseCount > providerAdmissionCount || providerAdmissionCount > 4096 ||
     parentProviderAdmissionCount > 4096 || cumulativeProviderAdmissionCount > 8192
@@ -671,11 +722,11 @@ function readExecutionContract(
         !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(auditId) ||
         (admissionId !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(admissionId)) ||
         attemptStatus !== "succeeded" && attemptStatus !== "failed" && attemptStatus !== "rejected" ||
-        (attemptStatus === "succeeded" ? reason !== null : reason === null || !SAFE_EXECUTION_ATTEMPT_REASONS.has(reason)) ||
+        (attemptStatus === "succeeded" ? reason !== null : reason === null || !validAttemptReasons.has(reason)) ||
         (providerAdmitted !== (admissionId !== null)) ||
         (attemptStatus === "rejected") !== !providerAdmitted ||
         (attemptStatus === "succeeded") !== responseAccepted ||
-        (!responseAccepted && acceptedFindings !== 0) || acceptedFindings > 6
+        (!responseAccepted && acceptedFindings !== 0) || acceptedFindings > (isV4 ? 3 : 6)
       ) throw invalidResponse(`${attemptPath} 调用尝试字段无效`);
       if (auditIdsAcrossBatches.has(auditId)) {
         throw invalidResponse(`${attemptPath}.audit_id 在 execution_contract 中重复`);
@@ -704,7 +755,7 @@ function readExecutionContract(
         ? reason === "some_findings_rejected"
         : state === "failed"
           ? SAFE_V3_BATCH_FAILURE_REASONS.has(reason ?? "")
-          : SAFE_UNATTEMPTED_BATCH_REASONS.has(reason ?? "");
+          : (isV4 ? SAFE_V4_UNATTEMPTED_BATCH_REASONS : SAFE_UNATTEMPTED_BATCH_REASONS).has(reason ?? "");
     if (
       (state === "unattempted") !== (resolution === "unattempted") ||
       resolution === "reused" && (state !== "succeeded" || attempts.length !== 0) ||
@@ -729,6 +780,7 @@ function readExecutionContract(
   const acceptedResponseCount = batches.reduce((sum, batch) => sum + batch.attempts.filter((attempt) => attempt.response_accepted).length, 0);
   const expectedReused = batches.filter((batch) => batch.resolution === "reused").map((batch) => batch.batch_index);
   const coverageByIndex = new Map(coverage.batch_results.map((batch) => [batch.batch_index, batch]));
+  const unattemptedBatches = batches.filter((batch) => batch.resolution === "unattempted");
   if (
     batches.length !== coverage.planned_batches ||
     coverage.source_status === "unavailable" && batches.length !== 0 ||
@@ -737,21 +789,34 @@ function readExecutionContract(
     !sameJsonValue(reusedBatches, expectedReused) ||
     new Set(reusedBatches).size !== reusedBatches.length ||
     reusedBatches.length > 0 && parentRunId === null ||
+    isV4 && unattemptedBatches.some((batch) =>
+      batch.reason !== "awaiting_model" && batch.reason !== scheduler?.dispatch_closed_reason
+    ) ||
     reusedBatches.some((index, position) => index < 1 || index > coverage.planned_batches || (position > 0 && reusedBatches[position - 1] >= index)) ||
     batches.some((batch) => {
       const covered = coverageByIndex.get(batch.batch_index);
       const attemptAccepted = batch.attempts.reduce((sum, attempt) => sum + attempt.accepted_findings, 0);
+      const acceptedResponses = batch.attempts.filter((attempt) => attempt.response_accepted).length;
+      const newAccepted = (covered?.accepted_findings ?? 0) - (covered?.inherited_findings ?? 0);
       return covered === undefined || covered.status !== batch.state || covered.resolution !== batch.resolution ||
         covered.reason !== batch.reason || covered.accepted_findings === undefined || covered.inherited_findings === undefined ||
         covered.accepted_findings > covered.inherited_findings + attemptAccepted ||
-        batch.resolution === "reused" && covered.accepted_findings !== covered.inherited_findings;
+        batch.resolution === "reused" && covered.accepted_findings !== covered.inherited_findings ||
+        isV4 && (
+          covered.accepted_findings < covered.inherited_findings ||
+          batch.resolution === "executed" && (
+            newAccepted + (covered.rejected_findings ?? 0) > acceptedResponses * 3 ||
+            (covered.restored_quotes ?? 0) > acceptedResponses * 12
+          ) ||
+          batch.resolution === "reused" && (
+            covered.accepted_findings > 6 || (covered.rejected_findings ?? 0) !== 0 || (covered.restored_quotes ?? 0) !== 0
+          )
+        );
     })
   ) throw invalidResponse(`${path} 与覆盖记录中的批次或准入数不一致`);
-  return {
-    kind: "fintrace_annual_discovery_execution_v3",
+  const common = {
     plan_sha256: planSha256,
     identity_sha256: identitySha256,
-    binding,
     parent_run_id: parentRunId,
     provider_admission_count: providerAdmissionCount,
     parent_provider_admission_count: parentProviderAdmissionCount,
@@ -760,13 +825,27 @@ function readExecutionContract(
     reused_batches: reusedBatches,
     batches,
   };
+  return isV4
+    ? {
+        kind: "fintrace_annual_discovery_execution_v4",
+        ...common,
+        binding: binding as AnnualDiscoveryExecutionBindingV4,
+        phase_budget: phaseBudget!,
+        scheduler: scheduler!,
+        timing: timing!,
+      }
+    : {
+        kind: "fintrace_annual_discovery_execution_v3",
+        ...common,
+        binding: binding as AnnualDiscoveryExecutionBindingV3,
+      };
 }
 
-function readExecutionBinding(
+function readExecutionBindingV3(
   value: unknown,
   path: string,
   expected: { companyId: string; reportYear: number; sourceDocumentId: string; sourceSha256: string },
-): AnnualDiscoveryExecutionBinding {
+): AnnualDiscoveryExecutionBindingV3 {
   const record = requireRecord(value, path);
   exactKeys(record, [
     "source_sha256", "company_id", "report_year", "source_document_id", "analysis_mode",
@@ -808,6 +887,186 @@ function readExecutionBinding(
   };
 }
 
+function readExecutionBindingV4(
+  value: unknown,
+  path: string,
+  expected: { companyId: string; reportYear: number; sourceDocumentId: string; sourceSha256: string },
+): AnnualDiscoveryExecutionBindingV4 {
+  const record = requireRecord(value, path);
+  exactKeys(record, [
+    "source_sha256", "company_id", "report_year", "source_document_id", "analysis_mode",
+    "provider_model_fingerprint", "model", "prompts_sha256", "parser_version", "plan_sha256",
+    "m3_binding_sha256", "plan_version", "execution_version",
+  ], path);
+  const sourceSha256 = requireString(record.source_sha256, `${path}.source_sha256`).toLowerCase();
+  const companyId = requireString(record.company_id, `${path}.company_id`);
+  const reportYear = requireInteger(record.report_year, `${path}.report_year`);
+  const sourceDocumentId = requireString(record.source_document_id, `${path}.source_document_id`);
+  const analysisMode = requireString(record.analysis_mode, `${path}.analysis_mode`);
+  const providerFingerprint = requireString(record.provider_model_fingerprint, `${path}.provider_model_fingerprint`).toLowerCase();
+  const model = requireString(record.model, `${path}.model`);
+  const promptsSha256 = requireString(record.prompts_sha256, `${path}.prompts_sha256`).toLowerCase();
+  const parserVersion = requireString(record.parser_version, `${path}.parser_version`);
+  const planSha256 = requireString(record.plan_sha256, `${path}.plan_sha256`).toLowerCase();
+  const m3BindingSha256 = nullableString(record.m3_binding_sha256, `${path}.m3_binding_sha256`);
+  if (
+    sourceSha256 !== expected.sourceSha256.toLowerCase() || companyId !== expected.companyId ||
+    reportYear !== expected.reportYear || sourceDocumentId !== expected.sourceDocumentId ||
+    (analysisMode !== "model_investigation" && analysisMode !== "integrated_analysis") ||
+    !SHA256_PATTERN.test(providerFingerprint) || !SHA256_PATTERN.test(promptsSha256) || !SHA256_PATTERN.test(planSha256) ||
+    model.trim() === "" || model.length > 128 || /[\u0000-\u001f\u007f]/.test(model) ||
+    parserVersion !== "annual-discovery-parser-v3-execution-v4" ||
+    record.plan_version !== "annual_discovery_plan_v3" || record.execution_version !== "execution_v4" ||
+    (analysisMode === "model_investigation" ? m3BindingSha256 !== null : m3BindingSha256 === null || !SHA256_PATTERN.test(m3BindingSha256))
+  ) throw invalidResponse(`${path} 的 v4 来源或执行版本绑定无效`);
+  return {
+    source_sha256: sourceSha256,
+    company_id: companyId,
+    report_year: reportYear,
+    source_document_id: sourceDocumentId,
+    analysis_mode: analysisMode as AnnualDiscoveryExecutionBindingV4["analysis_mode"],
+    provider_model_fingerprint: providerFingerprint,
+    model,
+    prompts_sha256: promptsSha256,
+    parser_version: parserVersion,
+    plan_sha256: planSha256,
+    m3_binding_sha256: m3BindingSha256,
+    plan_version: "annual_discovery_plan_v3",
+    execution_version: "execution_v4",
+  };
+}
+
+function readDiscoveryPhaseBudget(value: unknown, path: string): AnnualDiscoveryPhaseBudget {
+  const record = requireRecord(value, path);
+  exactKeys(record, [
+    "schema_version", "scope", "main_report_limit_seconds", "work_deadline_seconds",
+    "finalization_reserve_seconds", "shared_goal_limit", "shared_goal_remaining_at_start",
+    "task_provider_attempt_limit", "stage_time_limits_seconds", "stage_provider_attempt_limits",
+    "stage_provider_attempt_limits_status",
+  ], path);
+  const scope = requireString(record.scope, `${path}.scope`);
+  const stageSecondsRecord = requireRecord(record.stage_time_limits_seconds, `${path}.stage_time_limits_seconds`);
+  exactKeys(stageSecondsRecord, ["annual_discovery", "annual_investigation", "annual_issue_grouping", "annual_review"], `${path}.stage_time_limits_seconds`);
+  const stageLimitsRecord = requireRecord(record.stage_provider_attempt_limits, `${path}.stage_provider_attempt_limits`);
+  exactKeys(stageLimitsRecord, ["annual_discovery", "annual_investigation", "annual_issue_grouping", "annual_review"], `${path}.stage_provider_attempt_limits`);
+  const isResume = scope === "resume";
+  const expectedTaskLimit = isResume ? 20 : 30;
+  const expectedStageLimits: AnnualDiscoveryPhaseBudget["stage_provider_attempt_limits"] = isResume
+    ? { annual_discovery: 14, annual_investigation: 2, annual_issue_grouping: 2, annual_review: 2 }
+    : { annual_discovery: 18, annual_investigation: 2, annual_issue_grouping: 8, annual_review: 2 };
+  const sharedGoalLimit = record.shared_goal_limit === null
+    ? null
+    : safeNonNegativeInteger(record.shared_goal_limit, `${path}.shared_goal_limit`);
+  const sharedGoalRemaining = record.shared_goal_remaining_at_start === null
+    ? null
+    : safeNonNegativeInteger(record.shared_goal_remaining_at_start, `${path}.shared_goal_remaining_at_start`);
+  if (
+    record.schema_version !== "annual_analysis_budget_v1" || !isResume && scope !== "new_run" ||
+    record.main_report_limit_seconds !== 300 || record.work_deadline_seconds !== 285 ||
+    record.finalization_reserve_seconds !== 15 || record.task_provider_attempt_limit !== expectedTaskLimit ||
+    record.stage_provider_attempt_limits_status !== "configured" ||
+    sharedGoalLimit === null && sharedGoalRemaining !== null ||
+    sharedGoalLimit !== null && sharedGoalRemaining !== null && sharedGoalRemaining > sharedGoalLimit ||
+    stageSecondsRecord.annual_discovery !== 150 || stageSecondsRecord.annual_investigation !== 60 ||
+    stageSecondsRecord.annual_issue_grouping !== 35 || stageSecondsRecord.annual_review !== 25 ||
+    stageNames.some((name) => stageLimitsRecord[name] !== expectedStageLimits[name])
+  ) throw invalidResponse(`${path} 的阶段预算与执行版本不匹配`);
+  return {
+    schema_version: "annual_analysis_budget_v1",
+    scope: scope as AnnualDiscoveryPhaseBudget["scope"],
+    main_report_limit_seconds: 300,
+    work_deadline_seconds: 285,
+    finalization_reserve_seconds: 15,
+    shared_goal_limit: sharedGoalLimit,
+    shared_goal_remaining_at_start: sharedGoalRemaining,
+    task_provider_attempt_limit: expectedTaskLimit,
+    stage_time_limits_seconds: {
+      annual_discovery: 150,
+      annual_investigation: 60,
+      annual_issue_grouping: 35,
+      annual_review: 25,
+    },
+    stage_provider_attempt_limits: expectedStageLimits,
+    stage_provider_attempt_limits_status: "configured",
+  };
+}
+
+const stageNames = ["annual_discovery", "annual_investigation", "annual_issue_grouping", "annual_review"] as const;
+
+function readExecutionScheduler(value: unknown, path: string): AnnualDiscoveryExecutionScheduler {
+  const record = requireRecord(value, path);
+  exactKeys(record, [
+    "requested_max_concurrency", "effective_max_concurrency", "inflight_peak",
+    "checkpoint_coordinator_count", "checkpoint_publications", "dispatch_closed_reason", "time_deadline_reason",
+    "inflight_drained", "inflight_count",
+  ], path);
+  const requested = safeNonNegativeInteger(record.requested_max_concurrency, `${path}.requested_max_concurrency`);
+  const effective = safeNonNegativeInteger(record.effective_max_concurrency, `${path}.effective_max_concurrency`);
+  const inflightPeak = safeNonNegativeInteger(record.inflight_peak, `${path}.inflight_peak`);
+  const coordinatorCount = requireInteger(record.checkpoint_coordinator_count, `${path}.checkpoint_coordinator_count`);
+  const publications = safeNonNegativeInteger(record.checkpoint_publications, `${path}.checkpoint_publications`);
+  const closedReason = nullableString(record.dispatch_closed_reason, `${path}.dispatch_closed_reason`);
+  const timeDeadlineReason = nullableString(record.time_deadline_reason, `${path}.time_deadline_reason`);
+  const inflightDrained = requireBoolean(record.inflight_drained, `${path}.inflight_drained`);
+  const inflightCount = safeNonNegativeInteger(record.inflight_count, `${path}.inflight_count`);
+  const validClosedReasons = new Set([
+    "discovery_stage_budget_exhausted", "user_cancelled", "workflow_time_budget_exhausted", "provider_budget_exhausted",
+    "authentication_failure_stopped", "provider_admission_rejected", "consecutive_transport_failures_stopped",
+  ]);
+  const validTimeDeadlineReasons = new Set([
+    "discovery_stage_budget_exhausted", "workflow_time_budget_exhausted",
+  ]);
+  if (
+    requested < 1 || requested > 3 || effective < 1 || effective > 3 || inflightPeak > effective ||
+    coordinatorCount !== 1 || publications > 100_000 || inflightCount > inflightPeak ||
+    inflightDrained !== (inflightCount === 0) || closedReason !== null && !validClosedReasons.has(closedReason) ||
+    timeDeadlineReason !== null && !validTimeDeadlineReasons.has(timeDeadlineReason) ||
+    timeDeadlineReason !== null && closedReason !== timeDeadlineReason ||
+    closedReason === "workflow_time_budget_exhausted" && timeDeadlineReason !== closedReason ||
+    closedReason !== "workflow_time_budget_exhausted" && timeDeadlineReason === "workflow_time_budget_exhausted"
+  ) throw invalidResponse(`${path} 的并发或检查点协调记录无效`);
+  return {
+    requested_max_concurrency: requested,
+    effective_max_concurrency: effective,
+    inflight_peak: inflightPeak,
+    checkpoint_coordinator_count: 1,
+    checkpoint_publications: publications,
+    dispatch_closed_reason: closedReason,
+    time_deadline_reason: timeDeadlineReason as AnnualDiscoveryExecutionScheduler["time_deadline_reason"],
+    inflight_drained: inflightDrained,
+    inflight_count: inflightCount,
+  };
+}
+
+function readExecutionTiming(value: unknown, path: string): AnnualDiscoveryExecutionTiming {
+  const record = requireRecord(value, path);
+  exactKeys(record, [
+    "source_parse_seconds", "planning_seconds", "source_parse_reused",
+    "discovery_elapsed_seconds", "main_work_remaining_seconds",
+  ], path);
+  const sourceParseSeconds = budgetSeconds(record.source_parse_seconds, `${path}.source_parse_seconds`);
+  const planningSeconds = budgetSeconds(record.planning_seconds, `${path}.planning_seconds`);
+  const discoveryElapsedSeconds = budgetSeconds(record.discovery_elapsed_seconds, `${path}.discovery_elapsed_seconds`);
+  const mainWorkRemainingSeconds = record.main_work_remaining_seconds === null
+    ? null
+    : budgetSeconds(record.main_work_remaining_seconds, `${path}.main_work_remaining_seconds`);
+  const sourceParseReused = requireBoolean(record.source_parse_reused, `${path}.source_parse_reused`);
+  return {
+    source_parse_seconds: sourceParseSeconds,
+    planning_seconds: planningSeconds,
+    source_parse_reused: sourceParseReused,
+    discovery_elapsed_seconds: discoveryElapsedSeconds,
+    main_work_remaining_seconds: mainWorkRemainingSeconds,
+  };
+}
+
+function budgetSeconds(value: unknown, path: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 31_536_000) {
+    throw invalidResponse(path);
+  }
+  return value;
+}
+
 function readDiscoveryCoverage(
   value: unknown,
   path: string,
@@ -816,7 +1075,7 @@ function readDiscoveryCoverage(
   executionV3 = false,
 ): AnnualDiscoveryCoverage {
   const record = requireRecord(value, path);
-  const isV2 = promptVersion === "annual_discovery_v2";
+  const isV2 = promptVersion !== "annual_discovery_v1";
   const coverageFields = [
     "total_pages", "text_pages", "total_blocks", "total_chars", "planned_batches", "processed_batches",
     "successful_batches", "failed_batches", "batch_results", "processed_chars", "attempted_chars",
@@ -968,7 +1227,7 @@ function readDiscoveryBatchResult(
   executionV3 = false,
 ): AnnualDiscoveryBatchResult {
   const record = requireRecord(value, path);
-  const isV2 = promptVersion === "annual_discovery_v2";
+  const isV2 = promptVersion !== "annual_discovery_v1";
   exactKeys(record, [
     "batch_index", "status", "reason", "pages", "raw_chars",
     ...(isV2 ? ["accepted_findings", "rejected_findings", "restored_quotes"] : []),
@@ -983,6 +1242,9 @@ function readDiscoveryBatchResult(
   const restored = isV2 ? safeNonNegativeInteger(record.restored_quotes, `${path}.restored_quotes`) : 0;
   const resolution = executionV3 ? requireString(record.resolution, `${path}.resolution`) : undefined;
   const inherited = executionV3 ? safeNonNegativeInteger(record.inherited_findings, `${path}.inherited_findings`) : undefined;
+  const unattemptedBatchReasons = promptVersion === "annual_discovery_v3"
+    ? SAFE_V4_UNATTEMPTED_BATCH_REASONS
+    : SAFE_UNATTEMPTED_BATCH_REASONS;
   const pages = requireArray(record.pages, `${path}.pages`).map((page, pageIndex) => safeNonNegativeInteger(page, `${path}.pages[${pageIndex}]`));
   if (
     index < 1 ||
@@ -1012,7 +1274,7 @@ function readDiscoveryBatchResult(
       accepted > 768 || rejected > 24_576 || restored > 98_304 || (inherited ?? 0) > 768 ||
       status === "partial" && reason !== "some_findings_rejected" ||
       status === "failed" && !SAFE_V3_BATCH_FAILURE_REASONS.has(reason ?? "") ||
-      status === "unattempted" && !SAFE_UNATTEMPTED_BATCH_REASONS.has(reason ?? "") ||
+      status === "unattempted" && !unattemptedBatchReasons.has(reason ?? "") ||
       (resolution === "reused" || resolution === "unattempted") && (rejected !== 0 || restored !== 0)
     ) ||
     executionV3 && (
@@ -1080,7 +1342,7 @@ function readDiscoveryFinding(
   promptVersion: AnnualModelDiscovery["prompt_version"],
   executionV3 = false,
 ): AnnualDiscoveryFinding {
-  const isV2 = promptVersion === "annual_discovery_v2";
+  const isV2 = promptVersion !== "annual_discovery_v1";
   const record = requireRecord(value, path);
   exactKeys(record, ["finding_id", "title", "observation", "why_it_matters", "follow_up", "priority", "classification", "verification_status", "evidence_ids", "citations", ...(executionV3 ? ["batch_index"] : [])], path);
   const findingId = requireString(record.finding_id, `${path}.finding_id`);

@@ -14,11 +14,18 @@ from pathlib import Path
 from typing import Any
 
 from finagent.core.model_settings import ModelConfigError, ModelSettings, load_model_settings
+from finagent.audit.audited_chat import annual_call_deadline
 from finagent.agents.annual_review import (
     PROMPT_VERSION as ANNUAL_REVIEW_PROMPT_VERSION,
     _build_review_input,
     _load_prompt,
     not_called_model_review,
+)
+from finagent.core.annual_work_budget import (
+    FINAL_REVIEW_BUDGET_SECONDS,
+    FIXED_INVESTIGATION_BUDGET_SECONDS,
+    DISCOVERY_BUDGET_SECONDS,
+    runtime_stage_time_limits,
 )
 
 
@@ -36,6 +43,9 @@ def run_annual_investigation_appendix(
     resume_parent_run_id: str | None = None,
     request_identity: Mapping[str, Any] | None = None,
     checkpoint_callback: Any | None = None,
+    parsed_pdf: object | None = None,
+    main_soft_deadline: float | None = None,
+    stage_time_limits_seconds: Mapping[str, int] | None = None,
 ) -> dict[str, Any]:
     """Run the optional model investigation when explicitly requested.
 
@@ -162,17 +172,31 @@ def run_annual_investigation_appendix(
             resume_parent_run_id=resume_parent_run_id,
             progress_callback=progress_callback,
             checkpoint_callback=checkpoint_callback,
+            parsed_pdf=parsed_pdf,
+            main_soft_deadline=main_soft_deadline,
+            stage_time_limits_seconds=stage_time_limits_seconds,
         )
 
     before = _run_children(run_dir)
     try:
-        result = _invoke_agent(
-            report,
-            archived_pdf_path=archived_pdf_path,
-            source_record=record,
-            settings=settings,
-            run_dir=run_dir,
+        stage_limits = dict(stage_time_limits_seconds or runtime_stage_time_limits(300))
+        fixed_deadline = min(
+            value for value in (
+                time.monotonic() + int(stage_limits.get("annual_investigation", FIXED_INVESTIGATION_BUDGET_SECONDS)),
+                main_soft_deadline,
+            ) if value is not None
         )
+        with annual_call_deadline(fixed_deadline):
+            result = _invoke_agent(
+                report,
+                archived_pdf_path=archived_pdf_path,
+                source_record=record,
+                settings=settings,
+                run_dir=run_dir,
+                parsed_pdf=parsed_pdf,
+                deadline=fixed_deadline,
+                main_soft_deadline=main_soft_deadline,
+            )
         payload = result.to_dict()
         _validate_result_identity(payload, identity)
         attempts = _nonnegative_int(payload.get("model_call_attempt_count"))
@@ -206,15 +230,26 @@ def run_annual_investigation_appendix(
 
     # Open-ended discovery is an independent pass over all extracted source
     # text. It deliberately does not depend on the fixed candidate list or M3.
-    discovery = _invoke_discovery(
-        report,
-        source_pdf_path=archived_pdf_path,
-        source_record=record,
-        settings=settings,
-        run_dir=run_dir,
-        artifacts_root=artifacts_root,
-        progress_callback=progress_callback,
+    discovery_started = time.monotonic()
+    discovery_deadline = min(
+        value for value in (
+            discovery_started + int(stage_limits.get("annual_discovery", DISCOVERY_BUDGET_SECONDS)),
+            main_soft_deadline,
+        ) if value is not None
     )
+    with annual_call_deadline(discovery_deadline):
+        discovery = _invoke_discovery(
+            report,
+            source_pdf_path=archived_pdf_path,
+            source_record=record,
+            settings=settings,
+            run_dir=run_dir,
+            artifacts_root=artifacts_root,
+            progress_callback=progress_callback,
+            parsed_pdf=parsed_pdf,
+            main_soft_deadline=main_soft_deadline,
+            discovery_deadline=discovery_deadline,
+        )
     payload["discovery"] = discovery
     payload["discovery_call_count"] = _nonnegative_int(discovery.get("model_call_count"))
     payload["discovery_call_attempt_count"] = _nonnegative_int(
@@ -295,6 +330,7 @@ def _raise_recovery_rejected_before_calls(
     settings: ModelSettings,
     run_dir: Path,
     execution_binding: Mapping[str, Any],
+    parsed_pdf: object | None,
     requested_parent_run_id: str,
     reason: str,
     checkpoint_callback: Any | None,
@@ -309,6 +345,7 @@ def _raise_recovery_rejected_before_calls(
         settings,
         run_dir=run_dir,
         execution_binding=execution_binding,
+        parsed_pdf=parsed_pdf,
     )
     archive_path = state.get("archive_path")
     investigation = {
@@ -365,14 +402,14 @@ _RETRYABLE_PARENT_ITEM_REASONS = frozenset({
     "http_401", "http_403", "ledger_config_invalid",
     "ledger_source_context_missing_or_unapproved", "ledger_unavailable",
     "ledger_provider_mismatch", "ledger_budget_exhausted", "ledger_policy_mismatch",
-    "call_gate_closed", "call_deadline_exhausted", "audit_write_failed", "cancelled",
+    "call_gate_closed", "audit_write_failed", "cancelled",
 })
 
 _INVESTIGATION_FATAL_STOP_REASONS = frozenset({
     "http_401", "http_403", "ledger_config_invalid",
     "ledger_source_context_missing_or_unapproved", "ledger_unavailable",
-    "ledger_provider_mismatch", "ledger_budget_exhausted", "ledger_policy_mismatch",
-    "call_gate_closed", "call_deadline_exhausted", "audit_write_failed", "cancelled",
+    "ledger_provider_mismatch", "ledger_budget_exhausted", "task_budget_exhausted", "ledger_policy_mismatch",
+    "call_gate_closed", "audit_write_failed", "cancelled",
 })
 
 
@@ -392,6 +429,9 @@ def _run_recoverable_appendix(
     resume_parent_run_id: str | None,
     progress_callback: Any | None,
     checkpoint_callback: Any | None,
+    parsed_pdf: object | None = None,
+    main_soft_deadline: float | None = None,
+    stage_time_limits_seconds: Mapping[str, int] | None = None,
 ) -> dict[str, Any]:
     """Execute discovery first so every model stage starts after a v3 checkpoint."""
 
@@ -408,6 +448,7 @@ def _run_recoverable_appendix(
         request_identity,
         settings=settings,
         report=binding_source_report,
+        parsed_pdf=parsed_pdf,
     )
     parent_archive = None
     parent_report: Mapping[str, Any] | None = None
@@ -424,6 +465,7 @@ def _run_recoverable_appendix(
                 request_identity,
                 settings=settings,
                 archive=parent_archive,
+                parsed_pdf=parsed_pdf,
             )
             if not capability.get("can_resume"):
                 rejection_reason = _safe_recovery_reason(
@@ -464,6 +506,7 @@ def _run_recoverable_appendix(
                 settings=settings,
                 run_dir=run_dir,
                 execution_binding=binding,
+                parsed_pdf=parsed_pdf,
                 requested_parent_run_id=resume_parent_run_id,
                 reason=rejection_reason,
                 checkpoint_callback=checkpoint_callback,
@@ -561,6 +604,14 @@ def _run_recoverable_appendix(
         publish(value)
 
     before = _run_children(run_dir)
+    stage_limits = dict(stage_time_limits_seconds or runtime_stage_time_limits(300))
+    discovery_started = time.monotonic()
+    discovery_deadline = min(
+        value for value in (
+            discovery_started + int(stage_limits.get("annual_discovery", DISCOVERY_BUDGET_SECONDS)),
+            main_soft_deadline,
+        ) if value is not None
+    )
     discovery = _invoke_discovery(
         report,
         source_pdf_path=archived_pdf_path,
@@ -575,6 +626,9 @@ def _run_recoverable_appendix(
         checkpoint_callback=discovery_checkpoint,
         cancel_check=_call_control_requested,
         strict_v3=True,
+        parsed_pdf=parsed_pdf,
+        main_soft_deadline=main_soft_deadline,
+        discovery_deadline=discovery_deadline,
     )
     # A workflow error or failed checkpoint write is fatal for the remainder
     # of this CLI process. The most recent immutable pointer remains readable.
@@ -600,6 +654,20 @@ def _run_recoverable_appendix(
         publish(discovery, result, review)
         return result
 
+    if main_soft_deadline is not None and time.monotonic() >= main_soft_deadline:
+        reason = "workflow_time_budget_exhausted"
+        payload = _cancelled_investigation_payload(
+            identity, discovery, reusable_items, parent_investigation,
+            archive_path=state.get("archive_path"),
+            source_binding=state.get("source_binding"),
+            model_name=settings.model,
+            reason=reason,
+        )
+        review = not_called_model_review(report, reason)
+        result = compose_payload(payload, review)
+        publish(discovery, result, review)
+        return result
+
     stop_reason = _discovery_stop_reason(discovery)
     if stop_reason is not None:
         payload = _cancelled_investigation_payload(
@@ -618,6 +686,13 @@ def _run_recoverable_appendix(
         return result
 
     fixed_before = _run_children(run_dir)
+    fixed_started = time.monotonic()
+    fixed_deadline = min(
+        value for value in (
+            fixed_started + int(stage_limits.get("annual_investigation", FIXED_INVESTIGATION_BUDGET_SECONDS)),
+            main_soft_deadline,
+        ) if value is not None
+    )
     try:
         agent_result = _invoke_agent(
             report,
@@ -627,6 +702,9 @@ def _run_recoverable_appendix(
             run_dir=run_dir,
             reusable_items=reusable_items,
             checkpoint_callback=lambda partial: publish(discovery, partial),
+            parsed_pdf=parsed_pdf,
+            deadline=fixed_deadline,
+            main_soft_deadline=main_soft_deadline,
         )
         payload = agent_result.to_dict()
         _validate_result_identity(payload, identity)
@@ -675,6 +753,12 @@ def _run_recoverable_appendix(
         publish(discovery, result, review)
         return result
 
+    if main_soft_deadline is not None and time.monotonic() >= main_soft_deadline:
+        review = not_called_model_review(report, "workflow_time_budget_exhausted")
+        result = compose_payload(payload, review)
+        publish(discovery, result, review)
+        return result
+
     fixed_stop_reason = _investigation_stop_reason(payload)
     if fixed_stop_reason is not None:
         review = not_called_model_review(report, fixed_stop_reason)
@@ -695,12 +779,21 @@ def _run_recoverable_appendix(
         review = reused_review
     else:
         try:
+            review_started = time.monotonic()
+            review_deadline = min(
+                value for value in (
+                    review_started + int(stage_limits.get("annual_review", FINAL_REVIEW_BUDGET_SECONDS)),
+                    main_soft_deadline,
+                ) if value is not None
+            )
             review = _invoke_review(
                 report,
                 payload,
                 settings=settings,
                 run_dir=run_dir,
                 artifacts_root=artifacts_root,
+                deadline=review_deadline,
+                main_soft_deadline=main_soft_deadline,
             )
         except Exception:
             review = not_called_model_review(report, "model_review_call_failed")
@@ -774,6 +867,13 @@ def _cancelled_investigation_payload(
 
 
 def _discovery_stop_reason(discovery: Mapping[str, Any]) -> str | None:
+    top_level_reason = discovery.get("reason")
+    if top_level_reason in {
+        "user_cancelled", "authentication_failure_stopped", "provider_budget_exhausted",
+        "provider_admission_rejected", "consecutive_transport_failures_stopped",
+        "parent_call_gate_closed", "workflow_time_budget_exhausted",
+    }:
+        return str(top_level_reason)
     contract = discovery.get("execution_contract")
     batches = contract.get("batches") if isinstance(contract, Mapping) else None
     if not isinstance(batches, list):
@@ -789,7 +889,6 @@ def _discovery_stop_reason(discovery: Mapping[str, Any]) -> str | None:
         "provider_admission_rejected",
         "consecutive_transport_failures_stopped",
         "parent_call_gate_closed",
-        "workflow_time_budget_exhausted",
     )
     for reason in reason_order:
         if reason in pending_reasons:
@@ -804,10 +903,8 @@ def _discovery_stop_reason(discovery: Mapping[str, Any]) -> str | None:
             reason = attempt.get("reason")
             if reason in {"http_401", "http_403"}:
                 return "authentication_failure_stopped"
-            if reason in {"ledger_budget_exhausted", "call_gate_closed"}:
+            if reason in {"ledger_budget_exhausted", "task_budget_exhausted", "call_gate_closed"}:
                 return "provider_budget_exhausted"
-            if reason == "call_deadline_exhausted":
-                return "workflow_time_budget_exhausted"
             if reason in {
                 "ledger_provider_mismatch", "ledger_source_context_missing_or_unapproved",
                 "ledger_unavailable", "ledger_policy_mismatch", "audit_write_failed",
@@ -1007,6 +1104,9 @@ def _invoke_discovery(
     checkpoint_callback: Any | None = None,
     cancel_check: Any | None = None,
     strict_v3: bool = False,
+    parsed_pdf: object | None = None,
+    main_soft_deadline: float | None = None,
+    discovery_deadline: float | None = None,
 ) -> dict[str, Any]:
     identity = _report_identity(report)
     before = _run_children(run_dir)
@@ -1024,6 +1124,9 @@ def _invoke_discovery(
             parent_provider_admission_count=parent_provider_admission_count,
             checkpoint_callback=checkpoint_callback,
             cancel_check=cancel_check,
+            parsed_pdf=parsed_pdf,
+            main_soft_deadline=main_soft_deadline,
+            discovery_deadline=discovery_deadline,
         )
         payload = result.to_dict()
         _validate_discovery_identity(payload, identity)
@@ -1111,15 +1214,18 @@ def _invoke_review(
     settings: ModelSettings,
     run_dir: Path,
     artifacts_root: Path,
+    deadline: float | None = None,
+    main_soft_deadline: float | None = None,
 ) -> dict[str, Any]:
     agent = importlib.import_module("finagent.agents.annual_review")
-    return agent.run_annual_model_review(
-        report,
-        investigation,
-        settings,
-        run_dir=run_dir,
-        artifacts_root=artifacts_root,
-    )
+    with annual_call_deadline(deadline):
+        return agent.run_annual_model_review(
+            report,
+            investigation,
+            settings,
+            run_dir=run_dir,
+            artifacts_root=artifacts_root,
+        )
 
 
 def _attach_review_outcome(
@@ -1452,17 +1558,32 @@ def _invoke_agent(
     run_dir: Path,
     reusable_items: list[Mapping[str, object]] | tuple[Mapping[str, object], ...] = (),
     checkpoint_callback: Any | None = None,
+    parsed_pdf: object | None = None,
+    deadline: float | None = None,
+    main_soft_deadline: float | None = None,
+    stage_time_limits_seconds: Mapping[str, int] | None = None,
 ) -> Any:
     agent = importlib.import_module("finagent.agents.annual_investigation")
-    return agent.run_annual_investigation(
-        report,
-        archived_pdf_path,
-        source_record,
-        settings,
-        run_dir=run_dir,
-        reusable_items=reusable_items,
-        checkpoint_callback=checkpoint_callback,
-    )
+    chosen_deadline = deadline
+    if chosen_deadline is None and stage_time_limits_seconds is not None:
+        limits = dict(stage_time_limits_seconds)
+        chosen_deadline = min(
+            value for value in (
+                time.monotonic() + int(limits.get("annual_investigation", FIXED_INVESTIGATION_BUDGET_SECONDS)),
+                main_soft_deadline,
+            ) if value is not None
+        )
+    with annual_call_deadline(chosen_deadline):
+        return agent.run_annual_investigation(
+            report,
+            archived_pdf_path,
+            source_record,
+            settings,
+            run_dir=run_dir,
+            reusable_items=reusable_items,
+            checkpoint_callback=checkpoint_callback,
+            parsed_pdf=parsed_pdf,
+        )
 
 
 def _discover_new_audits(

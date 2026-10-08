@@ -621,9 +621,9 @@ def _project_discovery(
             "limitations": ["开放式发现来源身份未能绑定到当前报告，已省略动态发现内容。"],
         }, set()
     prompt_version = value.get("prompt_version")
-    if not isinstance(prompt_version, str) or prompt_version not in {"annual_discovery_v1", "annual_discovery_v2"}:
+    if not isinstance(prompt_version, str) or prompt_version not in {"annual_discovery_v1", "annual_discovery_v2", "annual_discovery_v3"}:
         return {"status": "limited", "source_binding_status": "matched_but_invalid", "findings": []}, set()
-    is_v2 = prompt_version == "annual_discovery_v2"
+    is_v2 = prompt_version in {"annual_discovery_v2", "annual_discovery_v3"}
     is_v3 = "execution_contract" in value
     status = value.get("status")
     called = value.get("model_called")
@@ -765,7 +765,11 @@ def _project_discovery(
         "fraud_conclusion": None,
     }
     if is_v3:
-        projected_execution = _project_v3_execution_contract(value.get("execution_contract"))
+        projected_execution = (
+            _project_v4_execution_contract(value.get("execution_contract"))
+            if prompt_version == "annual_discovery_v3"
+            else _project_v3_execution_contract(value.get("execution_contract"))
+        )
         if projected_execution is None:
             return {"status": "limited", "source_binding_status": "matched_but_invalid", "findings": []}, set()
         result["execution_contract"] = projected_execution
@@ -779,7 +783,7 @@ def _project_discovery_coverage(
     execution_contract: object = None,
 ) -> dict[str, Any] | None:
     is_v3 = isinstance(execution_contract, Mapping)
-    is_v2 = prompt_version == "annual_discovery_v2"
+    is_v2 = prompt_version in {"annual_discovery_v2", "annual_discovery_v3"}
     fields = (
         "total_pages", "text_pages", "total_blocks", "total_chars", "planned_batches",
         "processed_batches", "successful_batches", "failed_batches", "processed_chars",
@@ -911,6 +915,42 @@ def _project_v3_execution_contract(value: object) -> dict[str, Any] | None:
         projected_batch["attempts"] = projected_attempts
         result["batches"].append(projected_batch)
     return result
+
+
+def _project_v4_execution_contract(value: object) -> dict[str, Any] | None:
+    """Export v4 stage and scheduler facts while dropping binding UUIDs."""
+
+    if not isinstance(value, Mapping) or set(value) != {
+        "kind", "plan_sha256", "identity_sha256", "binding", "parent_run_id",
+        "provider_admission_count", "parent_provider_admission_count",
+        "cumulative_provider_admission_count", "response_count", "reused_batches", "batches",
+        "scheduler", "phase_budget", "timing",
+    }:
+        return None
+    legacy_shape = {
+        key: value[key]
+        for key in (
+            "plan_sha256", "identity_sha256", "binding", "parent_run_id",
+            "provider_admission_count", "parent_provider_admission_count",
+            "cumulative_provider_admission_count", "response_count", "reused_batches", "batches",
+        )
+    }
+    legacy_shape["kind"] = "fintrace_annual_discovery_execution_v3"
+    projected = _project_v3_execution_contract(legacy_shape)
+    if projected is None:
+        return None
+    scheduler = value.get("scheduler")
+    phase_budget = value.get("phase_budget")
+    timing = value.get("timing")
+    if not all(isinstance(item, Mapping) for item in (scheduler, phase_budget, timing)):
+        return None
+    projected.update(
+        kind="fintrace_annual_discovery_execution_v4",
+        scheduler=dict(scheduler),
+        phase_budget=dict(phase_budget),
+        timing=dict(timing),
+    )
+    return projected
 
 
 def _layer_binding(value: Mapping[str, Any], identity: Mapping[str, Any]) -> str:

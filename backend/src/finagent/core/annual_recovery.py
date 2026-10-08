@@ -22,17 +22,22 @@ from finagent.core.model_call_ledger import (
     select_call_gate_database as _ledger_select_gate_database,
 )
 from finagent.core.model_settings import ModelConfigError, ModelSettings, load_model_settings
-from finagent.retrieval.annual_discovery_context import build_annual_discovery_context
+from finagent.retrieval.annual_discovery_context import (
+    COMPACT_PLAN_VERSION,
+    annual_discovery_plan_projection,
+    build_annual_discovery_context,
+)
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _MODES = {"model_investigation", "integrated_analysis"}
 _PROMPTS = (
     "annual_discovery_v2.md",
+    "annual_discovery_v3.md",
     "annual_investigation_v1.md",
     "annual_review_v1.md",
     "annual_review_v2.md",
 )
-_PARSER_VERSION = "annual-discovery-parser-v2-execution-v3"
+_PARSER_VERSION = "annual-discovery-parser-v3-execution-v4"
 
 
 def select_call_gate_database(project_root: Path, job_dir: Path) -> Path:
@@ -54,6 +59,7 @@ def validate_annual_recovery_parent(
     *,
     settings: ModelSettings | None = None,
     archive: Any | None = None,
+    parsed_pdf: object | None = None,
 ) -> dict[str, Any]:
     """Strictly validate a saved parent and return its current binding.
 
@@ -82,6 +88,7 @@ def validate_annual_recovery_parent(
             request,
             settings=settings,
             report=archive.report,
+            parsed_pdf=parsed_pdf,
         )
         layer = archive.report.get("model_discovery")
         if not isinstance(layer, Mapping):
@@ -140,6 +147,7 @@ def build_annual_recovery_binding(
     *,
     settings: ModelSettings,
     report: Mapping[str, Any],
+    parsed_pdf: object | None = None,
 ) -> dict[str, Any]:
     """Build the exact semantic identity used by CLI and job capability checks."""
 
@@ -150,7 +158,7 @@ def build_annual_recovery_binding(
     if _SHA256.fullmatch(source_sha) is None:
         raise ValueError("recovery_source_invalid")
     source_record = _source_record(Path(project_root), request)
-    prompt_path = Path(__file__).resolve().parents[4] / "config" / "prompts" / "annual_discovery_v2.md"
+    prompt_path = Path(__file__).resolve().parents[4] / "config" / "prompts" / "annual_discovery_v3.md"
     prompt = prompt_path.read_text(encoding="utf-8")
     context = build_annual_discovery_context(
         report,
@@ -158,23 +166,10 @@ def build_annual_recovery_binding(
         source_record,
         system_prompt=prompt,
         model_name=settings.model,
+        plan_version=COMPACT_PLAN_VERSION,
+        parsed_pdf=parsed_pdf,
     )
-    plan_projection = [
-        {
-            "batch_index": batch.batch_index,
-            "fragments": [
-                {
-                    "evidence_id": item.evidence_id,
-                    "pdf_page": item.pdf_page,
-                    "block_index": item.block_index,
-                    "start_char": item.start_char,
-                    "char_count": item.char_count,
-                }
-                for item in batch.fragments
-            ],
-        }
-        for batch in context.batches
-    ]
+    plan_projection = annual_discovery_plan_projection(context)
     plan_sha256 = _sha256_json(plan_projection)
     m3_binding_sha256 = (
         _m3_semantic_binding_sha256(report.get("m3_screening"), request)
@@ -191,6 +186,8 @@ def build_annual_recovery_binding(
         "model": settings.model,
         "prompts_sha256": _prompts_sha256(),
         "parser_version": _PARSER_VERSION,
+        "plan_version": COMPACT_PLAN_VERSION,
+        "execution_version": "execution_v4",
         "plan_sha256": plan_sha256,
         "m3_binding_sha256": m3_binding_sha256,
     }
@@ -207,9 +204,10 @@ def annual_discovery_plan_sha256(
     *,
     settings: ModelSettings,
     report: Mapping[str, Any],
+    parsed_pdf: object | None = None,
 ) -> str:
     return str(build_annual_recovery_binding(
-        project_root, request, settings=settings, report=report
+        project_root, request, settings=settings, report=report, parsed_pdf=parsed_pdf
     )["plan_sha256"])
 
 

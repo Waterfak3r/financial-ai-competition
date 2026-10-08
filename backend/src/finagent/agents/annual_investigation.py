@@ -29,6 +29,7 @@ from finagent.retrieval.annual_context import (
     NarrativeSnippet,
     retrieve_annual_context,
 )
+from finagent.schemas.text_pdf import ParsedTextPdf
 
 PROMPT_VERSION = "annual_investigation_v1"
 SUPPORTED_SIGNAL_IDS = frozenset({"profit_up_cash_down", "revenue_up_cash_down"})
@@ -46,6 +47,8 @@ _FATAL_MODEL_STOP_REASONS = frozenset({
     "ledger_unavailable",
     "ledger_provider_mismatch",
     "ledger_budget_exhausted",
+    "task_budget_exhausted",
+    "stage_budget_exhausted",
     "ledger_policy_mismatch",
     "call_gate_closed",
     "call_deadline_exhausted",
@@ -202,6 +205,7 @@ class AnnualInvestigationState(TypedDict, total=False):
     report: Mapping[str, object]
     source_pdf_path: str
     source_record: Mapping[str, object]
+    parsed_pdf: ParsedTextPdf | None
     settings: ModelSettings
     run_dir: str
     prompt_text: str
@@ -244,6 +248,7 @@ def run_annual_investigation(
     run_dir: str | Path | None = None,
     reusable_items: Sequence[Mapping[str, object]] = (),
     checkpoint_callback: Callable[[Mapping[str, object]], None] | None = None,
+    parsed_pdf: ParsedTextPdf | None = None,
 ) -> AnnualInvestigationResult:
     """Run the compiled LangGraph against one archived report and its source PDF.
 
@@ -266,6 +271,7 @@ def run_annual_investigation(
             "report": report,
             "source_pdf_path": str(Path(source_pdf_path)),
             "source_record": source_record,
+            "parsed_pdf": parsed_pdf,
             "settings": settings,
             "run_dir": str(chosen_run_dir.resolve()),
             "prompt_text": prompt_text,
@@ -350,6 +356,7 @@ def _initial_retrieval_node(state: AnnualInvestigationState) -> dict[str, object
             max_snippets=INITIAL_MAX_SNIPPETS,
             max_chars_per_snippet=INITIAL_MAX_SNIPPET_CHARS,
             max_total_chars=INITIAL_MAX_TOTAL_CHARS,
+            parsed_pdf=state.get("parsed_pdf"),
         )
     except Exception:
         return {
@@ -593,6 +600,7 @@ def _supplementary_retrieval_node(state: AnnualInvestigationState) -> dict[str, 
             max_snippets=HARD_MAX_SNIPPETS,
             max_chars_per_snippet=HARD_MAX_SNIPPET_CHARS,
             max_total_chars=HARD_MAX_TOTAL_CHARS,
+            parsed_pdf=state.get("parsed_pdf"),
         )
     except Exception:
         return {

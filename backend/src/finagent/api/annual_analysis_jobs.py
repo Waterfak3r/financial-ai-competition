@@ -39,6 +39,19 @@ from finagent.core.annual_recovery import (
     validate_annual_recovery_parent,
 )
 from finagent.core.model_call_ledger import close_admission_gate, open_admission_gate
+from finagent.core.model_call_ledger import read_gate_stage_admission_counts
+from finagent.core.annual_work_budget import (
+    DISCOVERY_BUDGET_SECONDS,
+    FINALIZATION_RESERVE_SECONDS,
+    FINAL_REVIEW_BUDGET_SECONDS,
+    FIXED_INVESTIGATION_BUDGET_SECONDS,
+    ISSUE_GROUPING_RESERVED_SECONDS,
+    NEW_RUN_ATTEMPT_BUDGET,
+    NEW_RUN_STAGE_ATTEMPT_BUDGETS,
+    RESUME_ATTEMPT_BUDGET,
+    RESUME_STAGE_ATTEMPT_BUDGETS,
+    runtime_stage_time_limits,
+)
 
 _COMPANY_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,64}$")
 _DOCUMENT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -129,6 +142,16 @@ class AnnualAnalysisJobService:
     def create(self, request: Mapping[str, Any]) -> dict[str, Any]:
         self._ensure_runtime_compatible()
         normalized = validate_job_request(self.project_root, request)
+        try:
+            budget_contract = (
+                _job_budget_contract("new_run")
+                if normalized["mode"] in {"model_investigation", "integrated_analysis"}
+                else None
+            )
+        except RuntimeError:
+            raise AnnualAnalysisJobError(
+                500, "analysis_budget_invalid", "年度分析运行时限配置无效，未创建任务。"
+            ) from None
         if normalized["mode"] in {"model_investigation", "integrated_analysis"}:
             capability = get_annual_analysis_capabilities(self.project_root)
             if not capability["model_investigation"]["available"]:
@@ -161,7 +184,7 @@ class AnnualAnalysisJobService:
                         "job_id_collision",
                         "未能分配唯一任务标识，请重试。",
                     ) from None
-                now = _utc_now()
+                now = _utc_now_precise()
                 state: dict[str, Any] = {
                     "job_id": job_id,
                     "status": "queued",
@@ -176,6 +199,8 @@ class AnnualAnalysisJobService:
                     "recovery_capability": {"can_resume": False, "reason": "recovery_not_available"},
                     "recovery_progress": _empty_recovery_progress(None),
                 }
+                if budget_contract is not None:
+                    state["_analysis_budget_contract"] = budget_contract
                 self._states[job_id] = state
                 self._slot_owners.add(job_id)
                 try:
@@ -204,11 +229,11 @@ class AnnualAnalysisJobService:
                             "message": "年度分析服务当前无法启动后台任务，请稍后重试。",
                         },
                     )
-                    _write_state(job_dir / "job.json", state, create=False)
+                    self._persist_state_locked(job_id, state)
                     self._slots.release()
                     self._slot_owners.discard(job_id)
                     submitted = True
-                return _public_state(state)
+                return _public_job_state(self.project_root, state)
         except Exception:
             if not submitted:
                 self._slots.release()
@@ -236,6 +261,13 @@ class AnnualAnalysisJobService:
             progress = _read_discovery_progress(job_dir, checked, state)
             if progress is not None:
                 public["discovery_progress"] = progress
+        budget = _analysis_budget_projection(
+            self.project_root,
+            state,
+            progress=public.get("discovery_progress") if isinstance(public.get("discovery_progress"), Mapping) else None,
+        )
+        if budget is not None:
+            public["analysis_budget"] = budget
         return public
 
     def cancel(self, job_id: str) -> dict[str, Any]:
@@ -357,6 +389,13 @@ class AnnualAnalysisJobService:
                 _recovery_reason_message(reason),
             )
 
+        try:
+            budget_contract = _job_budget_contract("resume")
+        except RuntimeError:
+            raise AnnualAnalysisJobError(
+                500, "analysis_budget_invalid", "年度分析运行时限配置无效，未创建续跑任务。"
+            ) from None
+
         if not self._slots.acquire(blocking=False):
             raise AnnualAnalysisJobError(429, "job_capacity_reached", "年度分析任务队列已满，请稍后重试。")
         submitted = False
@@ -373,7 +412,7 @@ class AnnualAnalysisJobService:
                 child_dir = self.jobs_root / child_job_id
                 child_dir.mkdir(exist_ok=False)
                 parent_progress = self._recovery_progress_projection(latest_parent)
-                now = _utc_now()
+                now = _utc_now_precise()
                 state = {
                     "job_id": child_job_id,
                     "status": "queued",
@@ -399,6 +438,7 @@ class AnnualAnalysisJobService:
                     ),
                     "recovery_capability": {"can_resume": False, "reason": "recovery_not_available"},
                 }
+                state["_analysis_budget_contract"] = budget_contract
                 self._states[child_job_id] = state
                 self._slot_owners.add(child_job_id)
                 _write_state(child_dir / "job.json", state, create=True)
@@ -417,9 +457,9 @@ class AnnualAnalysisJobService:
                     self._persist_state_locked(child_job_id, state)
                     self._release_slot_once_locked(child_job_id)
                     submitted = True
-                    return _public_state(state)
+                    return _public_job_state(self.project_root, state)
                 submitted = True
-                return _public_state(state)
+                return _public_job_state(self.project_root, state)
         finally:
             if not submitted:
                 with self._lock:
@@ -523,6 +563,15 @@ class AnnualAnalysisJobService:
                     self._cancel_owner_stopped.add(job_id)
                     self._finish_cancelled(job_id)
                     return
+                started_at = _utc_now_precise()
+                started_monotonic = time.monotonic()
+                budget_contract = (
+                    _job_budget_contract(
+                        "resume" if isinstance(current.get("parent_run_id"), str) else "new_run"
+                    )
+                    if normalized["mode"] in {"model_investigation", "integrated_analysis"}
+                    else None
+                )
                 current.update(
                     status="running",
                     stage="validating_source",
@@ -530,7 +579,17 @@ class AnnualAnalysisJobService:
                     result_url=f"/v1/annual-analyses/{run_id}",
                     error=None,
                     _call_gate_db=str(gate_db),
+                    running_started_at=started_at,
+                    _running_started_monotonic=started_monotonic,
                 )
+                if budget_contract is not None:
+                    current["_analysis_budget_contract"] = budget_contract
+                    current["_main_report_deadline_monotonic"] = (
+                        started_monotonic + budget_contract["main_report_limit_seconds"]
+                    )
+                    current["_main_work_deadline_monotonic"] = (
+                        started_monotonic + budget_contract["work_deadline_seconds"]
+                    )
                 current["recovery_progress"] = self._initial_recovery_progress(current)
                 self._persist_state_locked(job_id, current)
             heartbeat_stop = self._start_heartbeat(job_id, job_dir / "call-liveness")
@@ -549,6 +608,12 @@ class AnnualAnalysisJobService:
             runner_request["_expected_runtime_fingerprint"] = str(
                 self.cli_startup_identity["fingerprint"]
             )
+            if budget_contract is not None:
+                runner_request["_running_started_at"] = started_at
+                runner_request["_running_started_monotonic"] = started_monotonic
+                runner_request["_main_report_deadline_monotonic"] = current["_main_report_deadline_monotonic"]
+                runner_request["_main_work_deadline_monotonic"] = current["_main_work_deadline_monotonic"]
+                runner_request["_analysis_budget_contract"] = budget_contract
             with self._lock:
                 if job_id in self._cancel_requested:
                     # This check and the durable owner flag are serialized
@@ -727,6 +792,9 @@ class AnnualAnalysisJobService:
         return state
 
     def _persist_state_locked(self, job_id: str, state: dict[str, Any]) -> None:
+        if state.get("status") in {"completed", "completed_with_issues", "failed", "interrupted", "cancelled"}:
+            if not isinstance(state.get("ended_at"), str):
+                state["ended_at"] = _utc_now_precise()
         state["updated_at"] = _utc_now()
         job_dir = _safe_existing_job_dir(self.jobs_root, job_id)
         _write_state(job_dir / "job.json", state, create=False)
@@ -1837,6 +1905,7 @@ def _invoke_cli(project_root: Path, artifacts_root: Path, request: Mapping[str, 
     liveness_file = request.get("_call_liveness_file")
     stopped_file = request.get("_call_stopped_file")
     active_source_sha = request.get("_active_source_sha256")
+    budget_contract = request.get("_analysis_budget_contract")
     if isinstance(internal_job_id, str) and _JOB_ID.fullmatch(internal_job_id):
         if not all(isinstance(value, str) and value for value in (call_gate_db, cancel_file, liveness_file, active_source_sha)):
             raise RuntimeError("任务模型准入控制字段无效。")
@@ -1851,6 +1920,14 @@ def _invoke_cli(project_root: Path, artifacts_root: Path, request: Mapping[str, 
         )
         if isinstance(stopped_file, str) and stopped_file:
             environment["FINTRACE_CALL_STOPPED_FILE"] = str(Path(stopped_file).resolve())
+        if isinstance(budget_contract, Mapping):
+            stage_attempt_limits = budget_contract.get("stage_attempt_limits")
+            if not isinstance(stage_attempt_limits, Mapping):
+                raise RuntimeError("年度分析阶段准入上限无效。")
+            environment["FINTRACE_CALL_GATE_TASK_LIMIT"] = str(budget_contract.get("task_effective"))
+            environment["FINTRACE_CALL_GATE_STAGE_LIMITS"] = json.dumps(
+                dict(stage_attempt_limits), sort_keys=True, separators=(",", ":")
+            )
     if request["mode"] in {"model_investigation", "integrated_analysis"}:
         source_record = source_pdf.parent / "source.json"
         command.extend(["--with-model", "--source-record", str(source_record)])
@@ -1865,8 +1942,35 @@ def _invoke_cli(project_root: Path, artifacts_root: Path, request: Mapping[str, 
             }
         )
     timeout = _configured_cli_timeout_seconds(str(request["mode"]))
+    hard_deadline = request.get("_main_report_deadline_monotonic")
+    if isinstance(budget_contract, Mapping):
+        soft_deadline = request.get("_main_work_deadline_monotonic")
+        stage_time_limits = budget_contract.get("stage_time_limits_seconds")
+        if (
+            not isinstance(hard_deadline, (int, float))
+            or not isinstance(soft_deadline, (int, float))
+            or not isinstance(stage_time_limits, Mapping)
+        ):
+            raise RuntimeError("年度分析运行时限传递无效。")
+        environment.update({
+            "FINTRACE_ANNUAL_MAIN_SOFT_DEADLINE_MONOTONIC": format(float(soft_deadline), ".17g"),
+            "FINTRACE_ANNUAL_MAIN_HARD_DEADLINE_MONOTONIC": format(float(hard_deadline), ".17g"),
+            "FINTRACE_ANNUAL_MAIN_LIMIT_SECONDS": str(budget_contract["main_report_limit_seconds"]),
+            "FINTRACE_ANNUAL_STAGE_TIME_LIMITS_SECONDS": json.dumps(
+                dict(stage_time_limits), sort_keys=True, separators=(",", ":")
+            ),
+        })
+        timeout = max(0.0, float(hard_deadline) - time.monotonic())
     register_process = request.get("_register_process")
     if callable(register_process):
+        process_deadline = (
+            float(hard_deadline)
+            if isinstance(budget_contract, Mapping) and isinstance(hard_deadline, (int, float))
+            else time.monotonic() + timeout
+        )
+        timeout = max(0.0, process_deadline - time.monotonic())
+        if timeout <= 0:
+            raise subprocess.TimeoutExpired(command, timeout)
         process = subprocess.Popen(
             command,
             cwd=project_root,
@@ -1880,9 +1984,8 @@ def _invoke_cli(project_root: Path, artifacts_root: Path, request: Mapping[str, 
             creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0,
         )
         register_process(process)
-        deadline = time.monotonic() + timeout
         while True:
-            remaining = deadline - time.monotonic()
+            remaining = process_deadline - time.monotonic()
             if remaining <= 0:
                 _terminate_process_tree(process)
                 try:
@@ -2456,6 +2559,219 @@ def _public_state(state: Mapping[str, Any]) -> dict[str, Any]:
     return public
 
 
+def _public_job_state(project_root: Path, state: Mapping[str, Any]) -> dict[str, Any]:
+    public = _public_state(state)
+    budget = _analysis_budget_projection(project_root, state)
+    if budget is not None:
+        public["analysis_budget"] = budget
+    return public
+
+
+def _job_budget_contract(scope: str) -> dict[str, Any]:
+    if scope not in {"new_run", "resume"}:
+        raise RuntimeError("annual_budget_scope_invalid")
+    owner_limit = _configured_cli_timeout_seconds("model_investigation")
+    main_limit = min(300, owner_limit)
+    resumed = scope == "resume"
+    stage_attempt_limits = RESUME_STAGE_ATTEMPT_BUDGETS if resumed else NEW_RUN_STAGE_ATTEMPT_BUDGETS
+    return {
+        "schema_version": "annual_analysis_budget_v1",
+        "scope": scope,
+        "main_report_limit_seconds": main_limit,
+        "work_deadline_seconds": main_limit - FINALIZATION_RESERVE_SECONDS,
+        "finalization_reserve_seconds": FINALIZATION_RESERVE_SECONDS,
+        "task_default_new_run": NEW_RUN_ATTEMPT_BUDGET,
+        "task_default_resume": RESUME_ATTEMPT_BUDGET,
+        "task_effective": RESUME_ATTEMPT_BUDGET if resumed else NEW_RUN_ATTEMPT_BUDGET,
+        "shared_goal_limit": None,
+        "shared_goal_remaining_at_start": None,
+        "stage_time_limits_seconds": runtime_stage_time_limits(main_limit),
+        "stage_attempt_limits": dict(stage_attempt_limits),
+    }
+
+
+def _analysis_budget_projection(
+    project_root: Path,
+    state: Mapping[str, Any],
+    *,
+    progress: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    contract = state.get("_analysis_budget_contract")
+    if not isinstance(contract, Mapping):
+        return None
+    scope = contract.get("scope")
+    main_limit = contract.get("main_report_limit_seconds")
+    work_limit = contract.get("work_deadline_seconds")
+    task_limit = contract.get("task_effective")
+    stage_time_limits = contract.get("stage_time_limits_seconds")
+    stage_attempt_limits = contract.get("stage_attempt_limits")
+    if (
+        scope not in {"new_run", "resume"}
+        or type(main_limit) is not int or not 60 <= main_limit <= 300
+        or work_limit != main_limit - FINALIZATION_RESERVE_SECONDS
+        or task_limit != (RESUME_ATTEMPT_BUDGET if scope == "resume" else NEW_RUN_ATTEMPT_BUDGET)
+        or not isinstance(stage_time_limits, Mapping)
+        or not isinstance(stage_attempt_limits, Mapping)
+    ):
+        raise AnnualAnalysisJobError(503, "analysis_budget_invalid", "任务预算记录无效，未返回推测值。")
+
+    job_id = state.get("job_id")
+    gate_db = state.get("_call_gate_db")
+    if isinstance(job_id, str) and _JOB_ID.fullmatch(job_id) and isinstance(gate_db, str):
+        try:
+            counts = read_gate_stage_admission_counts(Path(gate_db), job_id)
+        except Exception:
+            raise AnnualAnalysisJobError(
+                503, "analysis_budget_ledger_unavailable", "本任务阶段准入记录暂不可安全读取，未返回推测计数。"
+            ) from None
+    elif state.get("status") == "queued" or state.get("running_started_at") is None:
+        counts = {key: 0 for key in (
+            "annual_discovery", "annual_investigation", "annual_issue_grouping", "annual_review",
+        )}
+    else:
+        raise AnnualAnalysisJobError(503, "analysis_budget_ledger_unavailable", "本任务缺少可核验的准入记录。")
+
+    now = datetime.now(timezone.utc)
+    created = _parse_utc_timestamp(state.get("created_at"))
+    started = _parse_utc_timestamp(state.get("running_started_at"))
+    ended = _parse_utc_timestamp(state.get("ended_at"))
+    status = state.get("status")
+    if status == "queued" or started is None:
+        elapsed = 0.0
+    elif status == "running":
+        monotonic_start = state.get("_running_started_monotonic")
+        elapsed = max(0.0, time.monotonic() - float(monotonic_start)) if isinstance(monotonic_start, (int, float)) else max(0.0, (now - started).total_seconds())
+    else:
+        if ended is None or started is None:
+            raise AnnualAnalysisJobError(
+                503,
+                "analysis_budget_timestamp_unavailable",
+                "任务结束时间记录缺失，未返回推测耗时。",
+            )
+        elapsed = max(0.0, (ended - started).total_seconds())
+    if started is not None and created is not None:
+        queue_seconds = max(0.0, (started - created).total_seconds())
+    elif created is not None:
+        queue_end = ended if status not in {"queued", "running"} and ended is not None else now
+        queue_seconds = max(0.0, (queue_end - created).total_seconds())
+    else:
+        queue_seconds = 0.0
+
+    stages: dict[str, dict[str, Any]] = {}
+    progress_status: str | None = None
+    planned_batches: int | None = None
+    if isinstance(progress, Mapping):
+        progress_status = str(progress.get("status"))
+        if type(progress.get("planned_batches")) is int:
+            planned_batches = int(progress["planned_batches"])
+    if progress is None and state.get("status") == "running" and state.get("stage") == "annual_analysis_cli":
+        run_id = state.get("run_id")
+        if isinstance(run_id, str):
+            job_dir = project_root / "artifacts" / "annual-analysis-jobs" / str(job_id)
+            loaded = _read_discovery_progress(job_dir, str(job_id), state)
+            if isinstance(loaded, Mapping):
+                progress_status = str(loaded.get("status"))
+                if type(loaded.get("planned_batches")) is int:
+                    planned_batches = int(loaded["planned_batches"])
+
+    terminal_report: Mapping[str, Any] | None = None
+    run_id = state.get("run_id")
+    if status in {"completed", "completed_with_issues", "failed", "interrupted", "cancelled"} and isinstance(run_id, str):
+        try:
+            terminal_report = load_annual_report(project_root, run_id).report
+        except Exception:
+            terminal_report = None
+
+    def stage_status(name: str) -> str:
+        if name == "annual_issue_grouping":
+            return "reserved"
+        if status == "queued":
+            return "not_started"
+        if status == "running":
+            if name == "annual_discovery" and progress_status is not None:
+                return {
+                    "not_called": "planned", "running": "running", "completed": "completed",
+                    "partial": "partial", "failed": "partial", "budget_exhausted": "budget_exhausted",
+                }.get(progress_status, "planned")
+            if name == "annual_discovery" and counts.get(name, 0) > 0:
+                return "running"
+            return "planned"
+        if not isinstance(terminal_report, Mapping):
+            return "partial" if status in {"failed", "interrupted", "cancelled"} else "planned"
+        investigation = terminal_report.get("model_investigation")
+        discovery = investigation.get("discovery") if isinstance(investigation, Mapping) else None
+        if name == "annual_discovery":
+            value = discovery
+        elif name == "annual_investigation":
+            value = investigation
+        else:
+            value = investigation.get("final_review") if isinstance(investigation, Mapping) else terminal_report.get("model_review")
+        if not isinstance(value, Mapping):
+            return "partial"
+        reason = value.get("reason")
+        if reason in {
+            "discovery_stage_budget_exhausted", "workflow_time_budget_exhausted",
+            "provider_budget_exhausted", "stage_budget_exhausted", "task_budget_exhausted",
+            "call_deadline_exhausted", "model_call_budget_exhausted",
+        }:
+            return "budget_exhausted"
+        if value.get("status") in {"completed", "abstained"}:
+            return "completed"
+        if value.get("status") in {"not_called", "running"} and reason in {"awaiting_model", "annual_discovery_not_started", "model_review_not_started"}:
+            return "not_started"
+        return "partial"
+
+    stage_names = (
+        "annual_discovery", "annual_investigation", "annual_issue_grouping", "annual_review",
+    )
+    for name in stage_names:
+        cap = stage_attempt_limits.get(name)
+        limit = stage_time_limits.get(name)
+        admitted = counts.get(name)
+        if type(cap) is not int or type(limit) is not int or type(admitted) is not int:
+            raise AnnualAnalysisJobError(503, "analysis_budget_invalid", "任务阶段预算记录无效，未返回推测值。")
+        stages[name] = {
+            "time_limit_seconds": limit,
+            "attempt_limit": cap,
+            "planned_attempts": planned_batches if name == "annual_discovery" else None,
+            "admitted_attempts": admitted,
+            "status": stage_status(name),
+        }
+
+    provider_admissions = sum(counts.values())
+    return {
+        "schema_version": "annual_analysis_budget_v1",
+        "scope": scope,
+        "main_report_limit_seconds": main_limit,
+        "work_deadline_seconds": work_limit,
+        "finalization_reserve_seconds": FINALIZATION_RESERVE_SECONDS,
+        "elapsed_running_seconds": round(elapsed, 3),
+        "queue_seconds": round(queue_seconds, 3),
+        "provider_attempt_limits": {
+            "task_default_new_run": NEW_RUN_ATTEMPT_BUDGET,
+            "task_default_resume": RESUME_ATTEMPT_BUDGET,
+            "task_effective": task_limit,
+            "shared_goal_limit": None,
+            "shared_goal_remaining_at_start": None,
+        },
+        "provider_admission_count": provider_admissions,
+        "provider_attempts_remaining": max(0, task_limit - provider_admissions),
+        "stages": stages,
+    }
+
+
+def _parse_utc_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def _empty_recovery_progress(
     parent_run_id: str | None,
     *,
@@ -2754,6 +3070,10 @@ def _set_running_manifest_terminal_status(project_root: Path, run_id: str, statu
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _utc_now_precise() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 def _is_reparse_point(info: os.stat_result) -> bool:

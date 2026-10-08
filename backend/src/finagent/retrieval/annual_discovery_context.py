@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
@@ -24,6 +25,8 @@ MAX_BATCH_RAW_CHARS = 12000
 MAX_SERIALIZED_INPUT_CHARS = 24000
 MAX_BATCHES = 128
 MAX_TOTAL_TEXT_CHARS = 1_200_000
+LEGACY_PLAN_VERSION = "annual_discovery_plan_v2"
+COMPACT_PLAN_VERSION = "annual_discovery_plan_v3"
 
 _SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
@@ -86,6 +89,16 @@ class DiscoveryBatch:
     fragments: tuple[DiscoveryFragment, ...]
     raw_chars: int
     serialized_input_chars: int
+    plan_version: str = LEGACY_PLAN_VERSION
+    aliases: tuple[tuple[str, str], ...] = ()
+
+    @property
+    def alias_by_evidence_id(self) -> dict[str, str]:
+        return dict(self.aliases)
+
+    @property
+    def evidence_id_by_alias(self) -> dict[str, str]:
+        return {alias: evidence_id for evidence_id, alias in self.aliases}
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +107,9 @@ class AnnualDiscoveryContext:
     batches: tuple[DiscoveryBatch, ...]
     fragments: tuple[DiscoveryFragment, ...]
     coverage: Mapping[str, object]
+    plan_version: str = LEGACY_PLAN_VERSION
+    parse_seconds: float = 0.0
+    planning_seconds: float = 0.0
 
 
 def validate_annual_discovery_identity(
@@ -165,6 +181,8 @@ def build_annual_discovery_context(
     max_serialized_chars: int = MAX_SERIALIZED_INPUT_CHARS,
     max_batches: int = MAX_BATCHES,
     max_total_chars: int = MAX_TOTAL_TEXT_CHARS,
+    plan_version: str = LEGACY_PLAN_VERSION,
+    parsed_pdf: ParsedTextPdf | None = None,
 ) -> AnnualDiscoveryContext:
     """Parse and plan the full extractable PDF text into bounded model batches.
 
@@ -181,13 +199,27 @@ def build_annual_discovery_context(
         max_batches=max_batches,
         max_total_chars=max_total_chars,
     )
+    if plan_version not in {LEGACY_PLAN_VERSION, COMPACT_PLAN_VERSION}:
+        raise ValueError("annual_discovery_plan_version_unsupported")
     identity = validate_annual_discovery_identity(report, source_record)
-    try:
-        parsed = parse_text_pdf(source_pdf_path, str(identity["source_document_id"]))
-    except Exception:
-        raise AnnualDiscoverySourceError("source_pdf_unreadable") from None
+    parse_seconds = 0.0
+    if parsed_pdf is None:
+        parse_started = time.perf_counter()
+        try:
+            parsed = parse_text_pdf(source_pdf_path, str(identity["source_document_id"]))
+        except Exception:
+            raise AnnualDiscoverySourceError("source_pdf_unreadable") from None
+        parse_seconds = time.perf_counter() - parse_started
+    else:
+        parsed = parsed_pdf
+        if (
+            not isinstance(parsed, ParsedTextPdf)
+            or parsed.document_id != identity["source_document_id"]
+        ):
+            raise AnnualDiscoverySourceError("source_parse_identity_mismatch")
     if parsed.source_sha256 != identity["source_sha256"]:
         raise AnnualDiscoverySourceError("source_pdf_hash_mismatch")
+    planning_started = time.perf_counter()
 
     all_text_blocks = [
         (page.page_number, block.block_index, block.bbox, block.text)
@@ -243,7 +275,10 @@ def build_annual_discovery_context(
         if not current:
             return
         batch_index = len(batches) + 1
-        payload = serialize_batch_content(identity, batch_index, current)
+        aliases = _batch_aliases(current, batch_index) if plan_version == COMPACT_PLAN_VERSION else ()
+        payload = serialize_batch_content(
+            identity, batch_index, current, plan_version=plan_version, aliases=aliases
+        )
         size = serialized_request_size(model_name, system_prompt, payload)
         batches.append(
             DiscoveryBatch(
@@ -251,6 +286,8 @@ def build_annual_discovery_context(
                 fragments=tuple(current),
                 raw_chars=current_raw,
                 serialized_input_chars=size,
+                plan_version=plan_version,
+                aliases=aliases,
             )
         )
         planned_fragments.extend(current)
@@ -265,7 +302,11 @@ def build_annual_discovery_context(
         candidate = current + [fragment]
         candidate_raw = current_raw + fragment.char_count
         would_overflow_raw = candidate_raw > max_batch_raw_chars
-        payload = serialize_batch_content(identity, len(batches) + 1, candidate)
+        aliases = _batch_aliases(candidate, len(batches) + 1) if plan_version == COMPACT_PLAN_VERSION else ()
+        payload = serialize_batch_content(
+            identity, len(batches) + 1, candidate,
+            plan_version=plan_version, aliases=aliases,
+        )
         would_overflow_serialized = (
             serialized_request_size(model_name, system_prompt, payload) > max_serialized_chars
         )
@@ -276,7 +317,11 @@ def build_annual_discovery_context(
                 break
             candidate = [fragment]
             candidate_raw = fragment.char_count
-            payload = serialize_batch_content(identity, len(batches) + 1, candidate)
+            aliases = _batch_aliases(candidate, len(batches) + 1) if plan_version == COMPACT_PLAN_VERSION else ()
+            payload = serialize_batch_content(
+                identity, len(batches) + 1, candidate,
+                plan_version=plan_version, aliases=aliases,
+            )
             would_overflow_serialized = (
                 serialized_request_size(model_name, system_prompt, payload) > max_serialized_chars
             )
@@ -334,13 +379,40 @@ def build_annual_discovery_context(
         batches=tuple(batches),
         fragments=tuple(planned_fragments),
         coverage=coverage,
+        plan_version=plan_version,
+        parse_seconds=parse_seconds,
+        planning_seconds=time.perf_counter() - planning_started,
     )
 
 
 def serialize_batch_content(
-    identity: Mapping[str, object], batch_index: int, fragments: list[DiscoveryFragment] | tuple[DiscoveryFragment, ...]
+    identity: Mapping[str, object],
+    batch_index: int,
+    fragments: list[DiscoveryFragment] | tuple[DiscoveryFragment, ...],
+    *,
+    plan_version: str = LEGACY_PLAN_VERSION,
+    aliases: tuple[tuple[str, str], ...] = (),
 ) -> str:
     """Serialize the exact user message sent for one batch."""
+
+    if plan_version == COMPACT_PLAN_VERSION:
+        alias_by_id = dict(aliases) if aliases else dict(_batch_aliases(fragments, batch_index))
+        if set(alias_by_id) != {item.evidence_id for item in fragments}:
+            raise ValueError("annual_discovery_alias_mapping_invalid")
+        payload = {
+            "company_id": identity["company_id"],
+            "report_year": identity["report_year"],
+            "source_document_id": identity["source_document_id"],
+            "source_sha256": identity["source_sha256"],
+            "batch_index": batch_index,
+            "fragments": [
+                [alias_by_id[item.evidence_id], item.pdf_page, item.raw_text]
+                for item in fragments
+            ],
+        }
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    if plan_version != LEGACY_PLAN_VERSION:
+        raise ValueError("annual_discovery_plan_version_unsupported")
 
     payload = {
         "company_id": identity["company_id"],
@@ -351,6 +423,85 @@ def serialize_batch_content(
         "fragments": [item.model_value() for item in fragments],
     }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _batch_aliases(
+    fragments: list[DiscoveryFragment] | tuple[DiscoveryFragment, ...],
+    batch_index: int,
+) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (item.evidence_id, f"b{_base36(batch_index)}-{_short_alias(index)}")
+        for index, item in enumerate(fragments)
+    )
+
+
+def _short_alias(index: int) -> str:
+    """Return a deterministic lowercase spreadsheet-style alias (a..z, aa...)."""
+
+    if type(index) is not int or index < 0:
+        raise ValueError("annual_discovery_alias_index_invalid")
+    value = index + 1
+    characters: list[str] = []
+    while value:
+        value, remainder = divmod(value - 1, 26)
+        characters.append(chr(ord("a") + remainder))
+    return "".join(reversed(characters))
+
+
+def _base36(value: int) -> str:
+    if type(value) is not int or value < 1:
+        raise ValueError("annual_discovery_alias_batch_invalid")
+    alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
+    characters: list[str] = []
+    while value:
+        value, remainder = divmod(value, 36)
+        characters.append(alphabet[remainder])
+    return "".join(reversed(characters))
+
+
+def annual_discovery_plan_projection(context: AnnualDiscoveryContext) -> list[dict[str, object]] | dict[str, object]:
+    """Return the canonical, version-specific execution binding projection."""
+
+    if context.plan_version == LEGACY_PLAN_VERSION:
+        return [
+            {
+                "batch_index": batch.batch_index,
+                "fragments": [
+                    {
+                        "evidence_id": item.evidence_id,
+                        "pdf_page": item.pdf_page,
+                        "block_index": item.block_index,
+                        "start_char": item.start_char,
+                        "char_count": item.char_count,
+                    }
+                    for item in batch.fragments
+                ],
+            }
+            for batch in context.batches
+        ]
+    if context.plan_version != COMPACT_PLAN_VERSION:
+        raise ValueError("annual_discovery_plan_version_unsupported")
+    return {
+        "plan_version": COMPACT_PLAN_VERSION,
+        "batches": [
+            {
+                "batch_index": batch.batch_index,
+                "fragments": [
+                    {
+                        "alias": alias,
+                        "evidence_id": fragment.evidence_id,
+                        "pdf_page": fragment.pdf_page,
+                        "block_index": fragment.block_index,
+                        "start_char": fragment.start_char,
+                        "char_count": fragment.char_count,
+                        "bbox": list(fragment.bbox),
+                    }
+                    for fragment, (_evidence_id, alias) in zip(batch.fragments, batch.aliases, strict=True)
+                ],
+            }
+            for batch in context.batches
+        ],
+    }
 
 
 def serialized_request_size(model_name: str, system_prompt: str, user_content: str) -> int:

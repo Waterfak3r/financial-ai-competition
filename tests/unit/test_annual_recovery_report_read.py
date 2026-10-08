@@ -15,6 +15,9 @@ from finagent.api.annual_report_export import export_annual_report
 from finagent.api.annual_report_read import (
     AnnualReportReadError,
     _m3_semantic_binding_sha256 as _reader_m3_semantic_binding_sha256,
+    _validate_discovery_coverage,
+    _validate_v3_execution_contract,
+    _validate_v4_execution_contract,
     load_annual_report,
 )
 from finagent.core.annual_recovery import _m3_semantic_binding_sha256 as _execution_m3_semantic_binding_sha256
@@ -22,6 +25,8 @@ from finagent.core.annual_recovery import (
     recovery_identity_sha256,
     validate_annual_recovery_parent,
 )
+from finagent.core.annual_work_budget import archived_budget_contract_v1
+import finagent.core.annual_work_budget as live_annual_work_budget
 from finagent.core.annual_checkpoints import AnnualCheckpointError, save_annual_checkpoint
 from finagent.core.model_settings import ModelSettings
 from finagent.retrieval.annual_discovery_context import AnnualDiscoveryContext, build_annual_discovery_context
@@ -378,6 +383,14 @@ def _discovery(
                 "accepted_findings": inherited + 6, "inherited_findings": inherited,
             })
             findings.extend(_finding(source_sha, first_fragment, word, index) for word in _WORDS[:11])
+        elif mode == "new_success_v4":
+            attempt = _attempt(2)
+            contract_rows[index - 1].update({"state": "succeeded", "resolution": "executed", "reason": None, "attempts": [attempt]})
+            coverage_rows[index - 1].update({
+                "status": "succeeded", "resolution": "executed", "reason": None,
+                "accepted_findings": 2,
+            })
+            findings.extend(_finding(source_sha, batch.fragments[0], word, index) for word in _WORDS[:2])
         elif mode == "reuse":
             contract_rows[index - 1].update({"state": "succeeded", "resolution": "reused", "reason": None, "attempts": []})
             coverage_rows[index - 1].update({
@@ -412,7 +425,11 @@ def _discovery(
     if parent_run_id is not None and batch_modes.get(1) != "new_success":
         # Failed retries and accepted-empty responses retain the complete
         # parent's finding union, including findings from reused batches.
-        findings = copy.deepcopy(run["parent_findings"])
+        new_v4_findings = [
+            finding for finding in findings
+            if batch_modes.get(finding.get("batch_index")) == "new_success_v4"
+        ]
+        findings = copy.deepcopy(run["parent_findings"]) + new_v4_findings
 
     coverage = _coverage(context, coverage_rows, contract_rows)
     attempts = [attempt for row in contract_rows for attempt in row["attempts"]]
@@ -469,6 +486,207 @@ def _discovery(
     }
 
 
+def _as_v4_contract(discovery: MappingLike) -> dict[str, Any]:
+    contract = copy.deepcopy(discovery["execution_contract"])
+    binding = dict(contract["binding"])
+    binding.update({
+        "plan_version": "annual_discovery_plan_v3",
+        "execution_version": "execution_v4",
+        "parser_version": "annual-discovery-parser-v3-execution-v4",
+    })
+    contract.update({
+        "kind": "fintrace_annual_discovery_execution_v4",
+        "binding": binding,
+        "identity_sha256": _canonical_sha(binding),
+        "scheduler": {
+            "requested_max_concurrency": 3,
+            "effective_max_concurrency": 3,
+            "inflight_peak": 0,
+            "checkpoint_coordinator_count": 1,
+            "checkpoint_publications": 0,
+            "dispatch_closed_reason": None,
+            "time_deadline_reason": None,
+            "inflight_drained": True,
+            "inflight_count": 0,
+        },
+        "phase_budget": archived_budget_contract_v1(
+            scope="resume" if contract.get("parent_run_id") is not None else "new_run"
+        ),
+        "timing": {
+            "source_parse_seconds": 0.0,
+            "planning_seconds": 0.0,
+            "source_parse_reused": False,
+            "discovery_elapsed_seconds": 0.0,
+            "main_work_remaining_seconds": 120.0,
+        },
+    })
+    return contract
+
+
+def _v4_discovery(
+    run: MappingLike,
+    *,
+    parent_run_id: str | None = None,
+    parent_admissions: int = 0,
+    batch_modes: dict[int, str] | None = None,
+    binding_model: str | None = None,
+) -> dict[str, Any]:
+    discovery = _discovery(
+        run,
+        parent_run_id=parent_run_id,
+        parent_admissions=parent_admissions,
+        batch_modes=batch_modes,
+    )
+    discovery["prompt_version"] = "annual_discovery_v3"
+    contract = _as_v4_contract(discovery)
+    if binding_model is not None:
+        contract["binding"]["model"] = binding_model
+        contract["identity_sha256"] = _canonical_sha(contract["binding"])
+    discovery["execution_contract"] = contract
+    return discovery
+
+
+def _validate_test_v4(run: MappingLike, discovery: MappingLike, contract: MappingLike | None = None) -> dict[str, Any]:
+    value = contract or _as_v4_contract(discovery)
+    normalized = _validate_v4_execution_contract(
+        value,
+        expected_run_id=run["run_id"],
+        expected_company_id=_COMPANY,
+        expected_report_year=_YEAR,
+        expected_document_id=_DOCUMENT,
+        expected_sha256=run["source_sha"],
+        expected_analysis_mode=run["mode"],
+        m3_screening=None,
+        coverage=discovery["coverage"],
+    )
+    _validate_discovery_coverage(
+        discovery["coverage"],
+        discovery["status"],
+        discovery["prompt_version"],
+        execution_contract=value,
+    )
+    return normalized
+
+
+def test_v4_strict_limits_match_three_findings_and_leave_legacy_v3_cap_unchanged(tmp_path: Path) -> None:
+    run = _write_run(tmp_path, 180)
+    discovery = _discovery(run, batch_modes={1: "success_parent"})
+    contract = _as_v4_contract(discovery)
+    contract["batches"][0]["attempts"][0]["accepted_findings"] = 3
+    discovery["coverage"]["batch_results"][0]["accepted_findings"] = 3
+    _validate_test_v4(run, discovery, contract)
+
+    wrong_kind = copy.deepcopy(contract)
+    wrong_kind["kind"] = "fintrace_annual_discovery_execution_v3"
+    with pytest.raises(AnnualReportReadError) as error:
+        _validate_test_v4(run, discovery, wrong_kind)
+    assert error.value.code == "annual_discovery_invalid"
+
+    over_three = copy.deepcopy(contract)
+    over_three["batches"][0]["attempts"][0]["accepted_findings"] = 4
+    discovery_four_accepted = copy.deepcopy(discovery)
+    discovery_four_accepted["coverage"]["batch_results"][0]["accepted_findings"] = 4
+    with pytest.raises(AnnualReportReadError) as error:
+        _validate_test_v4(run, discovery_four_accepted, over_three)
+    assert error.value.code == "annual_discovery_invalid"
+
+    all_rejected = _discovery(run, batch_modes={1: "success_parent"})
+    rejected_contract = _as_v4_contract(all_rejected)
+    rejected_contract["batches"][0].update({"state": "failed", "reason": "all_findings_rejected"})
+    rejected_contract["batches"][0]["attempts"][0]["accepted_findings"] = 0
+    rejected_coverage = all_rejected["coverage"]["batch_results"][0]
+    rejected_coverage.update({
+        "status": "failed", "reason": "all_findings_rejected",
+        "accepted_findings": 0, "rejected_findings": 4,
+    })
+    with pytest.raises(AnnualReportReadError) as error:
+        _validate_test_v4(run, all_rejected, rejected_contract)
+    assert error.value.code == "annual_discovery_invalid"
+
+    # The current strict v3 reader intentionally retains its historical six
+    # finding limit; R3's tighter cap applies only to execution_v4.
+    legacy_discovery = _discovery(run, batch_modes={1: "success_parent"})
+    legacy_discovery["execution_contract"]["batches"][0]["attempts"][0]["accepted_findings"] = 5
+    legacy_discovery["coverage"]["batch_results"][0]["accepted_findings"] = 5
+    _validate_v3_execution_contract(
+        legacy_discovery["execution_contract"],
+        expected_run_id=run["run_id"],
+        expected_company_id=_COMPANY,
+        expected_report_year=_YEAR,
+        expected_document_id=_DOCUMENT,
+        expected_sha256=run["source_sha"],
+        expected_analysis_mode=run["mode"],
+        m3_screening=None,
+        coverage=legacy_discovery["coverage"],
+    )
+
+
+@pytest.mark.parametrize(
+    ("deadline_reason", "dispatch_reason", "coverage_exhausted"),
+    [
+        (None, "discovery_stage_budget_exhausted", False),
+        ("discovery_stage_budget_exhausted", "discovery_stage_budget_exhausted", True),
+        ("workflow_time_budget_exhausted", "workflow_time_budget_exhausted", True),
+    ],
+)
+def test_v4_distinguishes_stage_attempt_cap_from_real_deadline(
+    tmp_path: Path,
+    deadline_reason: str | None,
+    dispatch_reason: str,
+    coverage_exhausted: bool,
+) -> None:
+    run = _write_run(tmp_path, 181)
+    discovery = _discovery(run, batch_modes={1: "time_unattempted"})
+    contract = _as_v4_contract(discovery)
+    contract["scheduler"]["dispatch_closed_reason"] = dispatch_reason
+    contract["scheduler"]["time_deadline_reason"] = deadline_reason
+    contract["batches"][0]["reason"] = dispatch_reason
+    discovery["coverage"]["batch_results"][0]["reason"] = dispatch_reason
+    discovery["coverage"]["time_budget_exhausted"] = coverage_exhausted
+    _validate_test_v4(run, discovery, contract)
+
+    forged_coverage = copy.deepcopy(discovery)
+    forged_coverage["coverage"]["time_budget_exhausted"] = not coverage_exhausted
+    with pytest.raises(AnnualReportReadError) as error:
+        _validate_test_v4(run, forged_coverage, contract)
+    assert error.value.code == "annual_discovery_invalid"
+
+
+def test_v4_archive_budget_v1_reader_is_independent_of_live_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = _write_run(tmp_path, 182)
+    discovery = _discovery(run, batch_modes={1: "success_parent"})
+    contract = _as_v4_contract(discovery)
+    frozen_archive = copy.deepcopy(contract["phase_budget"])
+
+    monkeypatch.setattr(live_annual_work_budget, "MAIN_REPORT_BUDGET_SECONDS", 90)
+    monkeypatch.setattr(live_annual_work_budget, "FINALIZATION_RESERVE_SECONDS", 5)
+    monkeypatch.setattr(live_annual_work_budget, "WORK_DEADLINE_OFFSET_SECONDS", 85)
+    monkeypatch.setattr(live_annual_work_budget, "DISCOVERY_BUDGET_SECONDS", 30)
+    monkeypatch.setattr(live_annual_work_budget, "FIXED_INVESTIGATION_BUDGET_SECONDS", 20)
+    monkeypatch.setattr(live_annual_work_budget, "ISSUE_GROUPING_RESERVED_SECONDS", 15)
+    monkeypatch.setattr(live_annual_work_budget, "FINAL_REVIEW_BUDGET_SECONDS", 15)
+    monkeypatch.setattr(live_annual_work_budget, "NEW_RUN_ATTEMPT_BUDGET", 9)
+    monkeypatch.setattr(live_annual_work_budget, "RESUME_ATTEMPT_BUDGET", 8)
+    monkeypatch.setattr(live_annual_work_budget, "NEW_RUN_STAGE_ATTEMPT_BUDGETS", {})
+    monkeypatch.setattr(live_annual_work_budget, "RESUME_STAGE_ATTEMPT_BUDGETS", {})
+
+    assert archived_budget_contract_v1(scope="new_run") == frozen_archive
+    _validate_test_v4(run, discovery, contract)
+
+
+def test_v4_budget_scope_must_match_parent_run_presence(tmp_path: Path) -> None:
+    run = _write_run(tmp_path, 191)
+    discovery = _discovery(run, batch_modes={1: "success_parent"})
+    contract = _as_v4_contract(discovery)
+    contract["phase_budget"] = archived_budget_contract_v1(scope="resume")
+
+    with pytest.raises(AnnualReportReadError) as error:
+        _validate_test_v4(run, discovery, contract)
+    assert error.value.code == "annual_discovery_invalid"
+
+
 def _save_checkpoint(
     root: Path,
     run: MappingLike,
@@ -502,6 +720,68 @@ def _save_checkpoint(
         run["manifest"]["status"] = state
         _write_json(run["run_dir"] / "manifest.json", run["manifest"])
     return {"snapshot": record, "report": report}
+
+
+def _save_v4_checkpoint(
+    root: Path,
+    run: MappingLike,
+    *,
+    modes: dict[int, str] | None = None,
+    parent_run_id: str | None = None,
+    parent_admissions: int = 0,
+    state: str = "running",
+    is_partial: bool = True,
+    binding_model: str | None = None,
+) -> dict[str, Any]:
+    report = copy.deepcopy(run["report"])
+    report["model_discovery"] = _v4_discovery(
+        run,
+        parent_run_id=parent_run_id,
+        parent_admissions=parent_admissions,
+        batch_modes=modes,
+        binding_model=binding_model,
+    )
+    discovery = report["model_discovery"]
+    discovery["model_call_attempt_count"] = discovery["execution_contract"]["provider_admission_count"]
+    snapshot = {
+        "state": state,
+        "is_partial": is_partial,
+        "parent_run_id": parent_run_id,
+        "source_sha256": run["source_sha"],
+        "report": report,
+    }
+    record = save_annual_checkpoint(root, run["run_id"], snapshot)
+    if not is_partial:
+        _write_json(run["report_dir"] / "report.json", report)
+        run["manifest"]["status"] = state
+        _write_json(run["run_dir"] / "manifest.json", run["manifest"])
+    return {"snapshot": record, "report": report}
+
+
+def _rewrite_checkpoint_report(root: Path, run: MappingLike, update) -> None:
+    pointer_path = run["run_dir"] / "checkpoint-current.json"
+    pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+    snapshot_path = root / pointer["snapshot_path"]
+    envelope = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    report = envelope["report"]
+    update(report)
+    report_bytes = json.dumps(
+        report, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+    envelope["report_sha256"] = hashlib.sha256(report_bytes).hexdigest()
+    snapshot_bytes = json.dumps(
+        envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+    pointer["report_sha256"] = envelope["report_sha256"]
+    pointer["snapshot_sha256"] = hashlib.sha256(snapshot_bytes).hexdigest()
+    snapshot_path.write_bytes(snapshot_bytes)
+    pointer_path.write_text(
+        json.dumps(pointer, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    report_path = run["report_dir"] / "report.json"
+    if report_path.exists():
+        _write_json(report_path, report)
 
 
 def _unattempted_modes(context: AnnualDiscoveryContext) -> dict[int, str]:
@@ -888,6 +1168,117 @@ def test_v3_resume_unions_more_than_six_parent_findings_and_reuses_without_calls
     assert parent_saved["snapshot"].sequence == child_saved["snapshot"].sequence == 1
 
 
+def test_v4_resume_accepts_only_matching_parent_and_preserves_budget_scope(tmp_path: Path) -> None:
+    parent = _write_run(tmp_path, 183)
+    parent_modes = _unattempted_modes(parent["context"])
+    parent_modes[1] = "success_parent"
+    parent_saved = _save_v4_checkpoint(
+        tmp_path, parent, modes=parent_modes, state="running", is_partial=True,
+    )
+    parent_archive = load_annual_report(tmp_path, parent["run_id"])
+
+    child = _write_run(tmp_path, 184)
+    _share_source(parent, child)
+    child["parent_findings"] = parent_archive.report["model_discovery"]["findings"]
+    child_modes = _unattempted_modes(child["context"])
+    child_modes[1] = "reuse"
+    child_modes[2] = "new_success_v4"
+    child_saved = _save_v4_checkpoint(
+        tmp_path,
+        child,
+        modes=child_modes,
+        parent_run_id=parent["run_id"],
+        parent_admissions=1,
+    )
+
+    child_archive = load_annual_report(tmp_path, child["run_id"])
+    parent_contract = parent_archive.report["model_discovery"]["execution_contract"]
+    child_contract = child_archive.report["model_discovery"]["execution_contract"]
+
+    assert parent_contract["kind"] == child_contract["kind"] == "fintrace_annual_discovery_execution_v4"
+    assert parent_contract["phase_budget"]["scope"] == "new_run"
+    assert child_contract["phase_budget"]["scope"] == "resume"
+    assert child_contract["parent_run_id"] == parent["run_id"]
+    assert child_contract["reused_batches"] == [1]
+    child_findings = child_archive.report["model_discovery"]["findings"]
+    assert all(finding in child_findings for finding in parent_saved["report"]["model_discovery"]["findings"])
+    assert len(child_findings) == 4
+    assert parent_saved["snapshot"].sequence == child_saved["snapshot"].sequence == 1
+
+
+def test_v4_reader_rejects_unknown_parent_execution_kind(tmp_path: Path) -> None:
+    parent = _write_run(tmp_path, 185)
+    modes = _unattempted_modes(parent["context"])
+    modes[1] = "success_parent"
+    parent_saved = _save_v4_checkpoint(tmp_path, parent, modes=modes)
+    child = _write_run(tmp_path, 186)
+    _share_source(parent, child)
+    child["parent_findings"] = parent_saved["report"]["model_discovery"]["findings"]
+    child_modes = _unattempted_modes(child["context"])
+    child_modes.update({1: "reuse", 2: "new_success_v4"})
+    _save_v4_checkpoint(
+        tmp_path, child, modes=child_modes,
+        parent_run_id=parent["run_id"], parent_admissions=1,
+    )
+
+    _rewrite_checkpoint_report(
+        tmp_path,
+        parent,
+        lambda report: report["model_discovery"]["execution_contract"].update(
+            kind="fintrace_annual_discovery_execution_v9"
+        ),
+    )
+
+    with pytest.raises(AnnualReportReadError) as error:
+        load_annual_report(tmp_path, child["run_id"])
+    assert error.value.code == "annual_discovery_parent_invalid"
+
+
+def test_v4_reader_rejects_cross_version_parent_child_resume(tmp_path: Path) -> None:
+    parent = _write_run(tmp_path, 187)
+    parent_modes = _unattempted_modes(parent["context"])
+    parent_modes[1] = "success_parent"
+    parent_saved = _save_v4_checkpoint(tmp_path, parent, modes=parent_modes)
+    child = _write_run(tmp_path, 188)
+    _share_source(parent, child)
+    child["parent_findings"] = parent_saved["report"]["model_discovery"]["findings"]
+    child_modes = _unattempted_modes(child["context"])
+    child_modes.update({1: "new_success", 3: "reuse"})
+    _save_checkpoint(
+        tmp_path, child, modes=child_modes,
+        parent_run_id=parent["run_id"], parent_admissions=1,
+    )
+
+    with pytest.raises(AnnualReportReadError) as error:
+        load_annual_report(tmp_path, child["run_id"])
+    assert error.value.code == "annual_discovery_parent_invalid"
+
+
+def test_v4_reader_rejects_parent_binding_mismatch(tmp_path: Path) -> None:
+    parent = _write_run(tmp_path, 189)
+    parent_modes = _unattempted_modes(parent["context"])
+    parent_modes[1] = "success_parent"
+    parent_saved = _save_v4_checkpoint(tmp_path, parent, modes=parent_modes)
+    child = _write_run(tmp_path, 190)
+    _share_source(parent, child)
+    child["parent_findings"] = parent_saved["report"]["model_discovery"]["findings"]
+    child_modes = _unattempted_modes(child["context"])
+    child_modes[1] = "reuse"
+    child_modes[2] = "new_success_v4"
+    _save_v4_checkpoint(
+        tmp_path,
+        child,
+        modes=child_modes,
+        parent_run_id=parent["run_id"],
+        parent_admissions=1,
+        binding_model="different-fixture-model",
+    )
+
+    with pytest.raises(AnnualReportReadError) as error:
+        load_annual_report(tmp_path, child["run_id"])
+    assert error.value.code == "annual_discovery_parent_invalid"
+
+
 @pytest.mark.parametrize("empty_response", [False, True])
 def test_parent_findings_survive_child_retry_failure_or_legal_empty_response(
     tmp_path: Path,
@@ -930,31 +1321,50 @@ def test_parent_findings_survive_child_retry_failure_or_legal_empty_response(
         assert archive.report["model_discovery"]["model_call_count"] == 0
 
 
+@pytest.mark.parametrize("contract_version", ["v3", "v4"])
 @pytest.mark.parametrize("tamper", ["source_pdf", "parent_quote"])
-def test_child_load_revalidates_immutable_parent_source_and_quotes(tmp_path: Path, tamper: str) -> None:
+def test_child_load_revalidates_immutable_parent_source_and_quotes(
+    tmp_path: Path, tamper: str, contract_version: str,
+) -> None:
     parent = _write_run(tmp_path, 161)
     parent_modes = _unattempted_modes(parent["context"])
-    parent_modes.update({1: "partial_parent", 3: "success_parent"})
-    parent_saved = _save_checkpoint(
-        tmp_path, parent, modes=parent_modes,
-        state="completed_with_issues", is_partial=False,
-    )
-    with pytest.raises(AnnualCheckpointError) as sealed:
-        save_annual_checkpoint(tmp_path, parent["run_id"], {
-            "state": "running", "is_partial": True, "parent_run_id": None,
-            "source_sha256": parent["source_sha"], "report": parent_saved["report"],
-        })
-    assert getattr(sealed.value, "code", None) == "checkpoint_already_sealed"
+    if contract_version == "v4":
+        parent_modes.update({1: "success_parent", 3: "success_parent"})
+        parent_saved = _save_v4_checkpoint(
+            tmp_path, parent, modes=parent_modes,
+            state="completed_with_issues", is_partial=False,
+        )
+        parent_admissions = 2
+    else:
+        parent_modes.update({1: "partial_parent", 3: "success_parent"})
+        parent_saved = _save_checkpoint(
+            tmp_path, parent, modes=parent_modes,
+            state="completed_with_issues", is_partial=False,
+        )
+        parent_admissions = 2
+        with pytest.raises(AnnualCheckpointError) as sealed:
+            save_annual_checkpoint(tmp_path, parent["run_id"], {
+                "state": "running", "is_partial": True, "parent_run_id": None,
+                "source_sha256": parent["source_sha"], "report": parent_saved["report"],
+            })
+        assert getattr(sealed.value, "code", None) == "checkpoint_already_sealed"
 
     child = _write_run(tmp_path, 162)
     _share_source(parent, child)
     child["parent_findings"] = parent_saved["report"]["model_discovery"]["findings"]
     child_modes = _unattempted_modes(child["context"])
-    child_modes.update({1: "new_success", 3: "reuse"})
-    _save_checkpoint(
-        tmp_path, child, modes=child_modes,
-        parent_run_id=parent["run_id"], parent_admissions=2,
-    )
+    if contract_version == "v4":
+        child_modes.update({1: "reuse", 2: "new_success_v4", 3: "reuse"})
+        _save_v4_checkpoint(
+            tmp_path, child, modes=child_modes,
+            parent_run_id=parent["run_id"], parent_admissions=parent_admissions,
+        )
+    else:
+        child_modes.update({1: "new_success", 3: "reuse"})
+        _save_checkpoint(
+            tmp_path, child, modes=child_modes,
+            parent_run_id=parent["run_id"], parent_admissions=parent_admissions,
+        )
 
     if tamper == "source_pdf":
         source_path = parent["run_dir"] / "source.pdf"
@@ -987,7 +1397,7 @@ def test_v3_parent_lineage_depth_is_bounded(tmp_path: Path) -> None:
     assert error.value.code == "annual_discovery_parent_invalid"
 
 
-def test_completed_manifest_restart_interruption_remains_resumable_with_constructed_settings(tmp_path: Path) -> None:
+def test_legacy_v3_checkpoint_remains_readable_but_cannot_resume_under_v4_identity(tmp_path: Path) -> None:
     run = _write_run(tmp_path, 164)
     request = {
         "company_id": _COMPANY,
@@ -1014,9 +1424,10 @@ def test_completed_manifest_restart_interruption_remains_resumable_with_construc
     )
     report = copy.deepcopy(run["report"])
     report["model_discovery"] = _discovery(run)
-    from finagent.core.annual_recovery import build_annual_recovery_binding
-
-    binding = build_annual_recovery_binding(tmp_path, request, settings=settings, report=report)
+    # This fixture represents an archived execution_v3 payload. Construct its
+    # original v3 binding explicitly instead of rebuilding it with the current
+    # v4 plan/parser, which must remain incompatible for resume.
+    binding = _binding(run, _plan_sha(run["context"]))
     contract = report["model_discovery"]["execution_contract"]
     contract["plan_sha256"] = binding["plan_sha256"]
     contract["identity_sha256"] = recovery_identity_sha256(binding)
@@ -1032,9 +1443,11 @@ def test_completed_manifest_restart_interruption_remains_resumable_with_construc
     first_archive = load_annual_report(tmp_path, run["run_id"])
     assert first_archive.snapshot is not None and first_archive.snapshot["is_partial"] is True
     assert first_archive.manifest_summary["status"] == "completed"
-    assert validate_annual_recovery_parent(
+    resume_check = validate_annual_recovery_parent(
         tmp_path, run["run_id"], request, settings=settings, archive=first_archive,
-    )["can_resume"] is True
+    )
+    assert resume_check["can_resume"] is False
+    assert resume_check["reason"] == "recovery_binding_mismatch"
 
     interrupted = save_annual_checkpoint(tmp_path, run["run_id"], {
         "state": "interrupted", "is_partial": True, "parent_run_id": None,
@@ -1046,9 +1459,11 @@ def test_completed_manifest_restart_interruption_remains_resumable_with_construc
         "is_partial": True, "parent_run_id": None,
     }
     assert second_archive.manifest_summary["status"] == "completed"
-    assert validate_annual_recovery_parent(
+    resume_check = validate_annual_recovery_parent(
         tmp_path, run["run_id"], request, settings=settings, archive=second_archive,
-    )["can_resume"] is True
+    )
+    assert resume_check["can_resume"] is False
+    assert resume_check["reason"] == "recovery_binding_mismatch"
     assert running.sequence + 1 == interrupted.sequence
 
 

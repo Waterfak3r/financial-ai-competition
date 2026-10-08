@@ -25,11 +25,11 @@ import type {
   VerificationEvidence,
   VerifiedClaim,
 } from "../types/annualReport";
-import type { AnnualDiscoveryEvidenceIndexItem, AnnualModelDiscovery } from "../types/discoveryEvidence";
+import type { AnnualDiscoveryEvidenceIndexItem, AnnualDiscoveryExecutionContractV4, AnnualModelDiscovery } from "../types/discoveryEvidence";
 import type { AnnualAnalysisHistoryItem } from "../types/annualAnalysisHistory";
 import { NARRATIVE_EVIDENCE_INTERPRETATION_LABEL } from "../types/narrativeEvidence";
 import type { NarrativeEvidence, NarrativeEvidenceResponse } from "../types/narrativeEvidence";
-import type { AnnualAnalysisJob, AnnualAnalysisJobMode, AnnualAnalysisJobRequest } from "../types/annualAnalysisJob";
+import type { AnnualAnalysisBudget, AnnualAnalysisJob, AnnualAnalysisJobMode, AnnualAnalysisJobRequest } from "../types/annualAnalysisJob";
 import type { TextPdfUploadReceipt } from "../types/precheck";
 
 const SAMPLE_RUN_ID = "annual-analysis-21d8da07-097b-4cdf-97ce-6e109c8cc1b8";
@@ -1912,6 +1912,7 @@ function JobStatusPanel({
           <small>批次进度只表示全文扫描阶段；最终评审与报告归档以本任务终态为准。</small>
         </div>
       )}
+      {job.analysis_budget === undefined ? null : <AnnualAnalysisBudgetDetails budget={job.analysis_budget} />}
       {recoveryProgress === undefined ? null : (
         <div className="annual-discovery-progress" role="status" aria-live="polite">
           <strong>续跑尝试统计</strong>
@@ -1996,6 +1997,100 @@ function JobStatusPanel({
   );
 }
 
+function AnnualAnalysisBudgetDetails({ budget }: { budget: AnnualAnalysisBudget }) {
+  const scopeText = budget.scope === "resume" ? "续跑任务" : "首次任务";
+  const limits = budget.provider_attempt_limits;
+  const stages = [
+    ["全文发现扫描", budget.stages.annual_discovery],
+    ["固定候选调查", budget.stages.annual_investigation],
+    ["公司问题归并与补证", budget.stages.annual_issue_grouping],
+    ["最终评审", budget.stages.annual_review],
+  ] as const;
+  return (
+    <details className="annual-discovery-progress annual-analysis-budget">
+      <summary>本次预算与用时</summary>
+      <p>
+        {scopeText}。主报告处理上限 {budget.main_report_limit_seconds} 秒，从任务开始运行计；工作阶段最多 {budget.work_deadline_seconds} 秒，最终保存与有界退出预留 {budget.finalization_reserve_seconds} 秒。
+      </p>
+      <dl className="annual-analysis-budget-overview">
+        <dt>排队等待</dt><dd>{formatDurationSeconds(budget.queue_seconds)}</dd>
+        <dt>运行耗时</dt><dd>{formatDurationSeconds(budget.elapsed_running_seconds)}</dd>
+        <dt>单任务上限基准</dt><dd>首次任务 {limits.task_default_new_run} 次 / 续跑 {limits.task_default_resume} 次</dd>
+        <dt>本次单任务准入上限</dt><dd>{formatInteger(limits.task_effective)} 次</dd>
+        <dt>已准入 / 单任务上限内剩余</dt><dd>{formatInteger(budget.provider_admission_count)} / {formatInteger(budget.provider_attempts_remaining)} 次</dd>
+        <dt>共同调用额度</dt>
+        <dd>{limits.shared_goal_limit === null
+          ? "未配置或未提供"
+          : `后端共同上限 ${formatInteger(limits.shared_goal_limit)} 次；本次启动时剩余 ${limits.shared_goal_remaining_at_start === null ? "未提供" : `${formatInteger(limits.shared_goal_remaining_at_start)} 次`}`}</dd>
+      </dl>
+      <ul className="annual-analysis-budget-stages" aria-label="分阶段时间与准入范围">
+        {stages.map(([label, stage]) => (
+          <li key={label}>
+            <strong>{label}</strong>
+            <span>{stage.status === "reserved"
+              ? "公司问题归并与补证已预留，本轮尚未执行"
+              : budgetStageStatusText(stage.status)}</span>
+            <small>
+              阶段时限 {stage.time_limit_seconds} 秒；阶段准入上限 {stage.attempt_limit} 次；已准入 {stage.admitted_attempts} 次
+              {stage.planned_attempts === null ? "" : `；计划 ${stage.planned_attempts} 次`}
+            </small>
+          </li>
+        ))}
+      </ul>
+      <small>已准入次数包含失败尝试；剩余次数按单任务上限计算。共同额度未知时不代表实际共同额度剩余；不据请求次数推算 token 或费用。</small>
+    </details>
+  );
+}
+
+function AnnualDiscoveryPhaseBudgetDetails({ execution }: { execution: AnnualDiscoveryExecutionContractV4 }) {
+  const budget = execution.phase_budget;
+  const timing = execution.timing;
+  const stageRows = [
+    ["全文发现扫描", budget.stage_time_limits_seconds.annual_discovery, budget.stage_provider_attempt_limits.annual_discovery],
+    ["固定候选调查", budget.stage_time_limits_seconds.annual_investigation, budget.stage_provider_attempt_limits.annual_investigation],
+    ["公司问题归并与补证", budget.stage_time_limits_seconds.annual_issue_grouping, budget.stage_provider_attempt_limits.annual_issue_grouping],
+    ["最终评审", budget.stage_time_limits_seconds.annual_review, budget.stage_provider_attempt_limits.annual_review],
+  ] as const;
+  return (
+    <details className="annual-discovery-scan-details">
+      <summary>执行版本预算与阶段计时</summary>
+      <p className="annual-discovery-technical-note">
+        此处是归档执行版本的阶段配置；它不等同于任务实际可准入额度，也不代表预留阶段已经执行。任务实时额度与排队时间仅在本机任务预算记录存在时显示。
+      </p>
+      <dl className="annual-discovery-coverage-metrics">
+        <dt>执行范围</dt><dd>{budget.scope === "resume" ? "有限续跑" : "首次任务"}</dd>
+        <dt>任务配置上限</dt><dd>{formatInteger(budget.task_provider_attempt_limit)} 次</dd>
+        <dt>版本默认时间上限</dt><dd>300 秒；工作阶段默认 285 秒，最终发布与有界退出默认预留 15 秒</dd>
+        <dt>共同调用额度</dt><dd>{budget.shared_goal_limit === null
+          ? "未配置或未提供"
+          : `共同上限 ${formatInteger(budget.shared_goal_limit)} 次；本次开始时剩余 ${budget.shared_goal_remaining_at_start === null ? "未提供" : `${formatInteger(budget.shared_goal_remaining_at_start)} 次`}`}</dd>
+        <dt>本次全文扫描准入</dt><dd>{formatInteger(execution.provider_admission_count)} 次；收到模型响应 {formatInteger(execution.response_count)} 次</dd>
+        <dt>上下文新增解析</dt><dd>{formatDurationSeconds(timing.source_parse_seconds)}{timing.source_parse_reused ? "（复用既有解析，本次无新增解析）" : ""}</dd>
+        <dt>全文批次规划</dt><dd>{formatDurationSeconds(timing.planning_seconds)}</dd>
+        <dt>发现阶段耗时</dt><dd>{formatDurationSeconds(timing.discovery_elapsed_seconds)}</dd>
+        <dt>发现后工作时间</dt><dd>{timing.main_work_remaining_seconds === null ? "未记录" : `${formatDurationSeconds(timing.main_work_remaining_seconds)} 剩余`}</dd>
+        <dt>调度在途</dt><dd>请求并发上限 {execution.scheduler.requested_max_concurrency}；在途峰值 {execution.scheduler.inflight_peak} / 执行上限 {execution.scheduler.effective_max_concurrency}；检查点发布 {formatInteger(execution.scheduler.checkpoint_publications)} 次</dd>
+        <dt>时间限额结果</dt><dd>{execution.scheduler.time_deadline_reason === "discovery_stage_budget_exhausted"
+          ? "发现扫描达到阶段时间限额"
+          : execution.scheduler.time_deadline_reason === "workflow_time_budget_exhausted"
+            ? "工作阶段达到总时间限额"
+            : "未记录扫描或工作时间限额耗尽；扫描也可能因调用次数或其他原因停止"}</dd>
+      </dl>
+      <ul className="annual-analysis-budget-stages" aria-label="执行版本的阶段配置">
+        {stageRows.map(([label, seconds, attempts]) => (
+          <li key={label}>
+            <strong>{label}</strong>
+            <small>配置时限 {seconds} 秒；阶段配置上限 {attempts} 次</small>
+            {label === "公司问题归并与补证"
+              ? <small>本阶段已预留；这份配置本身不能证明本次已执行。</small>
+              : null}
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
 function AnnualDiscoverySection({
   discovery,
   evidenceIndex,
@@ -2034,6 +2129,7 @@ function AnnualDiscoverySection({
   const isLegacyAiArchive = discovery === null && legacyAiMode;
   const hasDiscoveryFindings = findings.length > 0;
   const coverage = discovery?.coverage ?? null;
+  const execution = discovery?.execution_contract;
   const partialBatchCount = coverage === null ? 0 : discoveryPartialBatchCount(coverage);
   const batchOutcomeLabels = coverage === null ? [] : [
     coverage.successful_batches > 0 ? `${coverage.successful_batches} 批完整通过` : "",
@@ -2147,7 +2243,7 @@ function AnnualDiscoverySection({
                     </ol>
                   </div>
                 ) : null}
-                {discovery.prompt_version === "annual_discovery_v2" ? (
+                {discovery.prompt_version !== "annual_discovery_v1" ? (
                   <p className="annual-discovery-technical-note">
                     部分有效表示仅保留通过格式和原文引用检查的线索，仍可能有内容被剔除；不代表整批完整处理或模型观点已核验。空白还原只修复引用中的换行和空格格式。
                   </p>
@@ -2162,6 +2258,9 @@ function AnnualDiscoverySection({
               </div>
             ) : null}
           </details>
+          {execution?.kind === "fintrace_annual_discovery_execution_v4"
+            ? <AnnualDiscoveryPhaseBudgetDetails execution={execution} />
+            : null}
           {hasDiscoveryFindings && pendingReviewFailed ? (
             <p className="annual-discovery-review-gap" role="note">
               全文扫描已保留 {findings.length} 条待核查线索，但最终评审未完成；线索和原文出处仍可在本区查看。
@@ -2361,6 +2460,7 @@ function DiscoveryReason({ reason, labelPrefix }: { reason: string; labelPrefix:
     model_call_timeout: "本批次等待模型回应超时",
     serialized_input_limit_breached: "本批次文字超过输入长度限制",
     some_findings_rejected: "部分线索未通过结构、字段或原文引用检查；其余有效线索已保留",
+    discovery_stage_budget_exhausted: "发现扫描达到本阶段预算；后续调查与评审仍按各自预算继续",
     workflow_time_budget_exhausted: "扫描达到本次处理时间预算",
   };
   const machineCode = /^[a-z][a-z0-9_]*$/.test(reason);
@@ -5237,7 +5337,7 @@ function discoveryProgressStatusText(
       ? "全文扫描批次已结束，等待最终评审与报告归档。"
       : "全文扫描阶段已结束；整个任务状态以最终报告与任务记录为准。";
   }
-  if (status === "partial" || status === "budget_exhausted" || event === "budget_exhausted") return "扫描因缺口或时间预算提前结束；未尝试批次和失败页面会在最终报告中列出。";
+  if (status === "partial" || status === "budget_exhausted" || event === "budget_exhausted") return "扫描未完整完成；可能触及阶段时间或调用额度，或存在内容缺口。未尝试批次和失败页面会在最终报告中列出。";
   if (status === "failed") return "全文扫描失败；任务可能仍在进行其他归档步骤。";
   if (status === "not_called") return "全文扫描尚未发出模型请求。";
   if (event === "planned") return "已规划全文扫描批次，准备开始处理。";
@@ -5247,6 +5347,26 @@ function discoveryProgressStatusText(
 
 function formatInteger(value: number): string {
   return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 0 }).format(value);
+}
+
+function formatDurationSeconds(value: number): string {
+  if (value < 60) return `${value.toFixed(value % 1 === 0 ? 0 : 1)} 秒`;
+  const minutes = Math.floor(value / 60);
+  const seconds = value - minutes * 60;
+  return `${minutes} 分 ${seconds.toFixed(seconds % 1 === 0 ? 0 : 1)} 秒`;
+}
+
+function budgetStageStatusText(status: AnnualAnalysisBudget["stages"]["annual_discovery"]["status"]): string {
+  const labels: Record<AnnualAnalysisBudget["stages"]["annual_discovery"]["status"], string> = {
+    not_started: "尚未开始",
+    planned: "已规划",
+    running: "进行中",
+    completed: "已完成",
+    partial: "未完整完成",
+    budget_exhausted: "达到本阶段预算",
+    reserved: "已预留",
+  };
+  return labels[status];
 }
 
 function m3StatusText(status: string, screeningStatus: string): string {

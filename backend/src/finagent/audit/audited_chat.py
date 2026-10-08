@@ -12,6 +12,8 @@ import json
 import os
 import time
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -25,6 +27,20 @@ _REDACTED = "[REDACTED]"
 _REPARSE_POINT = 0x400
 _MAX_PROVIDER_ATTEMPTS = 3
 _RETRY_BACKOFF_SECONDS = (0.15, 0.4)
+_ANNUAL_CALL_DEADLINE: ContextVar[float | None] = ContextVar(
+    "fintrace_annual_call_deadline", default=None
+)
+
+
+@contextmanager
+def annual_call_deadline(deadline_monotonic: float | None):
+    """Constrain all audited calls in a workflow stage to one monotonic bound."""
+
+    token = _ANNUAL_CALL_DEADLINE.set(deadline_monotonic)
+    try:
+        yield
+    finally:
+        _ANNUAL_CALL_DEADLINE.reset(token)
 
 
 class AuditPersistError(Exception):
@@ -71,6 +87,7 @@ def audited_complete_chat(
     audit_id: str | None = None,
     call_stage: str | None = None,
     batch_index: int | None = None,
+    abort_event: object | None = None,
 ) -> AuditedChatResult:
     """包装 complete_chat。started 落盘后才联网；响应落盘后才返回。"""
 
@@ -82,6 +99,15 @@ def audited_complete_chat(
     audit_dir = checked_run / identifier
     audit_dir.mkdir(parents=False, exist_ok=False)
     secret = settings.api_key
+    now = time.monotonic()
+    timeout = settings.timeout_seconds if timeout_seconds is None else timeout_seconds
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout < 0:
+        raise ValueError("timeout_seconds must be a finite non-negative number")
+    deadline = now + float(timeout)
+    workflow_deadline = _ANNUAL_CALL_DEADLINE.get()
+    if workflow_deadline is not None:
+        deadline = min(deadline, workflow_deadline)
+    effective_timeout = max(0.0, deadline - now)
     request_record = {
         "audit_id": identifier,
         "status": "started",
@@ -91,7 +117,7 @@ def audited_complete_chat(
         "prompt_version": version,
         "evidence_refs": refs,
         "model": settings.model,
-        "timeout_seconds": settings.timeout_seconds if timeout_seconds is None else timeout_seconds,
+        "timeout_seconds": effective_timeout,
         "messages": [{"role": message.role, "content": message.content} for message in messages],
         "stream": False,
     }
@@ -102,8 +128,6 @@ def audited_complete_chat(
     attempt_records: list[dict[str, object]] = []
     admitted_count = 0
     response_count = 0
-    timeout = settings.timeout_seconds if timeout_seconds is None else timeout_seconds
-    deadline = time.monotonic() + timeout
     completion: ChatCompletion | None = None
     failure: BaseException | None = None
     for attempt_index in range(1, _MAX_PROVIDER_ATTEMPTS + 1):
@@ -184,6 +208,7 @@ def audited_complete_chat(
                 settings,
                 timeout_seconds=remaining,
                 call_context=call_context,
+                abort_event=abort_event,
             )
         except Exception as exc:
             failure = exc
@@ -232,6 +257,8 @@ def audited_complete_chat(
             if remaining <= backoff:
                 break
             time.sleep(backoff)
+            if _abort_event_is_set(abort_event):
+                break
             continue
 
         # Network success and durable audit acceptance are separate events.
@@ -507,6 +534,11 @@ def _failure_category(exc: BaseException) -> str:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _abort_event_is_set(value: object | None) -> bool:
+    checker = getattr(value, "is_set", None)
+    return bool(checker()) if callable(checker) else False
 
 
 def _duration_seconds(started_at: str, finished_at: str) -> float:

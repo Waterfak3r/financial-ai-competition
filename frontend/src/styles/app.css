@@ -5462,6 +5462,50 @@ summary:focus-visible {
   color: #244969;
 }
 
+.annual-analysis-budget summary,
+.annual-discovery-scan-details summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.annual-analysis-budget-overview {
+  display: grid;
+  grid-template-columns: minmax(115px, 0.35fr) minmax(0, 1fr);
+  gap: 0.35rem 0.75rem;
+  margin: 0.35rem 0;
+}
+
+.annual-analysis-budget-overview dt {
+  color: #52677d;
+}
+
+.annual-analysis-budget-overview dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.annual-analysis-budget-stages {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0.45rem 0;
+  padding: 0;
+  list-style: none;
+}
+
+.annual-analysis-budget-stages li {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid #dce7ef;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.annual-analysis-budget-stages small {
+  color: #52677d;
+  overflow-wrap: anywhere;
+}
+
 .annual-discovery {
   min-width: 0;
   scroll-margin-top: 1rem;

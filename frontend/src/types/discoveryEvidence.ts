@@ -35,7 +35,7 @@ export interface AnnualDiscoveryExecutionBatch {
   attempts: AnnualDiscoveryExecutionAttempt[];
 }
 
-export interface AnnualDiscoveryExecutionBinding {
+export interface AnnualDiscoveryExecutionBindingV3 {
   source_sha256: string;
   company_id: string;
   report_year: number;
@@ -49,11 +49,40 @@ export interface AnnualDiscoveryExecutionBinding {
   m3_binding_sha256: string | null;
 }
 
-export interface AnnualDiscoveryExecutionContract {
+export interface AnnualDiscoveryExecutionBindingV4 extends AnnualDiscoveryExecutionBindingV3 {
+  plan_version: "annual_discovery_plan_v3";
+  execution_version: "execution_v4";
+}
+
+export interface AnnualDiscoveryPhaseBudget {
+  schema_version: "annual_analysis_budget_v1";
+  scope: "new_run" | "resume";
+  main_report_limit_seconds: 300;
+  work_deadline_seconds: 285;
+  finalization_reserve_seconds: 15;
+  shared_goal_limit: number | null;
+  shared_goal_remaining_at_start: number | null;
+  task_provider_attempt_limit: 30 | 20;
+  stage_time_limits_seconds: {
+    annual_discovery: 150;
+    annual_investigation: 60;
+    annual_issue_grouping: 35;
+    annual_review: 25;
+  };
+  stage_provider_attempt_limits: {
+    annual_discovery: 18 | 14;
+    annual_investigation: 2;
+    annual_issue_grouping: 8 | 2;
+    annual_review: 2;
+  };
+  stage_provider_attempt_limits_status: "configured";
+}
+
+export interface AnnualDiscoveryExecutionContractV3 {
   kind: "fintrace_annual_discovery_execution_v3";
   plan_sha256: string;
   identity_sha256: string;
-  binding: AnnualDiscoveryExecutionBinding;
+  binding: AnnualDiscoveryExecutionBindingV3;
   parent_run_id: string | null;
   provider_admission_count: number;
   parent_provider_admission_count: number;
@@ -62,6 +91,47 @@ export interface AnnualDiscoveryExecutionContract {
   reused_batches: number[];
   batches: AnnualDiscoveryExecutionBatch[];
 }
+
+export interface AnnualDiscoveryExecutionContractV4 {
+  kind: "fintrace_annual_discovery_execution_v4";
+  plan_sha256: string;
+  identity_sha256: string;
+  binding: AnnualDiscoveryExecutionBindingV4;
+  phase_budget: AnnualDiscoveryPhaseBudget;
+  parent_run_id: string | null;
+  provider_admission_count: number;
+  parent_provider_admission_count: number;
+  cumulative_provider_admission_count: number;
+  response_count: number;
+  reused_batches: number[];
+  batches: AnnualDiscoveryExecutionBatch[];
+  scheduler: AnnualDiscoveryExecutionScheduler;
+  timing: AnnualDiscoveryExecutionTiming;
+}
+
+export interface AnnualDiscoveryExecutionScheduler {
+  requested_max_concurrency: number;
+  effective_max_concurrency: number;
+  inflight_peak: number;
+  checkpoint_coordinator_count: 1;
+  checkpoint_publications: number;
+  dispatch_closed_reason: string | null;
+  time_deadline_reason: "discovery_stage_budget_exhausted" | "workflow_time_budget_exhausted" | null;
+  inflight_drained: boolean;
+  inflight_count: number;
+}
+
+export interface AnnualDiscoveryExecutionTiming {
+  source_parse_seconds: number;
+  planning_seconds: number;
+  source_parse_reused: boolean;
+  discovery_elapsed_seconds: number;
+  main_work_remaining_seconds: number | null;
+}
+
+export type AnnualDiscoveryExecutionContract =
+  | AnnualDiscoveryExecutionContractV3
+  | AnnualDiscoveryExecutionContractV4;
 
 export interface AnnualDiscoveryCoverage {
   total_pages: number;
@@ -147,7 +217,7 @@ export interface AnnualModelDiscovery {
   source_document_id: string;
   source_sha256: string;
   status: AnnualDiscoveryStatus;
-  prompt_version: "annual_discovery_v1" | "annual_discovery_v2";
+  prompt_version: "annual_discovery_v1" | "annual_discovery_v2" | "annual_discovery_v3";
   model_called: boolean;
   model_call_count: number;
   model_call_attempt_count: number;
@@ -168,5 +238,5 @@ export interface AnnualDiscoveryAuditArtifact {
   response_path: string | null;
   failure_path: string | null;
   status: "started" | "succeeded" | "failed" | "incomplete";
-  prompt_version: "annual_discovery_v1" | "annual_discovery_v2";
+  prompt_version: "annual_discovery_v1" | "annual_discovery_v2" | "annual_discovery_v3";
 }
