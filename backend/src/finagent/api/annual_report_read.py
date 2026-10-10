@@ -10,6 +10,7 @@ import re
 import stat
 import uuid
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -114,6 +115,7 @@ _REVIEW_RETRYABLE_FAILURES = frozenset({"connection_error", "http_429", "http_5x
 _REPARSE_POINT_ATTRIBUTE = 0x400
 NARRATIVE_EVIDENCE_INTERPRETATION = "原文片段定位/模型观点引用，非独立因果核验"
 DISCOVERY_EVIDENCE_INTERPRETATION = "年报原文定位，模型发现未经独立语义核验"
+ISSUE_SUPPLEMENT_INTERPRETATION = "同源定向检索片段，角色仅表示上下文、可能解释或未知，不是独立验证"
 
 
 class AnnualReportReadError(Exception):
@@ -331,6 +333,19 @@ def load_annual_report(
     )
     discovery = report.get("model_discovery")
     validated_parent_archive: AnnualReportArchive | None = None
+    investigation_layer = report.get("model_investigation")
+    has_top_issue_layer = "model_issue_pipeline" in report
+    has_nested_issue_layer = isinstance(investigation_layer, Mapping) and "model_issue_pipeline" in investigation_layer
+    if has_top_issue_layer or has_nested_issue_layer:
+        if (
+            not has_top_issue_layer
+            or not isinstance(report.get("model_issue_pipeline"), Mapping)
+            or not isinstance(discovery, Mapping)
+            or "execution_contract" not in discovery
+            or not isinstance(investigation_layer, Mapping)
+            or investigation_layer.get("model_issue_pipeline") != report.get("model_issue_pipeline")
+        ):
+            raise AnnualReportReadError(409, "annual_issue_pipeline_binding_invalid", "年度问题层必须绑定合法的 v4 发现执行契约并在报告与调查附录中一致。")
     if isinstance(discovery, Mapping) and "execution_contract" in discovery:
         contract = discovery.get("execution_contract")
         if not isinstance(contract, Mapping):
@@ -347,8 +362,30 @@ def load_annual_report(
                 current_contract=contract,
                 lineage=lineage,
             )
+        issue_pipeline = report.get("model_issue_pipeline")
+        if issue_pipeline is not None:
+            _validate_v5_issue_pipeline(
+                root,
+                run_id=checked_run_id,
+                report=report,
+                discovery=discovery,
+                issue_pipeline=issue_pipeline,
+                discovery_evidences=discovery_evidences,
+                parent_archive=validated_parent_archive,
+            )
         model_review = report.get("model_review")
-        if isinstance(model_review, Mapping) and model_review.get("reason") == "review_reused_for_matching_inputs":
+        if isinstance(issue_pipeline, Mapping):
+            if isinstance(model_review, Mapping):
+                if model_review.get("reason") == "review_reused_for_matching_inputs":
+                    if validated_parent_archive is None:
+                        raise AnnualReportReadError(409, "annual_review_reuse_invalid", "复用的 v3 年度评审缺少严格验证的父运行。")
+                    _validate_v5_reused_model_review(
+                        root, current_report=report, current_contract=issue_pipeline["execution_binding"],
+                        current_review=model_review, parent_archive=validated_parent_archive,
+                    )
+                else:
+                    _validate_v5_model_review(root, report, issue_pipeline, model_review)
+        elif isinstance(model_review, Mapping) and model_review.get("reason") == "review_reused_for_matching_inputs":
             if validated_parent_archive is None:
                 raise AnnualReportReadError(409, "annual_review_reuse_invalid", "复用的年度评审缺少严格验证的父运行。")
             _validate_v3_reused_model_review(
@@ -496,6 +533,369 @@ def _validate_v3_parent_archive(
     return parent
 
 
+def _validate_v5_issue_pipeline(
+    root: Path,
+    *,
+    run_id: str,
+    report: Mapping[str, Any],
+    discovery: Mapping[str, Any],
+    issue_pipeline: Any,
+    discovery_evidences: tuple[dict[str, Any], ...],
+    parent_archive: AnnualReportArchive | None,
+) -> None:
+    """Strictly rebuild the v5 candidate ledger and its durable shard audits."""
+
+    investigation = report.get("model_investigation")
+    if (
+        not isinstance(issue_pipeline, Mapping)
+        or not isinstance(investigation, Mapping)
+        or investigation.get("model_issue_pipeline") != issue_pipeline
+    ):
+        raise AnnualReportReadError(422, "annual_issue_pipeline_invalid", "年度问题归并层与调查附录不一致。")
+    source_binding = investigation.get("source_binding")
+    if not isinstance(source_binding, Mapping):
+        raise AnnualReportReadError(422, "annual_issue_pipeline_invalid", "年度问题归并缺少来源期次绑定。")
+    report_period = source_binding.get("report_period")
+    if not isinstance(report_period, str) or not report_period.strip():
+        raise AnnualReportReadError(422, "annual_issue_pipeline_invalid", "年度问题归并来源期次无效。")
+    report_year = report.get("report_year")
+    if not _source_period_matches_report_year(report_period, report_year):
+        raise AnnualReportReadError(409, "annual_issue_pipeline_binding_invalid", "年度问题归并来源期次与报告年度不匹配。")
+    identity = {
+        "run_id": run_id,
+        "company_id": report.get("company_id"),
+        "report_year": report_year,
+        "report_period": report_period,
+        "source_document_id": report.get("source_document_id"),
+        "source_sha256": report.get("source_sha256"),
+    }
+    from finagent.agents.annual_issue_pipeline import validate_pipeline
+
+    try:
+        validate_pipeline(issue_pipeline, identity=identity)
+    except (TypeError, ValueError, KeyError) as exc:
+        raise AnnualReportReadError(422, "annual_issue_pipeline_invalid", "年度问题归并记录未通过完整结构与成员守恒校验。") from exc
+    execution = issue_pipeline.get("execution_binding")
+    contract = discovery.get("execution_contract")
+    if (
+        not isinstance(execution, Mapping)
+        or not isinstance(contract, Mapping)
+        or contract.get("kind") != _V4_EXECUTION_KIND
+        or execution.get("discovery_binding") != contract.get("binding")
+        or source_binding.get("source_sha256") != report.get("source_sha256")
+        or source_binding.get("document_id") != report.get("source_document_id")
+        or source_binding.get("company_id") != report.get("company_id")
+    ):
+        raise AnnualReportReadError(409, "annual_issue_pipeline_binding_invalid", "年度问题归并与发现执行契约或来源绑定不一致。")
+    input_value = issue_pipeline.get("input")
+    raw_findings = discovery.get("findings")
+    coverage = discovery.get("coverage")
+    finding_ids = [item.get("finding_id") for item in raw_findings if isinstance(item, Mapping)] if isinstance(raw_findings, list) else None
+    if (
+        not isinstance(input_value, Mapping)
+        or not isinstance(coverage, Mapping)
+        or finding_ids is None
+        or input_value.get("discovery_status") != discovery.get("status")
+        or input_value.get("discovery_coverage_complete") != (coverage.get("complete") is True)
+        or input_value.get("finding_ids") != finding_ids
+        or any(not isinstance(item, str) for item in finding_ids)
+    ):
+        raise AnnualReportReadError(409, "annual_issue_pipeline_discovery_mismatch", "年度问题候选全集与当前发现层不一致。")
+    _validate_issue_candidate_citations(issue_pipeline, discovery_evidences)
+    _validate_issue_supplement_locations(root, run_id, issue_pipeline)
+    _validate_issue_shard_audits(root, run_id, issue_pipeline, parent_archive)
+
+
+def _source_period_matches_report_year(period: object, report_year: object) -> bool:
+    """Match the exact annual period rule used when the source record is bound."""
+
+    if type(report_year) is not int or not isinstance(period, str) or period != f"{report_year:04d}-12-31":
+        return False
+    try:
+        return date.fromisoformat(period).isoformat() == period
+    except ValueError:
+        return False
+
+
+def _validate_issue_candidate_citations(
+    pipeline: Mapping[str, Any], discovery_evidences: tuple[dict[str, Any], ...],
+) -> None:
+    by_id = {item.get("evidence_id"): item for item in discovery_evidences if isinstance(item, Mapping)}
+    candidates = pipeline.get("candidates")
+    if not isinstance(candidates, list):
+        raise AnnualReportReadError(422, "annual_issue_pipeline_invalid", "年度问题候选列表无效。")
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            raise AnnualReportReadError(422, "annual_issue_pipeline_invalid", "年度问题候选结构无效。")
+        finding_id = candidate.get("finding_id")
+        for citation in candidate.get("citations", []):
+            if not isinstance(citation, Mapping):
+                raise AnnualReportReadError(422, "annual_issue_pipeline_invalid", "年度问题原文引用结构无效。")
+            source = by_id.get(citation.get("evidence_id"))
+            citations = source.get("citations") if isinstance(source, Mapping) else None
+            expected = {
+                "source_document_id": source.get("source_document_id") if isinstance(source, Mapping) else None,
+                "source_sha256": source.get("source_sha256") if isinstance(source, Mapping) else None,
+                "pdf_page": source.get("pdf_page") if isinstance(source, Mapping) else None,
+                "block_index": source.get("block_index") if isinstance(source, Mapping) else None,
+                "start_char": source.get("start_char") if isinstance(source, Mapping) else None,
+                "bbox": source.get("bbox") if isinstance(source, Mapping) else None,
+            }
+            quote_exists = isinstance(citations, list) and any(
+                isinstance(item, Mapping)
+                and item.get("finding_id") == finding_id
+                and item.get("quote") == citation.get("quote")
+                for item in citations
+            )
+            if (
+                source is None
+                or any(citation.get(key) != value for key, value in expected.items())
+                or not quote_exists
+            ):
+                raise AnnualReportReadError(409, "annual_issue_pipeline_citation_invalid", "年度问题引用未能重建到当前来源 PDF 与发现原文。")
+
+
+def _validate_issue_supplement_locations(root: Path, run_id: str, pipeline: Mapping[str, Any]) -> None:
+    supplements = pipeline.get("supplements")
+    retrieval = pipeline.get("retrieval_coverage")
+    if not isinstance(supplements, list) or not isinstance(retrieval, Mapping):
+        raise AnnualReportReadError(422, "annual_issue_pipeline_supplement_invalid", "年度同源检索账结构无效。")
+    source_identity = pipeline.get("source_identity")
+    if not isinstance(source_identity, Mapping):
+        raise AnnualReportReadError(422, "annual_issue_pipeline_invalid", "年度问题补证来源身份无效。")
+    if retrieval.get("scope") == "not_started":
+        if supplements:
+            raise AnnualReportReadError(422, "annual_issue_pipeline_supplement_invalid", "未开始同源检索时不能保存补证片段。")
+        return
+    if retrieval.get("scope") != "same_source_extracted_text_blocks":
+        raise AnnualReportReadError(422, "annual_issue_pipeline_supplement_invalid", "年度同源检索范围无效。")
+    source_path = _safe_archive_path(root, ("artifacts", "runs", run_id, "source.pdf"), directory=False, missing_code="archive_incomplete")
+    try:
+        parsed = parse_text_pdf(source_path, str(source_identity.get("source_document_id")))
+    except Exception as exc:
+        raise AnnualReportReadError(422, "annual_issue_pipeline_supplement_invalid", "年度同源补证无法从归档 PDF 重建。") from exc
+    if parsed.source_sha256 != source_identity.get("source_sha256"):
+        raise AnnualReportReadError(409, "annual_issue_pipeline_supplement_invalid", "年度同源补证 PDF 哈希不一致。")
+    from finagent.agents.annual_issue_pipeline import MAX_SUPPLEMENT_PAIRS
+    from finagent.retrieval.annual_issue_supplements import retrieve_annual_issue_supplements
+
+    issues = pipeline.get("issues")
+    if not isinstance(issues, list) or any(not isinstance(item, Mapping) for item in issues):
+        raise AnnualReportReadError(422, "annual_issue_pipeline_supplement_invalid", "年度问题候选无法用于重建同源检索覆盖。")
+    try:
+        expected_items, expected_coverage = retrieve_annual_issue_supplements(
+            issues, parsed,
+            {key: source_identity[key] for key in ("source_document_id", "source_sha256")},
+            max_role_assignments=MAX_SUPPLEMENT_PAIRS,
+        )
+    except (KeyError, TypeError, ValueError):
+        raise AnnualReportReadError(422, "annual_issue_pipeline_supplement_invalid", "年度同源检索范围无法从报告与 PDF 重建。") from None
+    if dict(retrieval) != expected_coverage:
+        raise AnnualReportReadError(409, "annual_issue_pipeline_retrieval_mismatch", "年度同源检索覆盖账与来源 PDF 的完整扫描结果不一致。")
+    location_fields = (
+        "evidence_id", "source_document_id", "source_sha256", "pdf_page", "block_index", "start_char", "end_char",
+        "bbox", "raw_text", "section", "selection_reason", "issue_ids", "verification_status",
+        "independent_verification", "retrieval_is_verification",
+    )
+    if len(supplements) != len(expected_items):
+        raise AnnualReportReadError(409, "annual_issue_pipeline_retrieval_mismatch", "年度同源检索选中片段与来源 PDF 的有界检索结果不一致。")
+    for actual, expected in zip(supplements, expected_items, strict=True):
+        if not isinstance(actual, Mapping) or any(actual.get(key) != expected.get(key) for key in location_fields):
+            raise AnnualReportReadError(409, "annual_issue_pipeline_retrieval_mismatch", "年度同源检索选中片段与来源 PDF 的页块、原文或问题关联不一致。")
+
+
+def _validate_issue_shard_audits(
+    root: Path,
+    run_id: str,
+    pipeline: Mapping[str, Any],
+    parent_archive: AnnualReportArchive | None,
+) -> None:
+    from finagent.agents.annual_issue_pipeline import (
+        ISSUE_WIRE_VERSION,
+        _evidence_refs,
+        _serialize_chat_messages,
+        _wire_message_dicts,
+        _semantic_sha,
+        _unique_object_pairs,
+        parse_typed_result,
+    )
+    from finagent.agents.annual_review_wire import (
+        decode_annual_issue_input_wire,
+        encode_annual_issue_input_wire,
+    )
+    binding = pipeline.get("execution_binding")
+    shards = pipeline.get("shards")
+    summary = pipeline.get("audit_summary")
+    if not isinstance(binding, Mapping) or not isinstance(shards, list) or not isinstance(summary, Mapping):
+        raise AnnualReportReadError(422, "annual_issue_pipeline_audit_invalid", "年度问题分片审计摘要无效。")
+    if binding.get("issue_wire_version") != ISSUE_WIRE_VERSION:
+        raise AnnualReportReadError(409, "annual_issue_pipeline_binding_invalid", "年度问题分片 wire 版本与执行绑定不一致。")
+    prompt_names = {
+        "grouping": "annual_issue_grouping_v1",
+        "global": "annual_issue_global_v1",
+        "supplement": "annual_issue_supplement_v1",
+    }
+    prompt_root = root / "config" / "prompts"
+    audit_projection: list[dict[str, Any]] = []
+    parent_pipeline = None
+    if parent_archive is not None:
+        parent_value = parent_archive.report.get("model_issue_pipeline")
+        if isinstance(parent_value, Mapping):
+            parent_pipeline = parent_value
+    parent_shards = {
+        item.get("shard_id"): item for item in parent_pipeline.get("shards", [])
+        if isinstance(item, Mapping) and isinstance(item.get("shard_id"), str)
+    } if isinstance(parent_pipeline, Mapping) and isinstance(parent_pipeline.get("shards"), list) else {}
+    for shard in shards:
+        if not isinstance(shard, Mapping):
+            raise AnnualReportReadError(422, "annual_issue_pipeline_shard_invalid", "年度问题分片结构无效。")
+        audit = shard.get("audit")
+        if audit is None:
+            if shard.get("attempt_count") != 0 or shard.get("response_count") != 0 or shard.get("reused") is True:
+                raise AnnualReportReadError(422, "annual_issue_pipeline_audit_invalid", "无持久审计的年度问题分片含调用或复用计数。")
+            continue
+        if not isinstance(audit, Mapping):
+            raise AnnualReportReadError(422, "annual_issue_pipeline_audit_invalid", "年度问题分片审计结构无效。")
+        audit_projection.append(dict(audit))
+        if shard.get("reused") is True:
+            parent = parent_shards.get(shard.get("shard_id"))
+            if (
+                parent_archive is None
+                or parent_archive.run_id != shard.get("parent_run_id")
+                or not isinstance(parent, Mapping)
+                or parent.get("status") != "accepted"
+                or any(parent.get(key) != shard.get(key) for key in (
+                    "kind", "semantic_input_sha256", "request_body_sha256", "input_finding_ids",
+                    "input_issue_ids", "input_members", "input", "result", "audit",
+                ))
+            ):
+                raise AnnualReportReadError(409, "annual_issue_pipeline_reuse_invalid", "年度问题分片复用未绑定已严格验证的父分片。")
+            continue
+        relative_dir = audit.get("audit_dir")
+        if not isinstance(relative_dir, str) or "\\" in relative_dir:
+            raise AnnualReportReadError(422, "annual_issue_pipeline_audit_invalid", "年度问题分片审计路径无效。")
+        parts = relative_dir.split("/")
+        if len(parts) != 3 or parts[0] != "runs":
+            raise AnnualReportReadError(422, "annual_issue_pipeline_audit_invalid", "年度问题分片审计路径越界。")
+        origin_run_id = _checked_run_id(parts[1])
+        audit_id = parts[2]
+        if (
+            origin_run_id != run_id or not _is_uuid4(audit_id)
+            or audit.get("request_path") != f"{relative_dir}/request.json"
+            or audit.get("prompt_version") != prompt_names.get(shard.get("kind"))
+            or audit.get("request_body_sha256") != shard.get("request_body_sha256")
+            or audit.get("semantic_input_sha256") != shard.get("semantic_input_sha256")
+        ):
+            raise AnnualReportReadError(422, "annual_issue_pipeline_audit_invalid", "年度问题分片审计身份或请求哈希无效。")
+        if audit.get("response_path") != f"{relative_dir}/response.json" and audit.get("response_path") is not None:
+            raise AnnualReportReadError(422, "annual_issue_pipeline_audit_invalid", "年度问题分片响应审计路径无效。")
+        if audit.get("failure_path") != f"{relative_dir}/failure.json" and audit.get("failure_path") is not None:
+            raise AnnualReportReadError(422, "annual_issue_pipeline_audit_invalid", "年度问题分片失败审计路径无效。")
+        audit_parts = ("artifacts", "runs", origin_run_id, audit_id)
+        request_path = _safe_archive_path(root, (*audit_parts, "request.json"), directory=False, missing_code="archive_incomplete")
+        request_record = _parse_json_object(_read_checked_file(request_path, _MAX_REVIEW_AUDIT_BYTES, "archive_incomplete"), "annual_issue_pipeline_audit_invalid")
+        kind = str(shard.get("kind"))
+        prompt_path = prompt_root / {
+            "grouping": "annual_issue_grouping_v1.md",
+            "global": "annual_issue_global_v1.md",
+            "supplement": "annual_issue_supplement_v1.md",
+        }[kind]
+        try:
+            prompt = prompt_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise AnnualReportReadError(422, "annual_issue_pipeline_audit_invalid", "年度问题提示词无法重建。") from exc
+        request_messages = request_record.get("messages")
+        user_content = request_messages[1].get("content") if isinstance(request_messages, list) and len(request_messages) == 2 and isinstance(request_messages[1], Mapping) else None
+        if not isinstance(user_content, str):
+            raise AnnualReportReadError(422, "annual_issue_pipeline_audit_invalid", "年度问题分片输入消息无效。")
+        try:
+            wire_envelope = json.loads(user_content, object_pairs_hook=_unique_object_pairs)
+            decoded_input = decode_annual_issue_input_wire(wire_envelope)
+            canonical_wire = json.dumps(
+                encode_annual_issue_input_wire(decoded_input),
+                ensure_ascii=False, separators=(",", ":"), allow_nan=False,
+            )
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise AnnualReportReadError(409, "annual_issue_pipeline_wire_invalid", "年度问题分片 typed 输入无法严格解码。") from exc
+        if (
+            not isinstance(decoded_input, Mapping)
+            or _semantic_sha(decoded_input) != shard.get("semantic_input_sha256")
+            or _semantic_sha(decoded_input) != _semantic_sha(shard.get("input"))
+            or canonical_wire != user_content
+        ):
+            raise AnnualReportReadError(409, "annual_issue_pipeline_semantic_input_invalid", "年度问题分片 decoded 业务输入与完整归档不一致。")
+        messages = _wire_message_dicts(prompt, decoded_input)
+        expected_evidence_refs = [
+            {"document_id": item.document_id, "page": item.page}
+            for item in _evidence_refs(shard.get("input", {}))
+        ]
+        request_fields = {
+            "audit_id", "status", "started_at", "finished_at", "duration_seconds",
+            "prompt_version", "evidence_refs", "model", "timeout_seconds", "messages", "stream",
+        }
+        if (
+            set(request_record) != request_fields or request_record.get("audit_id") != audit_id
+            or request_record.get("status") != "started" or request_record.get("prompt_version") != prompt_names[kind]
+            or request_record.get("model") != binding.get("model") or request_record.get("messages") != messages
+            or request_record.get("evidence_refs") != expected_evidence_refs
+            or request_record.get("stream") is not False or request_record.get("finished_at") is not None
+            or request_record.get("duration_seconds") is not None
+        ):
+            raise AnnualReportReadError(409, "annual_issue_pipeline_audit_invalid", "年度问题分片的持久请求正文与业务输入不一致。")
+        try:
+            actual_wire_hash = hashlib.sha256(
+                _serialize_chat_messages(str(request_record["model"]), request_record["messages"])
+            ).hexdigest()
+        except Exception as exc:
+            raise AnnualReportReadError(422, "annual_issue_pipeline_audit_invalid", "年度问题分片 wire body 无法重建。") from exc
+        if actual_wire_hash != shard.get("request_body_sha256"):
+            raise AnnualReportReadError(409, "annual_issue_pipeline_wire_hash_invalid", "年度问题分片实际请求体哈希不一致。")
+        response_relative = audit.get("response_path")
+        if response_relative is not None:
+            response_path = _safe_archive_path(root, (*audit_parts, "response.json"), directory=False, missing_code="archive_incomplete")
+            response_record = _parse_json_object(_read_checked_file(response_path, _MAX_REVIEW_AUDIT_BYTES, "archive_incomplete"), "annual_issue_pipeline_audit_invalid")
+            response_fields = {
+                "status", "started_at", "finished_at", "duration_seconds", "text", "model",
+                "response_id", "usage", "provider_admission_count", "response_count", "attempt_records",
+            }
+            if (
+                set(response_record) != response_fields or response_record.get("status") != "succeeded"
+                or type(response_record.get("provider_admission_count")) is not int
+                or response_record.get("provider_admission_count") != shard.get("attempt_count")
+                or type(response_record.get("response_count")) is not int
+                or response_record.get("response_count") != shard.get("response_count")
+                or not isinstance(response_record.get("text"), str)
+                or response_record.get("response_count", 0) < 1
+            ):
+                raise AnnualReportReadError(409, "annual_issue_pipeline_audit_invalid", "年度问题分片持久响应计数或格式无效。")
+            try:
+                parsed_result = parse_typed_result(response_record["text"], kind=kind, input_value=shard["input"])
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                parsed_result = None
+            if shard.get("status") == "accepted" and parsed_result != shard.get("result"):
+                raise AnnualReportReadError(409, "annual_issue_pipeline_shard_result_invalid", "年度问题分片已接受结果与原始响应重建不一致。")
+            if shard.get("status") == "pending" and parsed_result is not None:
+                raise AnnualReportReadError(409, "annual_issue_pipeline_shard_result_invalid", "已可接受的年度问题响应被错误记为 pending。")
+        else:
+            if (
+                shard.get("status") == "accepted" or audit.get("status") != "failed"
+                or audit.get("failure_path") != f"{relative_dir}/failure.json"
+            ):
+                raise AnnualReportReadError(409, "annual_issue_pipeline_audit_invalid", "已接受年度问题分片缺少成功响应或失败审计。")
+            failure_path = _safe_archive_path(root, (*audit_parts, "failure.json"), directory=False, missing_code="archive_incomplete")
+            failure_record = _parse_json_object(_read_checked_file(failure_path, _MAX_REVIEW_AUDIT_BYTES, "archive_incomplete"), "annual_issue_pipeline_audit_invalid")
+            _validate_audited_failure_record(
+                root, audit_parts, failure_record,
+                expected_messages=messages,
+                expected_model=str(binding.get("model")), expected_prompt_version=prompt_names[kind],
+                expected_evidence_refs=expected_evidence_refs,
+                expected_admissions=shard.get("attempt_count"), expected_responses=shard.get("response_count"),
+                code="annual_issue_pipeline_audit_invalid",
+            )
+    if summary.get("audit_artifacts") != audit_projection:
+        raise AnnualReportReadError(409, "annual_issue_pipeline_audit_invalid", "年度问题审计索引与各分片不一致。")
+
+
 def _validate_v3_reused_model_review(
     root: Path,
     *,
@@ -629,6 +1029,415 @@ def _validate_v3_called_model_review(
         binding=binding,
         investigation=investigation,
     )
+
+
+def _validate_v5_model_review(
+    root: Path,
+    report: Mapping[str, Any],
+    pipeline: Mapping[str, Any],
+    review: Any,
+) -> None:
+    """Validate the additive full-set review contract without changing v2."""
+
+    from finagent.agents.annual_review import (
+        V3_REVIEW_INPUT_PROJECTION_VERSION,
+        V3_REVIEW_WIRE_VERSION,
+        V3_MAX_REQUEST_CHARS,
+        V3_PROMPT_VERSION,
+        build_annual_review_v3_request,
+        _build_review_input_v3,
+        parse_model_review_v3,
+    )
+    from finagent.agents.annual_review_wire import decode_annual_review_v3_wire, encode_annual_review_v3_wire
+    from finagent.llm.chat_completion import ChatMessage, serialize_chat_body
+
+    fields = {
+        "status", "reason", "assessment", "summary", "reasons", "follow_up_items",
+        "limitations", "model_called", "call_count", "call_attempt_count", "audit_artifacts",
+        "source_identity", "prompt_version",
+    }
+    if (
+        not isinstance(review, Mapping) or set(review) != fields
+        or review.get("prompt_version") != V3_PROMPT_VERSION
+        or review.get("status") not in {"not_called", "abstained", "failed", "completed"}
+        or review.get("source_identity") != _review_report_identity(report)
+        or type(review.get("model_called")) is not bool
+        or type(review.get("call_count")) is not int or review["call_count"] < 0
+        or type(review.get("call_attempt_count")) is not int or review["call_attempt_count"] < review["call_count"]
+        or not isinstance(review.get("audit_artifacts"), list)
+    ):
+        raise AnnualReportReadError(422, "annual_review_invalid", "年度 v3 完整集合评审结构无效。")
+    reason = review.get("reason")
+    if reason == "review_reused_for_matching_inputs":
+        raise AnnualReportReadError(409, "annual_review_reuse_invalid", "复用的年度 v3 评审必须绑定并验证其父运行。")
+    if review.get("model_called") is False:
+        if (
+            review.get("status") == "completed" or review.get("call_count") != 0
+            or review.get("call_attempt_count") != 0
+            or review.get("assessment") is not None or review.get("summary") is not None
+            or review.get("reasons") != [] or review.get("follow_up_items") != [] or review.get("limitations") != []
+        ):
+            raise AnnualReportReadError(422, "annual_review_invalid", "未调用的年度 v3 评审不能含模型意见或调用证据。")
+        if not review.get("audit_artifacts"):
+            return
+        if review.get("status") != "failed" or len(review["audit_artifacts"]) != 1:
+            raise AnnualReportReadError(422, "annual_review_invalid", "零准入失败审计必须是一条显式失败记录。")
+    if (
+        review.get("status") not in {"completed", "failed"}
+        or review.get("model_called") is True and review.get("call_attempt_count", 0) < 1
+        or len(review["audit_artifacts"]) != 1
+    ):
+        raise AnnualReportReadError(422, "annual_review_invalid", "已调用的年度 v3 评审状态或计数无效。")
+    investigation = report.get("model_investigation")
+    binding = pipeline.get("execution_binding")
+    if not isinstance(investigation, Mapping) or not isinstance(binding, Mapping) or investigation.get("model_name") != binding.get("model"):
+        raise AnnualReportReadError(409, "annual_review_invalid", "年度 v3 评审模型与 execution_v5 不一致。")
+    try:
+        prompt = (root / "config" / "prompts" / "annual_review_v3.md").read_text(encoding="utf-8")
+        review_input, allowed_ids, evidence_refs, no_priority_allowed = _build_review_input_v3(
+            report, investigation, _review_report_identity(report),
+            request_model=str(binding["model"]), system_prompt=prompt,
+        )
+        request_binding = build_annual_review_v3_request(review_input, model=str(binding["model"]), system_prompt=prompt)
+        user_content = request_binding["user_content"]
+        messages = request_binding["messages"]
+        if request_binding["request_chars"] > V3_MAX_REQUEST_CHARS:
+            raise ValueError("review_request_oversized")
+    except Exception as exc:
+        raise AnnualReportReadError(409, "annual_review_invalid", "年度 v3 评审完整输入无法按 24k 上限重建。") from exc
+    audit = review["audit_artifacts"][0]
+    audit_fields = {
+        "audit_dir", "request_path", "response_path", "failure_path", "status", "prompt_version",
+        "request_body_sha256", "semantic_input_sha256", "projected_input_sha256",
+        "review_wire_version", "review_input_projection_version",
+    }
+    if not isinstance(audit, Mapping) or set(audit) != audit_fields:
+        raise AnnualReportReadError(422, "annual_review_audit_invalid", "年度 v3 评审审计字段集合无效。")
+    relative_dir = audit.get("audit_dir")
+    if not isinstance(relative_dir, str) or "\\" in relative_dir:
+        raise AnnualReportReadError(422, "annual_review_audit_invalid", "年度 v3 评审审计路径无效。")
+    parts = relative_dir.split("/")
+    if len(parts) != 3 or parts[0] != "runs" or _checked_run_id(parts[1]) != report.get("run_id") or not _is_uuid4(parts[2]):
+        raise AnnualReportReadError(422, "annual_review_audit_invalid", "年度 v3 评审审计归属无效。")
+    audit_id = parts[2]
+    if (
+        audit.get("request_path") != f"{relative_dir}/request.json"
+        or audit.get("prompt_version") != V3_PROMPT_VERSION
+        or binding.get("review_wire_version") != V3_REVIEW_WIRE_VERSION
+        or binding.get("review_input_projection_version") != V3_REVIEW_INPUT_PROJECTION_VERSION
+        or audit.get("review_wire_version") != request_binding["review_wire_version"]
+        or audit.get("review_input_projection_version") != request_binding["review_input_projection_version"]
+        or audit.get("semantic_input_sha256") != request_binding["semantic_input_sha256"]
+        or audit.get("projected_input_sha256") != request_binding["projected_input_sha256"]
+        or audit.get("request_body_sha256") != request_binding["request_body_sha256"]
+    ):
+        raise AnnualReportReadError(409, "annual_review_audit_invalid", "年度 v3 评审持久请求 hash 或提示词版本无效。")
+    audit_parts = ("artifacts", "runs", str(parts[1]), audit_id)
+    request_path = _safe_archive_path(root, (*audit_parts, "request.json"), directory=False, missing_code="archive_incomplete")
+    request = _parse_json_object(_read_checked_file(request_path, _MAX_REVIEW_AUDIT_BYTES, "archive_incomplete"), "annual_review_audit_invalid")
+    if (
+        set(request) != {"audit_id", "status", "started_at", "finished_at", "duration_seconds", "prompt_version", "evidence_refs", "model", "timeout_seconds", "messages", "stream"}
+        or request.get("audit_id") != audit_id or request.get("status") != "started"
+        or request.get("prompt_version") != V3_PROMPT_VERSION
+        or request.get("messages") != [{"role": message.role, "content": message.content} for message in messages]
+        or request.get("model") != binding.get("model") or request.get("stream") is not False
+        or request.get("finished_at") is not None or request.get("duration_seconds") is not None
+        or request.get("evidence_refs") != [{"document_id": item.document_id, "page": item.page} for item in evidence_refs]
+        or not _finite_positive_number(request.get("timeout_seconds"))
+    ):
+        raise AnnualReportReadError(409, "annual_review_audit_invalid", "年度 v3 评审审计请求与完整语义输入不一致。")
+    try:
+        persisted_user_content = request["messages"][1]["content"]
+        persisted_envelope = json.loads(persisted_user_content)
+        decoded_projection = decode_annual_review_v3_wire(persisted_envelope)
+        canonical_wire = json.dumps(
+            encode_annual_review_v3_wire(decoded_projection),
+            ensure_ascii=False, separators=(",", ":"), allow_nan=False,
+        )
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise AnnualReportReadError(409, "annual_review_wire_invalid", "年度 v3 评审 typed 输入无法严格解码。") from exc
+    if decoded_projection != request_binding["projected_input"] or canonical_wire != persisted_user_content:
+        raise AnnualReportReadError(409, "annual_review_projection_invalid", "年度 v3 评审 purpose projection 与持久请求不一致。")
+    try:
+        body_hash = hashlib.sha256(serialize_chat_body(
+            str(request["model"]), [ChatMessage(role=item["role"], content=item["content"]) for item in request["messages"]],
+        )).hexdigest()
+    except Exception as exc:
+        raise AnnualReportReadError(422, "annual_review_audit_invalid", "年度 v3 评审实际请求体无法重建。") from exc
+    if body_hash != audit.get("request_body_sha256"):
+        raise AnnualReportReadError(409, "annual_review_audit_invalid", "年度 v3 评审实际请求体哈希不一致。")
+    response_relative = audit.get("response_path")
+    failure_relative = audit.get("failure_path")
+    if audit.get("status") == "succeeded":
+        if response_relative != f"{relative_dir}/response.json" or failure_relative is not None:
+            raise AnnualReportReadError(422, "annual_review_audit_invalid", "年度 v3 评审成功审计路径无效。")
+        response_path = _safe_archive_path(root, (*audit_parts, "response.json"), directory=False, missing_code="archive_incomplete")
+        response = _parse_json_object(_read_checked_file(response_path, _MAX_REVIEW_AUDIT_BYTES, "archive_incomplete"), "annual_review_audit_invalid")
+        _validate_v5_review_response(
+            root, audit_parts, response, messages, binding, review, allowed_ids,
+            no_priority_allowed, report, review_input["limitations_required"],
+        )
+    elif audit.get("status") == "failed":
+        if response_relative is not None or failure_relative != f"{relative_dir}/failure.json" or review.get("status") == "completed":
+            raise AnnualReportReadError(422, "annual_review_audit_invalid", "年度 v3 评审失败审计路径无效。")
+        failure_path = _safe_archive_path(root, (*audit_parts, "failure.json"), directory=False, missing_code="archive_incomplete")
+        failure = _parse_json_object(_read_checked_file(failure_path, _MAX_REVIEW_AUDIT_BYTES, "archive_incomplete"), "annual_review_audit_invalid")
+        _validate_audited_failure_record(
+            root, audit_parts, failure,
+            expected_messages=[{"role": message.role, "content": message.content} for message in messages],
+            expected_model=str(binding["model"]), expected_prompt_version=V3_PROMPT_VERSION,
+            expected_evidence_refs=[{"document_id": item.document_id, "page": item.page} for item in evidence_refs],
+            expected_admissions=review["call_attempt_count"], expected_responses=review["call_count"],
+            code="annual_review_audit_invalid",
+        )
+        if (
+            review.get("model_called") != (failure["provider_admission_count"] > 0)
+            or review.get("assessment") is not None or review.get("summary") is not None
+            or review.get("reasons") != [] or review.get("follow_up_items") != []
+            or review.get("limitations") != []
+        ):
+            raise AnnualReportReadError(409, "annual_review_audit_invalid", "失败的年度 v3 评审结果或耐久调用计数不匹配。")
+    else:
+        raise AnnualReportReadError(422, "annual_review_audit_invalid", "年度 v3 评审审计状态无效。")
+
+
+def _validate_v5_review_response(
+    root: Path,
+    audit_parts: tuple[str, ...],
+    response: Mapping[str, Any],
+    messages: list[Any],
+    binding: Mapping[str, Any],
+    review: Mapping[str, Any],
+    allowed_ids: set[str],
+    no_priority_allowed: bool,
+    report: Mapping[str, Any],
+    limitations_required: list[str],
+) -> None:
+    from finagent.agents.annual_review import parse_model_review_v3
+
+    fields = {"status", "started_at", "finished_at", "duration_seconds", "text", "model", "response_id", "usage", "provider_admission_count", "response_count", "attempt_records"}
+    attempts = response.get("attempt_records") if isinstance(response, Mapping) else None
+    if (
+        not isinstance(response, Mapping) or set(response) != fields or response.get("status") != "succeeded"
+        or type(response.get("provider_admission_count")) is not int
+        or response.get("provider_admission_count") != review.get("call_attempt_count")
+        or type(response.get("response_count")) is not int
+        or response.get("response_count") != review.get("call_count")
+        or not isinstance(response.get("text"), str) or not isinstance(attempts, list)
+        or len(attempts) != response.get("provider_admission_count")
+    ):
+        raise AnnualReportReadError(409, "annual_review_audit_invalid", "年度 v3 评审持久响应或耐久计数无效。")
+    last_text = None
+    successful_attempts = 0
+    for index, attempt in enumerate(attempts, start=1):
+        if (
+            not isinstance(attempt, Mapping) or set(attempt) != {"attempt_index", "audit_id", "admission_id", "provider_admitted", "response_accepted", "accepted_findings", "status", "reason"}
+            or attempt.get("attempt_index") != index or type(attempt.get("provider_admitted")) is not bool
+            or attempt.get("provider_admitted") is not True or type(attempt.get("response_accepted")) is not bool
+        ):
+            raise AnnualReportReadError(409, "annual_review_audit_invalid", "年度 v3 评审 attempt ledger 无效。")
+        attempt_dir = f"attempt-{index:02d}"
+        attempt_request_path = _safe_archive_path(root, (*audit_parts, attempt_dir, "request.json"), directory=False, missing_code="archive_incomplete")
+        attempt_request = _parse_json_object(_read_checked_file(attempt_request_path, _MAX_REVIEW_AUDIT_BYTES, "archive_incomplete"), "annual_review_audit_invalid")
+        if (
+            set(attempt_request) != {"status", "attempt_index", "audit_id", "started_at", "prompt_version", "evidence_refs", "model", "timeout_seconds", "messages", "stream"}
+            or attempt_request.get("status") != "started" or attempt_request.get("attempt_index") != index
+            or attempt_request.get("audit_id") != attempt.get("audit_id")
+            or attempt_request.get("prompt_version") != "annual_review_v3"
+            or attempt_request.get("model") != binding.get("model")
+            or attempt_request.get("messages") != [{"role": row.role, "content": row.content} if hasattr(row, "role") else row for row in messages]
+            or attempt_request.get("stream") is not False
+        ):
+            raise AnnualReportReadError(409, "annual_review_audit_invalid", "年度 v3 评审单次请求与持久主请求不一致。")
+        if attempt.get("response_accepted") is True:
+            if index != len(attempts) or attempt.get("status") != "succeeded" or attempt.get("reason") is not None:
+                raise AnnualReportReadError(409, "annual_review_audit_invalid", "年度 v3 评审成功 attempt 顺序无效。")
+            attempt_response_path = _safe_archive_path(root, (*audit_parts, attempt_dir, "response.json"), directory=False, missing_code="archive_incomplete")
+            attempt_response = _parse_json_object(_read_checked_file(attempt_response_path, _MAX_REVIEW_AUDIT_BYTES, "archive_incomplete"), "annual_review_audit_invalid")
+            if (
+                set(attempt_response) != {"status", "attempt_index", "audit_id", "finished_at", "text", "model", "response_id", "usage", "provider_admitted", "admission_id"}
+                or attempt_response.get("status") != "succeeded" or attempt_response.get("attempt_index") != index
+                or attempt_response.get("audit_id") != attempt.get("audit_id") or attempt_response.get("provider_admitted") is not True
+                or attempt_response.get("admission_id") != attempt.get("admission_id")
+                or attempt_response.get("model") != response.get("model")
+                or attempt_response.get("text") != response.get("text")
+                or attempt_response.get("response_id") != response.get("response_id")
+                or attempt_response.get("usage") != response.get("usage")
+            ):
+                raise AnnualReportReadError(409, "annual_review_audit_invalid", "年度 v3 评审原始 attempt 响应与汇总不一致。")
+            successful_attempts += 1
+            last_text = attempt_response.get("text")
+        else:
+            if index == len(attempts) or attempt.get("status") != "failed" or attempt.get("reason") not in _REVIEW_RETRYABLE_FAILURES:
+                raise AnnualReportReadError(409, "annual_review_audit_invalid", "年度 v3 评审失败 attempt 顺序或类别无效。")
+            attempt_failure_path = _safe_archive_path(root, (*audit_parts, attempt_dir, "failure.json"), directory=False, missing_code="archive_incomplete")
+            attempt_failure = _parse_json_object(_read_checked_file(attempt_failure_path, _MAX_REVIEW_AUDIT_BYTES, "archive_incomplete"), "annual_review_audit_invalid")
+            if (
+                set(attempt_failure) != {"status", "attempt_index", "audit_id", "finished_at", "category", "provider_admitted"}
+                or attempt_failure.get("status") != "failed" or attempt_failure.get("attempt_index") != index
+                or attempt_failure.get("audit_id") != attempt.get("audit_id")
+                or attempt_failure.get("category") != attempt.get("reason") or attempt_failure.get("provider_admitted") is not True
+            ):
+                raise AnnualReportReadError(409, "annual_review_audit_invalid", "年度 v3 评审失败 attempt 原始记录不一致。")
+    if successful_attempts != response.get("response_count") or last_text != response.get("text"):
+        raise AnnualReportReadError(409, "annual_review_audit_invalid", "年度 v3 评审耐久响应数不匹配。")
+    try:
+        parsed = parse_model_review_v3(
+            str(response["text"]), allowed_ids=allowed_ids,
+            no_priority_allowed=no_priority_allowed,
+            pipeline=report.get("model_issue_pipeline"),
+            limitations_required=limitations_required,
+        )
+    except Exception:
+        parsed = None
+    if review.get("status") == "completed":
+        if parsed is None or any(review.get(key) != parsed.get(key) for key in ("assessment", "summary", "reasons", "follow_up_items", "limitations")):
+            raise AnnualReportReadError(409, "annual_review_result_invalid", "年度 v3 评审完成内容与原始 typed response 不一致。")
+    elif parsed is None and (
+        review.get("assessment") is not None or review.get("summary") is not None
+        or review.get("reasons") != [] or review.get("follow_up_items") != [] or review.get("limitations") != []
+    ):
+        raise AnnualReportReadError(409, "annual_review_result_invalid", "拒绝的年度 v3 评审响应不能残留模型意见。")
+
+
+def _validate_audited_failure_record(
+    root: Path,
+    audit_parts: tuple[str, ...],
+    failure: Mapping[str, Any],
+    *,
+    expected_messages: list[dict[str, str]],
+    expected_model: str,
+    expected_prompt_version: str,
+    expected_evidence_refs: list[dict[str, Any]],
+    expected_admissions: int,
+    expected_responses: int,
+    code: str,
+) -> None:
+    """Rebuild a failed AuditedChat ledger; paths alone do not prove zero calls."""
+
+    fields = {
+        "status", "started_at", "finished_at", "duration_seconds", "category",
+        "provider_admission_count", "response_count", "attempt_records",
+    }
+    attempts = failure.get("attempt_records") if isinstance(failure, Mapping) else None
+    if (
+        not isinstance(failure, Mapping) or set(failure) != fields
+        or failure.get("status") != "failed"
+        or type(failure.get("provider_admission_count")) is not int
+        or failure.get("provider_admission_count") != expected_admissions
+        or type(failure.get("response_count")) is not int
+        or failure.get("response_count") != expected_responses
+        or expected_responses != 0
+        or not isinstance(failure.get("category"), str) or not failure["category"]
+        or not isinstance(failure.get("started_at"), str) or not failure["started_at"]
+        or not isinstance(failure.get("finished_at"), str) or not failure["finished_at"]
+        or not _finite_nonnegative_number(failure.get("duration_seconds"))
+        or not isinstance(attempts, list) or not 1 <= len(attempts) <= _MAX_REVIEW_PROVIDER_ATTEMPTS
+    ):
+        raise AnnualReportReadError(409, code, "持久模型失败记录与阶段调用计数无效。")
+    admissions = 0
+    for index, attempt in enumerate(attempts, start=1):
+        if (
+            not isinstance(attempt, Mapping)
+            or set(attempt) != {"attempt_index", "audit_id", "admission_id", "provider_admitted", "response_accepted", "accepted_findings", "status", "reason"}
+            or attempt.get("attempt_index") != index
+            or type(attempt.get("provider_admitted")) is not bool
+            or attempt.get("response_accepted") is not False
+            or type(attempt.get("accepted_findings")) is not int or attempt["accepted_findings"] != 0
+            or not isinstance(attempt.get("reason"), str) or not attempt["reason"]
+            or attempt.get("status") != ("failed" if attempt.get("provider_admitted") else "rejected")
+            or attempt.get("provider_admitted") is True and not _is_uuid4(attempt.get("admission_id"))
+            or attempt.get("provider_admitted") is False and attempt.get("admission_id") is not None
+        ):
+            raise AnnualReportReadError(409, code, "持久模型失败 attempt ledger 无效。")
+        admissions += int(attempt["provider_admitted"])
+        attempt_dir = f"attempt-{index:02d}"
+        request_path = _safe_archive_path(root, (*audit_parts, attempt_dir, "request.json"), directory=False, missing_code="archive_incomplete")
+        request = _parse_json_object(_read_checked_file(request_path, _MAX_REVIEW_AUDIT_BYTES, "archive_incomplete"), code)
+        request_fields = {"status", "attempt_index", "audit_id", "started_at", "prompt_version", "evidence_refs", "model", "timeout_seconds", "messages", "stream"}
+        if (
+            set(request) != request_fields or request.get("status") != "started"
+            or request.get("attempt_index") != index or request.get("audit_id") != attempt.get("audit_id")
+            or not _is_uuid4(attempt.get("audit_id"))
+            or request.get("prompt_version") != expected_prompt_version
+            or request.get("evidence_refs") != expected_evidence_refs
+            or request.get("model") != expected_model or request.get("messages") != expected_messages
+            or request.get("stream") is not False or not _finite_positive_number(request.get("timeout_seconds"))
+        ):
+            raise AnnualReportReadError(409, code, "失败 attempt 的请求内容与原始业务请求不一致。")
+        failure_path = _safe_archive_path(root, (*audit_parts, attempt_dir, "failure.json"), directory=False, missing_code="archive_incomplete")
+        attempt_failure = _parse_json_object(_read_checked_file(failure_path, _MAX_REVIEW_AUDIT_BYTES, "archive_incomplete"), code)
+        if (
+            attempt_failure.get("status") != "failed"
+            or attempt_failure.get("audit_id") != attempt.get("audit_id")
+            or attempt_failure.get("category") != attempt.get("reason")
+            or attempt_failure.get("provider_admitted") is not attempt.get("provider_admitted")
+            or set(attempt_failure) not in (
+                {"status", "audit_id", "category", "provider_admitted"},
+                {"status", "attempt_index", "audit_id", "finished_at", "category", "provider_admitted"},
+            )
+            or "attempt_index" in attempt_failure and attempt_failure.get("attempt_index") != index
+        ):
+            raise AnnualReportReadError(409, code, "失败 attempt 的原始持久记录不一致。")
+        if index < len(attempts) and (attempt.get("provider_admitted") is not True or attempt.get("reason") not in _REVIEW_RETRYABLE_FAILURES):
+            raise AnnualReportReadError(409, code, "非重试型失败后仍存在后续 provider attempt。")
+    if admissions != failure.get("provider_admission_count") or attempts[-1].get("reason") != failure.get("category"):
+        raise AnnualReportReadError(409, code, "失败 ledger 的耐久响应、准入数或最终错误类别不匹配。")
+
+
+def _validate_v5_reused_model_review(
+    root: Path,
+    *,
+    current_report: Mapping[str, Any],
+    current_contract: Mapping[str, Any],
+    current_review: Mapping[str, Any],
+    parent_archive: AnnualReportArchive,
+) -> None:
+    parent_report = parent_archive.report
+    parent_review = parent_report.get("model_review")
+    parent_investigation = parent_report.get("model_investigation")
+    current_investigation = current_report.get("model_investigation")
+    parent_pipeline = parent_report.get("model_issue_pipeline")
+    parent_binding = parent_pipeline.get("execution_binding") if isinstance(parent_pipeline, Mapping) else None
+    required = {
+        "status", "reason", "assessment", "summary", "reasons", "follow_up_items", "limitations",
+        "model_called", "call_count", "call_attempt_count", "audit_artifacts", "source_identity", "prompt_version",
+    }
+    if (
+        not isinstance(parent_review, Mapping) or not isinstance(current_review, Mapping)
+        or set(parent_review) != required or set(current_review) != required
+        or parent_review.get("status") != "completed"
+        or parent_review.get("prompt_version") != "annual_review_v3"
+        or current_review.get("status") != "completed"
+        or current_review.get("reason") != "review_reused_for_matching_inputs"
+        or current_review.get("prompt_version") != "annual_review_v3"
+        or current_review.get("model_called") is not False
+        or current_review.get("call_count") != 0 or current_review.get("call_attempt_count") != 0
+        or current_review.get("audit_artifacts") != parent_review.get("audit_artifacts")
+        or not isinstance(current_investigation, Mapping) or not isinstance(parent_investigation, Mapping)
+        or current_investigation.get("model_name") != parent_investigation.get("model_name")
+        or not isinstance(parent_binding, Mapping) or dict(parent_binding) != dict(current_contract)
+    ):
+        raise AnnualReportReadError(409, "annual_review_reuse_invalid", "年度 v3 评审复用身份或父链不一致。")
+    for key in ("assessment", "summary", "reasons", "follow_up_items", "limitations"):
+        if current_review.get(key) != parent_review.get(key):
+            raise AnnualReportReadError(409, "annual_review_reuse_invalid", "年度 v3 评审复用业务意见与已验证父结果不一致。")
+    if current_review.get("source_identity") != _review_report_identity(current_report):
+        raise AnnualReportReadError(409, "annual_review_reuse_invalid", "年度 v3 评审复用 run 身份没有受控重绑定。")
+    try:
+        from finagent.reports.investigation_append import _review_reuse_signature_v3
+
+        model_name = str(current_contract.get("model"))
+        parent_signature = _review_reuse_signature_v3(
+            parent_report, parent_investigation, _review_report_identity(parent_report), model_name,
+        )
+        current_signature = _review_reuse_signature_v3(
+            current_report, current_investigation, _review_report_identity(current_report), model_name,
+        )
+    except Exception as exc:
+        raise AnnualReportReadError(409, "annual_review_reuse_invalid", "年度 v3 评审完整业务语义无法重建。") from exc
+    if parent_signature != current_signature:
+        raise AnnualReportReadError(409, "annual_review_reuse_invalid", "年度 v3 评审复用内容与父结果不同。")
 
 
 def _validate_original_review_audit(
@@ -1067,6 +1876,132 @@ def render_discovery_evidence_preview(
         for value in coordinates
     ):
         raise AnnualReportReadError(422, "discovery_evidence_region_invalid", "发现证据坐标无效。")
+    return _render_page_region_preview(
+        archive.source_pdf_bytes,
+        page_number,
+        tuple(float(value) for value in coordinates),
+        focus=focus,
+        narrative=False,
+    )
+
+
+def annual_issue_supplement_evidence_index(archive: AnnualReportArchive) -> dict[str, Any]:
+    """Return the source-bound supplement whitelist for the controlled web drawer."""
+
+    pipeline = archive.report.get("model_issue_pipeline")
+    source = pipeline.get("source_identity") if isinstance(pipeline, Mapping) else None
+    supplements = pipeline.get("supplements") if isinstance(pipeline, Mapping) else None
+    if not isinstance(source, Mapping) or not isinstance(supplements, list):
+        raise AnnualReportReadError(404, "annual_issue_supplement_not_found", "该报告没有已验证的同源补证索引。")
+    source_document_id = archive.manifest_summary.get("document_id")
+    source_sha256 = archive.manifest_summary.get("source_pdf_sha256")
+    if source.get("source_document_id") != source_document_id or source.get("source_sha256") != source_sha256:
+        raise AnnualReportReadError(409, "annual_issue_supplement_invalid", "同源补证与当前归档来源不一致。")
+    items: list[dict[str, Any]] = []
+    for supplement in supplements:
+        if not isinstance(supplement, Mapping):
+            raise AnnualReportReadError(422, "annual_issue_supplement_invalid", "同源补证索引结构无效。")
+        roles = supplement.get("issue_roles", [])
+        role_status = supplement.get("role_status")
+        if (
+            not isinstance(roles, list)
+            or role_status not in {"pending", "accepted"}
+            or role_status == "accepted" and not roles
+        ):
+            raise AnnualReportReadError(422, "annual_issue_supplement_invalid", "同源补证缺少逐问题角色关联。")
+        projected_roles = []
+        for role in roles:
+            if (
+                not isinstance(role, Mapping)
+                or set(role) != {"issue_id", "role", "reason_code"}
+                or not isinstance(role.get("issue_id"), str)
+                or role.get("role") not in {"context", "possible_explanation", "unknown"}
+                or not isinstance(role.get("reason_code"), str)
+            ):
+                raise AnnualReportReadError(422, "annual_issue_supplement_invalid", "同源补证角色关联无效。")
+            projected_roles.append({"issue_id": role["issue_id"], "role": role["role"], "reason_code": role["reason_code"]})
+        items.append({
+            "evidence_id": supplement.get("evidence_id"),
+            "source_document_id": supplement.get("source_document_id"),
+            "source_sha256": supplement.get("source_sha256"),
+            "pdf_page": supplement.get("pdf_page"),
+            "block_index": supplement.get("block_index"),
+            "start_char": supplement.get("start_char"),
+            "end_char": supplement.get("end_char"),
+            "bbox": dict(supplement.get("bbox", {})) if isinstance(supplement.get("bbox"), Mapping) else None,
+            "raw_text": supplement.get("raw_text"),
+            "section": supplement.get("section"),
+            "role_status": role_status,
+            "issue_roles": projected_roles,
+        })
+    items.sort(key=lambda item: str(item.get("evidence_id", "")))
+    return {
+        "run_id": archive.run_id,
+        "source_document_id": source_document_id,
+        "source_sha256": source_sha256,
+        "report_sha256": archive.manifest_summary.get("report_sha256"),
+        "interpretation_label": ISSUE_SUPPLEMENT_INTERPRETATION,
+        "items": items,
+    }
+
+
+def redact_issue_pipeline_text_for_api(report: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep issue opinions and locators in the report response; serve source text only on demand."""
+
+    from finagent.agents.annual_issue_pipeline import build_issue_display_order
+
+    result = dict(report)
+    model_review = result.get("model_review")
+    pipeline = result.get("model_issue_pipeline")
+    if isinstance(pipeline, Mapping):
+        projected_pipeline = _without_issue_source_text(pipeline)
+        projected_pipeline["presentation_order"] = build_issue_display_order(pipeline, model_review)
+        result["model_issue_pipeline"] = projected_pipeline
+    investigation = result.get("model_investigation")
+    if isinstance(investigation, Mapping):
+        investigation_copy = dict(investigation)
+        nested = investigation_copy.get("model_issue_pipeline")
+        if isinstance(nested, Mapping):
+            nested_projection = _without_issue_source_text(nested)
+            nested_projection["presentation_order"] = build_issue_display_order(nested, model_review)
+            investigation_copy["model_issue_pipeline"] = nested_projection
+        result["model_investigation"] = investigation_copy
+    return result
+
+
+def _without_issue_source_text(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            key: _without_issue_source_text(child)
+            for key, child in value.items()
+            if key not in {"quote", "raw_text", "reason_quote"}
+        }
+    if isinstance(value, list):
+        return [_without_issue_source_text(item) for item in value]
+    return value
+
+
+def render_issue_supplement_preview(
+    archive: AnnualReportArchive,
+    evidence_id: str,
+    *,
+    focus: bool = False,
+) -> tuple[bytes, int]:
+    """Render a page only for a supplement in the source-bound issue whitelist."""
+
+    if not isinstance(evidence_id, str) or len(evidence_id) > 256:
+        raise AnnualReportReadError(404, "annual_issue_supplement_not_found", "该同源补证不存在。")
+    index = annual_issue_supplement_evidence_index(archive)
+    evidence = next((item for item in index["items"] if item.get("evidence_id") == evidence_id), None)
+    if evidence is None:
+        raise AnnualReportReadError(404, "annual_issue_supplement_not_found", "该同源补证不存在。")
+    bbox = evidence.get("bbox")
+    page_number = evidence.get("pdf_page")
+    if type(page_number) is not int or not isinstance(bbox, Mapping):
+        raise AnnualReportReadError(422, "annual_issue_supplement_region_invalid", "同源补证页码或坐标无效。")
+    coordinates = tuple(bbox.get(key) for key in ("x0", "y0", "x1", "y1"))
+    if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)) for value in coordinates):
+        raise AnnualReportReadError(422, "annual_issue_supplement_region_invalid", "同源补证坐标无效。")
     return _render_page_region_preview(
         archive.source_pdf_bytes,
         page_number,

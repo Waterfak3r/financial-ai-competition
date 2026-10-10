@@ -424,6 +424,32 @@ def _request_payload(messages: Sequence[ChatMessage], model: str) -> dict[str, o
     return {"model": model, "messages": prepared, "stream": False}
 
 
+def serialize_chat_body(model: str, messages: Sequence[ChatMessage] | Sequence[dict[str, str]]) -> bytes:
+    """Serialize the exact JSON bytes sent by ``chat_worker`` to the provider.
+
+    This shared function makes a recorded request-body digest comparable to
+    bytes observed at a controlled HTTP endpoint. It intentionally uses the
+    connector's existing default JSON separators and field order.
+    """
+
+    if not isinstance(model, str) or not model:
+        raise ValueError("model must be non-empty text")
+    prepared: list[dict[str, str]] = []
+    for message in messages:
+        if isinstance(message, ChatMessage):
+            prepared.append({"role": message.role, "content": message.content})
+        elif isinstance(message, dict) and set(message) == {"role", "content"} and isinstance(message.get("role"), str) and isinstance(message.get("content"), str):
+            prepared.append({"role": message["role"], "content": message["content"]})
+        else:
+            raise ValueError("message record is invalid")
+    if not prepared:
+        raise ValueError("at least one message is required")
+    return json.dumps(
+        {"model": model, "messages": prepared, "stream": False},
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+
 def _parse_response(raw: bytes) -> ChatCompletion:
     try:
         payload = json.loads(raw.decode("utf-8"))

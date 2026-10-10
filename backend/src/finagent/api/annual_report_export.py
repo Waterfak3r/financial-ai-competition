@@ -40,6 +40,7 @@ _ROOT_FIELDS = (
     "source_sha256", "fraud_conclusion", "scope", "comparability", "confirmed",
     "verified_claims", "interpretations", "pending_review", "limitations", "model_called",
     "m3_screening", "model_investigation", "model_review", "model_discovery",
+    "model_issue_pipeline",
 )
 _EVIDENCE_FIELDS = (
     "evidence_id", "document_id", "source_sha256", "pdf_page", "printed_page",
@@ -215,6 +216,9 @@ def render_safe_markdown(payload: Mapping[str, Any]) -> str:
         text += "\n\n" + render_investigation_markdown(investigation).rstrip()
     elif isinstance(report.get("model_review"), Mapping):
         text += "\n\n" + _render_review_markdown(report["model_review"])
+    issue_pipeline_markdown = _render_issue_pipeline_markdown(_markdown_tree(report.get("model_issue_pipeline")))
+    if issue_pipeline_markdown:
+        text += "\n\n" + issue_pipeline_markdown
     screening = report.get("m3_screening")
     if isinstance(screening, Mapping):
         from finagent.reports.m3_annual_append import render_report_with_m3_screening
@@ -294,6 +298,7 @@ def render_html(payload: Mapping[str, Any]) -> str:
     body.extend(_render_m3(report.get("m3_screening")))
     body.extend(_render_model_layer(report.get("model_investigation"), report.get("model_review")))
     body.extend(_render_discovery(report.get("model_discovery")))
+    body.extend(_render_issue_pipeline(report.get("model_issue_pipeline")))
     body.append("<h2>范围、缺口与限制</h2>")
     body.extend(_render_text_list(report.get("scope", {}).get("gaps", []), "范围缺口"))
     body.extend(_render_text_list(report.get("limitations", []), "报告限制"))
@@ -342,6 +347,9 @@ def _project_report(
     )
     if projected_discovery is not None:
         report["model_discovery"] = projected_discovery
+    projected_issue_pipeline = _project_issue_pipeline(source.get("model_issue_pipeline"), identity)
+    if projected_issue_pipeline is not None:
+        report["model_issue_pipeline"] = projected_issue_pipeline
     review_reference_ids = _collect_review_reference_ids(
         report,
         valid_evidence_ids=valid_evidence_ids,
@@ -366,6 +374,13 @@ def _project_report(
         report["model_investigation"] = investigation
     if projected_review is not None:
         report["model_review"] = projected_review
+    if projected_issue_pipeline is not None:
+        from finagent.agents.annual_issue_pipeline import build_issue_display_order
+
+        projected_issue_pipeline["presentation_order"] = build_issue_display_order(
+            projected_issue_pipeline,
+            projected_review,
+        )
     return report
 
 
@@ -409,6 +424,81 @@ def _collect_review_reference_ids(
             if _safe_review_reference(value):
                 allowed.add("investigation:" + value)
     return allowed
+
+
+def _project_issue_pipeline(value: Any, identity: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Expose the complete candidate and disposition ledger without audit paths."""
+
+    if not isinstance(value, Mapping) or value.get("kind") != "annual_issue_pipeline_v1":
+        return None
+    source = _mapping(value.get("source_identity"))
+    matched = (
+        source.get("company_id") == identity.get("company_id")
+        and source.get("report_year") == identity.get("report_year")
+        and source.get("source_document_id") == identity.get("document_id")
+        and source.get("source_sha256") == identity.get("source_sha256")
+    )
+    result: dict[str, Any] = {
+        "kind": "annual_issue_pipeline_v1",
+        "status": value.get("status", "unknown"),
+        "reason": value.get("reason"),
+        "source_binding_status": "matched" if matched else "mismatch",
+    }
+    if not matched:
+        result["candidates"] = []
+        result["issues"] = []
+        result["member_decisions"] = []
+        result["supplements"] = []
+        return result
+    result["source_identity"] = _pick(source, ("run_id", "company_id", "report_year", "report_period", "source_document_id", "source_sha256"))
+    input_value = _mapping(value.get("input"))
+    result["input"] = _pick(input_value, ("discovery_prompt_version", "discovery_status", "discovery_coverage_complete", "finding_ids", "finding_count", "finding_set_sha256", "candidate_count"))
+    candidates = []
+    for item in _list_maps(value.get("candidates")):
+        citations = []
+        for citation in _list_maps(item.get("citations")):
+            citations.append(_pick(citation, ("evidence_id", "role", "source_document_id", "source_sha256", "pdf_page", "block_index", "start_char", "bbox", "independent_verification")))
+        candidates.append({
+            **_pick(item, ("candidate_id", "origin", "status", "finding_id", "member_finding_ids", "title", "observation", "why_it_matters", "follow_up", "priority", "evidence_ids")),
+            "citations": citations,
+            "source_identity": _pick(_mapping(item.get("source_identity")), ("company_id", "report_year", "report_period", "source_document_id", "source_sha256")),
+        })
+    result["candidates"] = candidates
+    issues = []
+    for item in _list_maps(value.get("issues")):
+        citations = [_pick(citation, ("evidence_id", "role", "source_document_id", "source_sha256", "pdf_page", "block_index", "start_char", "bbox", "independent_verification")) for citation in _list_maps(item.get("citations"))]
+        issues.append({
+            **_pick(item, ("issue_id", "origin", "status", "title", "observation", "why_it_matters", "follow_up", "priority", "member_finding_ids", "evidence_ids", "verification_status", "independent_verification", "global_merged_issue_ids", "global_relation", "review_order_reason")),
+            "citations": citations,
+            "member_sources": [_pick(row, ("finding_id", "disposition", "reason_code")) for row in _list_maps(item.get("member_sources"))],
+        })
+    result["issues"] = issues
+    result["member_decisions"] = [
+        _pick(item, ("finding_id", "disposition", "issue_id", "target_finding_id", "reason_code", "reason_evidence_id", "source_finding_id"))
+        for item in _list_maps(value.get("member_decisions"))
+    ]
+    supplements = []
+    for item in _list_maps(value.get("supplements")):
+        supplements.append({
+            **_pick(item, ("evidence_id", "source_document_id", "source_sha256", "pdf_page", "block_index", "start_char", "end_char", "bbox", "section", "selection_reason", "role", "issue_ids", "verification_status", "role_status", "independent_verification", "retrieval_is_verification")),
+            "issue_roles": [_pick(role, ("issue_id", "role", "reason_code")) for role in _list_maps(item.get("issue_roles"))],
+        })
+    result["supplements"] = supplements
+    result["retrieval_coverage"] = _pick(_mapping(value.get("retrieval_coverage")), (
+        "source_document_id", "source_sha256", "scope", "requested_sections", "examined_sections", "total_pages", "total_text_blocks", "scanned_blocks", "matched_blocks", "matched_issue_block_pairs", "selected_blocks", "selected_issue_block_pairs", "unselected_issue_block_pairs", "scanned_chars", "selected_excerpt_chars", "selected_unique_source_chars", "unread_pages", "unread_blocks", "omitted_chars", "selection_algorithm_version", "max_terms_per_issue", "max_matches_per_issue", "max_excerpt_chars", "max_role_assignments", "role_assignments_total", "role_assignments_requested", "role_assignments_pending", "complete", "reason",
+    ))
+    result["global_closure"] = _pick(_mapping(value.get("global_closure")), (
+        "closed", "closure_method", "scope", "input_issue_ids", "decision_count", "pending_issue_ids", "excluded_finding_ids", "relation_gaps", "coverage_gaps", "input_finding_ids", "retained_finding_ids", "pending_finding_ids", "input_member_evidence", "retained_member_evidence", "excluded_member_evidence", "reason", "discovery_coverage_complete", "no_priority_allowed",
+    ))
+    if isinstance(value.get("phase_timings"), Mapping):
+        result["phase_timings"] = dict(value["phase_timings"])
+    result["shards"] = [
+        _pick(item, ("shard_id", "kind", "status", "input_finding_ids", "input_issue_ids", "attempt_count", "response_count", "reused", "parent_run_id", "reason"))
+        for item in _list_maps(value.get("shards"))
+    ]
+    result["audit_summary"] = _pick(_mapping(value.get("audit_summary")), ("attempt_count", "response_count", "reused_count", "model_called"))
+    result["verification_notice"] = "发现线索和同源检索均未经独立语义核验；补证角色不是事实验证。"
+    return result
 
 
 def _safe_review_reference(value: Any) -> bool:
@@ -1188,6 +1278,165 @@ def _render_discovery_markdown(value: Any) -> str:
     if isinstance(limitations, list):
         lines.extend("- 开放式发现限制：" + str(item) for item in limitations)
     return "\n".join(lines)
+
+
+def _render_issue_pipeline(value: Any) -> list[str]:
+    if not isinstance(value, Mapping):
+        return []
+    input_value = _mapping(value.get("input"))
+    closure = _mapping(value.get("global_closure"))
+    lines = [
+        "<h2>年度问题归并与处理账</h2>",
+        f"<p><strong>{_h(value.get('verification_notice', '候选事项未独立核验。'))}</strong></p>",
+        _html_table(
+            ("状态", "已知发现 / 候选", "已闭合", "待处理事项", "扫描覆盖完整", "可给无优先事项意见"),
+            [(value.get("status"), f"{input_value.get('finding_count', 0)} / {input_value.get('candidate_count', 0)}", closure.get("closed"), len(closure.get("pending_issue_ids", [])) + len(closure.get("pending_finding_ids", [])), input_value.get("discovery_coverage_complete"), closure.get("no_priority_allowed"))],
+        ),
+    ]
+    if closure.get("coverage_gaps") or closure.get("relation_gaps"):
+        lines.extend(_render_text_list(closure.get("coverage_gaps"), "发现覆盖缺口"))
+        lines.extend(_render_text_list(closure.get("relation_gaps"), "跨片关系缺口"))
+    display_candidates = _issue_display_candidates(value)
+    candidates = [item for item, _ in display_candidates]
+    decisions = {item.get("finding_id"): item for item in value.get("member_decisions", []) if isinstance(item, Mapping)} if isinstance(value.get("member_decisions"), list) else {}
+    issue_by_member = {
+        member: issue
+        for issue in value.get("issues", []) if isinstance(issue, Mapping)
+        for member in issue.get("member_finding_ids", []) if isinstance(member, str)
+    } if isinstance(value.get("issues"), list) else {}
+    for candidate, display_reason in display_candidates:
+        finding_id = candidate.get("finding_id")
+        decision = decisions.get(finding_id, {})
+        issue = issue_by_member.get(finding_id, {})
+        lines.append("<article class=\"entry no-break\">")
+        lines.append(f"<h3>{_h(candidate.get('title'))}</h3>")
+        lines.append(_html_table(("finding ID", "处理", "理由", "归并问题", "优先级"), [(
+            finding_id, decision.get("disposition", candidate.get("status")), decision.get("reason_code"),
+            decision.get("issue_id"), candidate.get("priority"),
+        )]))
+        lines.append(f"<p><strong>观察：</strong>{_h(candidate.get('observation'))}</p>")
+        lines.append(f"<p>展示顺序依据：{_h(display_reason)}</p>")
+        lines.append(f"<p><strong>关注原因：</strong>{_h(candidate.get('why_it_matters'))}</p>")
+        lines.append(f"<p><strong>后续核查：</strong>{_h(candidate.get('follow_up'))}</p>")
+        for citation in candidate.get("citations", []) if isinstance(candidate.get("citations"), list) else []:
+            if isinstance(citation, Mapping):
+                lines.append(f"<p>主引用：PDF 第 {_h(citation.get('pdf_page'))} 页，块 {_h(citation.get('block_index'))}，字符 {_h(citation.get('start_char'))}；{_h(citation.get('evidence_id'))}</p>")
+        if issue:
+            lines.append(f"<p>问题状态：{_h(issue.get('status'))}；全部成员：{_h(', '.join(issue.get('member_finding_ids', [])))}</p>")
+        lines.append("</article>")
+    supplements = value.get("supplements", [])
+    if isinstance(supplements, list) and supplements:
+        lines.append("<h3>同源定向检索片段</h3>")
+        rows = []
+        for item in supplements:
+            if not isinstance(item, Mapping):
+                continue
+            roles = "; ".join(f"{row.get('issue_id')}：{row.get('role')}（{row.get('reason_code')}）" for row in item.get("issue_roles", []) if isinstance(row, Mapping))
+            rows.append((item.get("section"), item.get("pdf_page"), item.get("block_index"), f"{item.get('start_char')}–{item.get('end_char')}", item.get("role_status"), roles or item.get("role")))
+        lines.append(_html_table(("章节范围", "PDF 页", "块", "字符范围", "处理状态", "问题关系"), rows))
+    lines.extend(_render_text_list(value.get("retrieval_coverage", {}).get("unread_pages", []) if isinstance(value.get("retrieval_coverage"), Mapping) else [], "未读取页面"))
+    coverage = value.get("retrieval_coverage")
+    if isinstance(coverage, Mapping) and coverage.get("scope") != "not_started":
+        lines.append(
+            "<p>同源检索覆盖：已扫描块 "
+            f"{_h(coverage.get('scanned_blocks'))}，命中问题/块对 {_h(coverage.get('matched_issue_block_pairs'))}，"
+            f"选入问题/块对 {_h(coverage.get('selected_issue_block_pairs'))}；选入片段字符总量 {_h(coverage.get('selected_excerpt_chars'))}，"
+            f"唯一来源字符 {_h(coverage.get('selected_unique_source_chars'))}，未选来源字符 {_h(coverage.get('omitted_chars'))}；"
+            f"扫描覆盖完整 {_h(coverage.get('complete'))}。</p>"
+        )
+    return lines
+
+
+def _render_issue_pipeline_markdown(value: Any) -> str:
+    if not isinstance(value, Mapping):
+        return ""
+    input_value = _mapping(value.get("input"))
+    closure = _mapping(value.get("global_closure"))
+    lines = [
+        "## 年度问题归并与处理账", "",
+        str(value.get("verification_notice", "候选事项未独立核验。")), "",
+        f"- 状态：`{value.get('status')}`；当前已知发现 {input_value.get('finding_count', 0)} 条，候选 {input_value.get('candidate_count', 0)} 项。",
+        f"- 已知候选关系闭合：`{closure.get('closed')}`；全文扫描覆盖完整：`{input_value.get('discovery_coverage_complete')}`；允许无优先事项意见：`{closure.get('no_priority_allowed')}`。",
+    ]
+    coverage = value.get("retrieval_coverage")
+    if isinstance(coverage, Mapping) and coverage.get("scope") != "not_started":
+        lines.append(
+            "- 同源检索覆盖：扫描块 "
+            f"{coverage.get('scanned_blocks')}，命中问题/块对 {coverage.get('matched_issue_block_pairs')}，"
+            f"选入问题/块对 {coverage.get('selected_issue_block_pairs')}；选入片段字符总量 {coverage.get('selected_excerpt_chars')}，"
+            f"唯一来源字符 {coverage.get('selected_unique_source_chars')}，未选来源字符 {coverage.get('omitted_chars')}；"
+            f"扫描覆盖完整 {coverage.get('complete')}。"
+        )
+    for label, key in (("跨片关系缺口", "relation_gaps"), ("覆盖缺口", "coverage_gaps")):
+        values = closure.get(key)
+        if isinstance(values, list) and values:
+            lines.append(f"- {label}：" + "；".join(str(item) for item in values))
+    display_candidates = _issue_display_candidates(value)
+    candidates = [item for item, _ in display_candidates]
+    decisions = {item.get("finding_id"): item for item in value.get("member_decisions", []) if isinstance(item, Mapping)} if isinstance(value.get("member_decisions"), list) else {}
+    issue_by_member = {
+        member: issue
+        for issue in value.get("issues", []) if isinstance(issue, Mapping)
+        for member in issue.get("member_finding_ids", []) if isinstance(member, str)
+    } if isinstance(value.get("issues"), list) else {}
+    if not candidates:
+        lines.extend(["", "当前没有合格发现候选；若全文扫描未完成，覆盖未知仍单独保留。"])
+    for candidate, display_reason in display_candidates:
+        finding_id = candidate.get("finding_id")
+        decision = decisions.get(finding_id, {})
+        issue = issue_by_member.get(finding_id, {})
+        lines.extend([
+            "", f"### {candidate.get('title', '未命名问题')}（{candidate.get('priority', '未提供')}，未核验）", "",
+            f"- 成员：`{finding_id}`；处理：`{decision.get('disposition', candidate.get('status'))}`；理由：`{decision.get('reason_code')}`。",
+            f"- 问题 ID：`{decision.get('issue_id')}`；问题状态：`{issue.get('status', '尚无闭合归并')}`。",
+            f"- 观察：{candidate.get('observation', '')}",
+            f"- 关注原因：{candidate.get('why_it_matters', '')}",
+            f"- 后续核查：{candidate.get('follow_up', '')}",
+            f"- 展示顺序依据：{display_reason}",
+        ])
+        if issue:
+            lines.append("- 问题全部成员：" + "、".join(f"`{item}`" for item in issue.get("member_finding_ids", [])))
+        for citation in candidate.get("citations", []) if isinstance(candidate.get("citations"), list) else []:
+            if isinstance(citation, Mapping):
+                lines.append(f"- 主引用定位：PDF 第 {citation.get('pdf_page')} 页 / 块 {citation.get('block_index')} / 字符 {citation.get('start_char')} / `{citation.get('evidence_id')}`")
+    supplements = value.get("supplements", [])
+    if isinstance(supplements, list) and supplements:
+        lines.extend(["", "### 同源定向检索片段", ""])
+        for item in supplements:
+            if not isinstance(item, Mapping):
+                continue
+            roles = "; ".join(f"{row.get('issue_id')}：{row.get('role')}（{row.get('reason_code')}）" for row in item.get("issue_roles", []) if isinstance(row, Mapping))
+            lines.append(f"- {item.get('section')} · PDF 第 {item.get('pdf_page')} 页 / 块 {item.get('block_index')} / 字符 {item.get('start_char')}–{item.get('end_char')} · {item.get('role_status')} · {roles or item.get('role')}")
+    return "\n".join(lines)
+
+
+def _issue_display_candidates(value: Mapping[str, Any]) -> list[tuple[Mapping[str, Any], str]]:
+    candidates = [item for item in value.get("candidates", []) if isinstance(item, Mapping)] if isinstance(value.get("candidates"), list) else []
+    presentation = _mapping(value.get("presentation_order"))
+    candidate_order = presentation.get("candidate_order")
+    if not isinstance(candidate_order, list):
+        return [(item, "评审展示顺序未提供；按发现来源顺序显示") for item in candidates]
+    by_id = {
+        item.get("finding_id"): item
+        for item in candidates if isinstance(item.get("finding_id"), str)
+    }
+    rows: list[tuple[Mapping[str, Any], str]] = []
+    seen: set[str] = set()
+    for row in candidate_order:
+        if not isinstance(row, Mapping):
+            continue
+        finding_id = row.get("finding_id")
+        if not isinstance(finding_id, str) or finding_id in seen or finding_id not in by_id:
+            continue
+        reason = row.get("reason")
+        rows.append((by_id[finding_id], reason if isinstance(reason, str) else "按发现来源顺序显示"))
+        seen.add(finding_id)
+    rows.extend(
+        (item, "排序投影未覆盖此候选；按发现来源顺序显示")
+        for item in candidates
+        if isinstance(item.get("finding_id"), str) and item["finding_id"] not in seen
+    )
+    return rows
 
 
 def _render_review_markdown(value: Mapping[str, Any]) -> str:

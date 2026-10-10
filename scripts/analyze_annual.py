@@ -91,7 +91,9 @@ _PROVENANCE_FILES = (
     "backend/src/finagent/agents/annual_investigation.py",
     "backend/src/finagent/agents/annual_review.py",
     "backend/src/finagent/agents/annual_discovery.py",
+    "backend/src/finagent/agents/annual_issue_pipeline.py",
     "backend/src/finagent/retrieval/annual_discovery_context.py",
+    "backend/src/finagent/retrieval/annual_issue_supplements.py",
     "backend/src/finagent/retrieval/annual_context.py",
     "backend/src/finagent/audit/audited_chat.py",
     "backend/src/finagent/core/model_settings.py",
@@ -100,6 +102,7 @@ _PROVENANCE_FILES = (
     "backend/src/finagent/core/annual_recovery.py",
     "backend/src/finagent/core/model_call_ledger.py",
     "backend/src/finagent/api/annual_report_read.py",
+    "backend/src/finagent/api/annual_report_export.py",
     "backend/src/finagent/api/annual_analysis_jobs.py",
     "backend/src/finagent/llm/chat_completion.py",
     "config/prompts/annual_investigation_v1.md",
@@ -108,6 +111,10 @@ _PROVENANCE_FILES = (
     "config/prompts/annual_discovery_v1.md",
     "config/prompts/annual_discovery_v2.md",
     "config/prompts/annual_discovery_v3.md",
+    "config/prompts/annual_issue_grouping_v1.md",
+    "config/prompts/annual_issue_global_v1.md",
+    "config/prompts/annual_issue_supplement_v1.md",
+    "config/prompts/annual_review_v3.md",
 )
 
 

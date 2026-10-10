@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import signal
@@ -380,6 +381,7 @@ class AnnualAnalysisJobService:
             normalized,
             settings=settings,
             archive=archive,
+            require_issue_pipeline_v5=True,
         )
         if capability.get("can_resume") is not True:
             reason = _public_recovery_reason(capability.get("reason"))
@@ -543,6 +545,9 @@ class AnnualAnalysisJobService:
     def _execute(self, job_id: str) -> None:
         heartbeat_stop: threading.Event | None = None
         run_id: str | None = None
+        gate_db: Path | None = None
+        gate_opened = False
+        cli_returned = False
         try:
             with self._lock:
                 state = self._load_persisted_state_locked(job_id)
@@ -556,10 +561,20 @@ class AnnualAnalysisJobService:
             job_dir = _safe_existing_job_dir(self.jobs_root, job_id)
             gate_db = select_call_gate_database(self.project_root, job_dir)
             open_admission_gate(gate_db, job_id)
+            gate_opened = True
             with self._lock:
                 current = self._load_persisted_state_locked(job_id)
                 if current.get("status") == "cancelled" or job_id in self._cancel_requested:
-                    close_admission_gate(gate_db, job_id)
+                    gate_closed, checked_gate = self._try_close_job_gate(job_id, gate_db)
+                    if not gate_closed:
+                        self._defer_terminal_after_gate_close_failure(
+                            job_id,
+                            run_id,
+                            checked_gate,
+                            terminal_target="cancelled",
+                            owner_required=False,
+                        )
+                        return
                     self._cancel_owner_stopped.add(job_id)
                     self._finish_cancelled(job_id)
                     return
@@ -619,6 +634,16 @@ class AnnualAnalysisJobService:
                     # This check and the durable owner flag are serialized
                     # with cancel(). A false flag proves this worker has not
                     # handed control to Popen yet.
+                    gate_closed, checked_gate = self._try_close_job_gate(job_id, gate_db)
+                    if not gate_closed:
+                        self._defer_terminal_after_gate_close_failure(
+                            job_id,
+                            run_id,
+                            checked_gate,
+                            terminal_target="cancelled",
+                            owner_required=False,
+                        )
+                        return
                     self._cancel_owner_stopped.add(job_id)
                     self._finish_cancelled(job_id)
                     return
@@ -627,8 +652,20 @@ class AnnualAnalysisJobService:
                 current["_cli_owner_expected"] = True
                 self._persist_state_locked(job_id, current)
             result = _invoke_cli(self.project_root, artifacts_root, runner_request)
+            cli_returned = True
+            self._update(job_id, _cli_owner_expected=False)
             reported_run_id = _run_id_from_output(result.stdout + "\n" + result.stderr)
             if job_id in self._cancel_requested:
+                gate_closed, checked_gate = self._try_close_job_gate(job_id, gate_db)
+                if not gate_closed:
+                    self._defer_terminal_after_gate_close_failure(
+                        job_id,
+                        run_id,
+                        checked_gate,
+                        terminal_target="cancelled",
+                        owner_required=False,
+                    )
+                    return
                 self._finish_cancelled(job_id)
                 return
             if reported_run_id is not None and reported_run_id != run_id:
@@ -637,6 +674,8 @@ class AnnualAnalysisJobService:
                     "analysis_run_id_mismatch",
                     "年度分析进程返回的运行编号与预分配编号不一致。",
                     run_id=run_id,
+                    gate_database_path=gate_db,
+                    cli_returned=cli_returned,
                 )
                 return
             if reported_run_id is None:
@@ -645,6 +684,8 @@ class AnnualAnalysisJobService:
                     "analysis_run_id_missing",
                     "年度分析进程未返回有效 run_id，无法确认报告归档。",
                     run_id=run_id,
+                    gate_database_path=gate_db,
+                    cli_returned=cli_returned,
                 )
                 return
             self._update(job_id, run_id=run_id, stage="validating_report_archive")
@@ -660,6 +701,8 @@ class AnnualAnalysisJobService:
                         "analysis_failed",
                         f"年度分析未完成{suffix}。失败详情保存在该 run_id 的归档记录中。",
                         run_id=run_id,
+                        gate_database_path=gate_db,
+                        cli_returned=cli_returned,
                     )
                     return
                 self._finish_failure(
@@ -667,6 +710,8 @@ class AnnualAnalysisJobService:
                     "analysis_archive_invalid",
                     f"年度分析报告归档未通过校验（{exc.code}）。",
                     run_id=run_id,
+                    gate_database_path=gate_db,
+                    cli_returned=cli_returned,
                 )
                 return
 
@@ -682,6 +727,8 @@ class AnnualAnalysisJobService:
                     "analysis_identity_mismatch",
                     "归档报告的来源身份与任务请求不一致。",
                     run_id=run_id,
+                    gate_database_path=gate_db,
+                    cli_returned=cli_returned,
                 )
                 return
             terminal_status = summary["status"]
@@ -691,6 +738,18 @@ class AnnualAnalysisJobService:
                     "analysis_status_invalid",
                     "年度分析报告的终态不受支持。",
                     run_id=run_id,
+                    gate_database_path=gate_db,
+                    cli_returned=cli_returned,
+                )
+                return
+            gate_closed, checked_gate = self._try_close_job_gate(job_id, gate_db)
+            if not gate_closed:
+                self._defer_terminal_after_gate_close_failure(
+                    job_id,
+                    run_id,
+                    checked_gate,
+                    terminal_target=terminal_status,
+                    owner_required=False,
                 )
                 return
             self._update(
@@ -705,7 +764,14 @@ class AnnualAnalysisJobService:
             if job_id in self._cancel_requested:
                 self._finish_cancelled(job_id)
             else:
-                self._finish_failure(job_id, exc.code, exc.message, run_id=run_id)
+                self._finish_failure(
+                    job_id,
+                    exc.code,
+                    exc.message,
+                    run_id=run_id,
+                    gate_database_path=gate_db,
+                    cli_returned=cli_returned,
+                )
         except subprocess.TimeoutExpired:
             if job_id in self._cancel_requested:
                 self._finish_cancelled(job_id)
@@ -713,6 +779,7 @@ class AnnualAnalysisJobService:
                 self._finish_cli_failure_after_stop(
                     job_id,
                     run_id,
+                    gate_database_path=gate_db,
                     failure_kind="timeout",
                     code="analysis_timeout",
                     message="年度分析超过配置的运行时限，分析进程已终止；请检查 PDF 后重新提交。",
@@ -726,17 +793,46 @@ class AnnualAnalysisJobService:
                 self._finish_cli_failure_after_stop(
                     job_id,
                     run_id,
+                    gate_database_path=gate_db,
                     failure_kind="worker",
                     code="analysis_worker_failed",
                     message="年度分析任务执行失败；请检查运行归档并重新提交。",
                 )
         finally:
-            if heartbeat_stop is not None:
-                self._stop_heartbeat(job_id, heartbeat_stop)
-            with self._lock:
-                self._processes.pop(job_id, None)
-                self._futures.pop(job_id, None)
-                self._release_slot_once_locked(job_id)
+            try:
+                if gate_opened and gate_db is not None:
+                    gate_closed, checked_gate = self._try_close_job_gate(job_id, gate_db)
+                    if not gate_closed:
+                        with self._lock:
+                            try:
+                                current = self._load_persisted_state_locked(job_id)
+                            except AnnualAnalysisJobError:
+                                current = {}
+                        existing_target = current.get("_recovery_terminal_target")
+                        terminal_target = (
+                            existing_target
+                            if existing_target in {"failed", "interrupted", "cancelled"}
+                            else current.get("status")
+                        )
+                        if terminal_target not in {
+                            "completed", "completed_with_issues", "failed", "interrupted", "cancelled"
+                        }:
+                            terminal_target = "interrupted"
+                        self._defer_terminal_after_gate_close_failure(
+                            job_id,
+                            run_id if run_id is not None else current.get("run_id"),
+                            checked_gate,
+                            terminal_target=str(terminal_target),
+                            owner_required=not cli_returned and self._runner_owner_may_be_active(job_id),
+                            failure_kind=current.get("_recovery_failure_kind"),
+                        )
+            finally:
+                if heartbeat_stop is not None:
+                    self._stop_heartbeat(job_id, heartbeat_stop)
+                with self._lock:
+                    self._processes.pop(job_id, None)
+                    self._futures.pop(job_id, None)
+                    self._release_slot_once_locked(job_id)
 
     def _load_state(self, job_id: str) -> dict[str, Any]:
         with self._lock:
@@ -760,12 +856,28 @@ class AnnualAnalysisJobService:
         message: str,
         *,
         run_id: str | None = None,
+        gate_database_path: Path | None = None,
+        cli_returned: bool = False,
     ) -> None:
         with self._lock:
             state = self._load_persisted_state_locked(job_id)
             if state.get("status") in {"completed", "completed_with_issues", "cancelled"}:
                 return
             actual_run_id = run_id if run_id is not None else state.get("run_id")
+            stored_gate = state.get("_call_gate_db")
+            current_gate = Path(stored_gate) if isinstance(stored_gate, str) else gate_database_path
+        if current_gate is not None:
+            gate_closed, checked_gate = self._try_close_job_gate(job_id, current_gate)
+            if not gate_closed:
+                self._defer_terminal_after_gate_close_failure(
+                    job_id,
+                    actual_run_id if isinstance(actual_run_id, str) else None,
+                    checked_gate,
+                    terminal_target="failed",
+                    owner_required=not cli_returned and self._runner_owner_may_be_active(job_id),
+                    terminal_error={"code": code, "message": message},
+                )
+                return
         if isinstance(actual_run_id, str) and self._preserve_sealed_result(job_id, actual_run_id):
             return
         with self._lock:
@@ -869,6 +981,114 @@ class AnnualAnalysisJobService:
             raise AnnualAnalysisJobError(409, "call_gate_path_invalid", "本任务调用闸门路径不属于其隔离任务或当前共享账本。")
         close_admission_gate(checked_database, job_id)
 
+    def _try_close_job_gate(
+        self,
+        job_id: str,
+        fallback_database_path: Path | None = None,
+    ) -> tuple[bool, Path | None]:
+        try:
+            with self._lock:
+                state = self._load_persisted_state_locked(job_id)
+                gate_value = state.get("_call_gate_db")
+        except AnnualAnalysisJobError:
+            gate_value = None
+        database_path = Path(gate_value) if isinstance(gate_value, str) else fallback_database_path
+        if database_path is None:
+            return True, None
+        try:
+            self._close_job_gate(job_id, database_path)
+        except Exception:
+            return False, database_path
+        return True, database_path
+
+    def _defer_terminal_after_gate_close_failure(
+        self,
+        job_id: str,
+        run_id: str | None,
+        database_path: Path | None,
+        *,
+        terminal_target: str,
+        owner_required: bool,
+        terminal_error: Mapping[str, Any] | None = None,
+        failure_kind: str | None = None,
+    ) -> None:
+        """Keep a readable result pending until its exact admission gate is closed."""
+
+        with self._lock:
+            current = self._load_persisted_state_locked(job_id)
+            actual_run_id = run_id if isinstance(run_id, str) else current.get("run_id")
+            if database_path is not None:
+                current["_call_gate_db"] = str(database_path)
+            pending_error = terminal_error
+            if pending_error is None:
+                existing_error = current.get("error")
+                if (
+                    isinstance(existing_error, Mapping)
+                    and isinstance(existing_error.get("code"), str)
+                    and existing_error.get("code") != "call_gate_unavailable"
+                    and isinstance(existing_error.get("message"), str)
+                ):
+                    pending_error = {
+                        "code": existing_error["code"],
+                        "message": existing_error["message"],
+                    }
+            if (
+                isinstance(pending_error, Mapping)
+                and isinstance(pending_error.get("code"), str)
+                and isinstance(pending_error.get("message"), str)
+            ):
+                current["_recovery_terminal_error"] = {
+                    "code": pending_error["code"],
+                    "message": pending_error["message"],
+                }
+            if failure_kind in {"timeout", "worker"}:
+                current["_recovery_failure_kind"] = failure_kind
+            current.update(
+                status="interrupted",
+                stage="interrupted",
+                run_id=actual_run_id,
+                result_url=(
+                    f"/v1/annual-analyses/{actual_run_id}"
+                    if isinstance(actual_run_id, str)
+                    else None
+                ),
+                error={
+                    "code": "call_gate_unavailable",
+                    "message": "模型调用闸门无法确认关闭；已保存报告可只读查看，任务仍在收束，暂不能续跑。",
+                },
+                _recovery_owner_pending=True,
+                _recovery_owner_required=owner_required,
+            )
+            if terminal_target in {"failed", "interrupted", "cancelled"}:
+                current["_recovery_terminal_target"] = terminal_target
+            else:
+                current.pop("_recovery_terminal_target", None)
+            self._persist_state_locked(job_id, current)
+
+    def _runner_owner_may_be_active(self, job_id: str) -> bool:
+        with self._lock:
+            try:
+                state = self._load_persisted_state_locked(job_id)
+            except AnnualAnalysisJobError:
+                return True
+            process = self._processes.get(job_id)
+        if not _runner_may_be_active(state, process):
+            return False
+        run_id = state.get("run_id")
+        if isinstance(run_id, str) and _runner_stop_confirmed(
+            self.jobs_root / job_id,
+            state,
+            run_id,
+            process,
+        ):
+            return False
+        if process is not None:
+            try:
+                return process.poll() is None
+            except (OSError, subprocess.SubprocessError):
+                return True
+        return _runner_owner_status(state.get("_runner_owner")) != "stopped"
+
     def _stop_owned_process(self, job_id: str, process: subprocess.Popen[str] | None) -> bool:
         if process is None:
             with self._lock:
@@ -956,6 +1176,7 @@ class AnnualAnalysisJobService:
         job_id: str,
         run_id: str | None,
         *,
+        gate_database_path: Path | None = None,
         failure_kind: str,
         code: str,
         message: str,
@@ -968,6 +1189,8 @@ class AnnualAnalysisJobService:
             except AnnualAnalysisJobError:
                 return
             gate_value = current.get("_call_gate_db")
+            if not isinstance(gate_value, str) and gate_database_path is not None:
+                gate_value = str(gate_database_path)
             process = self._processes.get(job_id)
 
         gate_closed = False
@@ -984,6 +1207,17 @@ class AnnualAnalysisJobService:
             cancel_written = False
 
         stop_confirmed = self._stop_owned_process(job_id, process)
+        if not gate_closed:
+            self._defer_terminal_after_gate_close_failure(
+                job_id,
+                run_id,
+                Path(gate_value) if isinstance(gate_value, str) else None,
+                terminal_target="failed",
+                owner_required=not stop_confirmed,
+                terminal_error={"code": code, "message": message},
+                failure_kind=failure_kind,
+            )
+            return
         if stop_confirmed and gate_closed and cancel_written:
             self._append_terminal_checkpoint(run_id, "failed")
             self._finish_failure(job_id, code, message, run_id=run_id)
@@ -1050,6 +1284,36 @@ class AnnualAnalysisJobService:
             self._mark_cancel_pending(job_id)
 
     def _finish_cancelled(self, job_id: str) -> None:
+        with self._lock:
+            current = self._load_persisted_state_locked(job_id)
+            if current.get("status") in {"completed", "completed_with_issues", "failed", "cancelled"}:
+                return
+            gate_value = current.get("_call_gate_db")
+            gate_path = Path(gate_value) if isinstance(gate_value, str) else None
+            current_run_id = current.get("run_id")
+            process = self._processes.get(job_id)
+            runner_stopped = (
+                not _runner_may_be_active(current, process)
+                or (
+                    isinstance(current_run_id, str)
+                    and _runner_stop_confirmed(
+                        self.jobs_root / job_id,
+                        current,
+                        current_run_id,
+                        process,
+                    )
+                )
+            )
+        gate_closed, checked_gate = self._try_close_job_gate(job_id, gate_path)
+        if not gate_closed:
+            self._defer_terminal_after_gate_close_failure(
+                job_id,
+                current_run_id if isinstance(current_run_id, str) else None,
+                checked_gate,
+                terminal_target="cancelled",
+                owner_required=not runner_stopped,
+            )
+            return
         with self._lock:
             current = self._load_persisted_state_locked(job_id)
             if current.get("status") in {"completed", "completed_with_issues", "failed", "cancelled"}:
@@ -1272,6 +1536,7 @@ class AnnualAnalysisJobService:
                 normalized,
                 settings=settings,
                 archive=archive,
+                require_issue_pipeline_v5=True,
             )
         except AnnualReportReadError as exc:
             return {"can_resume": False, "reason": "source_invalid" if _is_source_validation_error(exc.code) else "recovery_not_available"}
@@ -1455,7 +1720,18 @@ class AnnualAnalysisJobService:
                     if checkpoint_state == "cancelled":
                         error = None
                     elif checkpoint_state == "failed" and target == "failed":
-                        error = _deferred_failure_error(state.get("_recovery_failure_kind"))
+                        stored_error = state.get("_recovery_terminal_error")
+                        if (
+                            isinstance(stored_error, Mapping)
+                            and isinstance(stored_error.get("code"), str)
+                            and isinstance(stored_error.get("message"), str)
+                        ):
+                            error = {
+                                "code": stored_error["code"],
+                                "message": stored_error["message"],
+                            }
+                        else:
+                            error = _deferred_failure_error(state.get("_recovery_failure_kind"))
                     else:
                         error = {
                             "code": "service_interrupted",
@@ -1485,6 +1761,7 @@ class AnnualAnalysisJobService:
                 current.pop("_recovery_owner_required", None)
                 current.pop("_recovery_terminal_target", None)
                 current.pop("_recovery_failure_kind", None)
+                current.pop("_recovery_terminal_error", None)
                 self._persist_state_locked(job_id, current)
                 self._cancel_owner_stopped.discard(job_id)
         finally:
@@ -2676,7 +2953,7 @@ def _analysis_budget_projection(
 
     terminal_report: Mapping[str, Any] | None = None
     run_id = state.get("run_id")
-    if status in {"completed", "completed_with_issues", "failed", "interrupted", "cancelled"} and isinstance(run_id, str):
+    if status in {"running", "completed", "completed_with_issues", "failed", "interrupted", "cancelled"} and isinstance(run_id, str):
         try:
             terminal_report = load_annual_report(project_root, run_id).report
         except Exception:
@@ -2684,7 +2961,33 @@ def _analysis_budget_projection(
 
     def stage_status(name: str) -> str:
         if name == "annual_issue_grouping":
-            return "reserved"
+            issue_pipeline = terminal_report.get("model_issue_pipeline") if isinstance(terminal_report, Mapping) else None
+            if isinstance(issue_pipeline, Mapping):
+                reason = issue_pipeline.get("reason")
+                if reason in {
+                    "stage_deadline", "main_deadline", "workflow_deadline", "workflow_time_budget_exhausted",
+                    "stage_budget_exhausted", "provider_budget_exhausted", "task_budget_exhausted",
+                    "call_deadline_exhausted", "model_call_budget_exhausted",
+                }:
+                    return "budget_exhausted"
+                return {
+                    "pending": "planned",
+                    "running": "running",
+                    "completed": "completed",
+                    "partial": "partial",
+                    "failed": "partial",
+                    "abstained": "partial",
+                }.get(str(issue_pipeline.get("status")), "partial")
+            if isinstance(terminal_report, Mapping):
+                investigation = terminal_report.get("model_investigation")
+                discovery = investigation.get("discovery") if isinstance(investigation, Mapping) else terminal_report.get("model_discovery")
+                if not isinstance(discovery, Mapping) or discovery.get("prompt_version") != "annual_discovery_v3":
+                    return "reserved"
+                return "partial"
+            if status == "running" and counts.get(name, 0) > 0:
+                return "running"
+            if status == "running":
+                return "planned"
         if status == "queued":
             return "not_started"
         if status == "running":
@@ -2737,6 +3040,12 @@ def _analysis_budget_projection(
             "admitted_attempts": admitted,
             "status": stage_status(name),
         }
+        if name == "annual_issue_grouping" and isinstance(terminal_report, Mapping):
+            issue_pipeline = terminal_report.get("model_issue_pipeline")
+            timings = issue_pipeline.get("phase_timings") if isinstance(issue_pipeline, Mapping) else None
+            group_elapsed = timings.get("annual_issue_grouping_elapsed_seconds") if isinstance(timings, Mapping) else None
+            if type(group_elapsed) in {int, float} and math.isfinite(float(group_elapsed)) and group_elapsed >= 0:
+                stages[name]["elapsed_seconds"] = round(float(group_elapsed), 3)
 
     provider_admissions = sum(counts.values())
     return {

@@ -13,12 +13,52 @@ import pytest
 from fastapi.testclient import TestClient
 
 from finagent.api.app import create_app
+import finagent.api.app as app_module
+from finagent.api import annual_report_read
+from finagent.agents.annual_issue_pipeline import ISSUE_WIRE_VERSION
+from finagent.agents.annual_review_wire import V3_INPUT_PROJECTION_VERSION, V3_WIRE_SCHEMA
 from finagent.core.model_settings import ModelSettings
 import finagent.reports.investigation_append as investigation_append
 from finagent.retrieval.annual_discovery_context import (
     build_annual_discovery_context,
     coverage_is_complete,
 )
+
+
+def test_issue_api_projection_uses_display_order_and_keeps_quotes_in_controlled_source_path_only() -> None:
+    pipeline = {
+        "kind": "annual_issue_pipeline_v1",
+        "candidates": [{
+            "finding_id": "finding:one", "evidence_ids": ["evidence:one"], "priority": "high",
+            "citations": [{"evidence_id": "evidence:one", "quote": "API_ISSUE_QUOTE_SECRET"}],
+        }],
+        "issues": [{
+            "issue_id": "issue:one", "member_finding_ids": ["finding:one"], "evidence_ids": ["evidence:one"],
+            "follow_up": "复核附注。", "citations": [{"evidence_id": "evidence:one", "quote": "API_ISSUE_QUOTE_SECRET"}],
+        }],
+        "supplements": [{
+            "evidence_id": "supp:one", "raw_text": "API_SUPPLEMENT_SECRET",
+            "issue_roles": [{"issue_id": "issue:one", "role": "unknown", "reason_quote": "API_REASON_QUOTE_SECRET"}],
+        }],
+        "member_decisions": [{"finding_id": "finding:one", "reason_quote": "API_MEMBER_REASON_SECRET"}],
+    }
+    review = {
+        "status": "completed", "reasons": [{"evidence_ids": ["evidence:one"]}],
+        "follow_up_items": [{"object": "finding:one", "evidence_ids": ["evidence:one"]}],
+    }
+
+    projected = annual_report_read.redact_issue_pipeline_text_for_api({
+        "model_issue_pipeline": pipeline,
+        "model_review": review,
+        "model_investigation": {"model_issue_pipeline": pipeline},
+    })
+
+    safe_pipeline = projected["model_issue_pipeline"]
+    assert safe_pipeline["presentation_order"]["candidate_order"][0]["finding_id"] == "finding:one"
+    assert safe_pipeline == projected["model_investigation"]["model_issue_pipeline"]
+    serialized = json.dumps(projected, ensure_ascii=False)
+    for secret in ("API_ISSUE_QUOTE_SECRET", "API_SUPPLEMENT_SECRET", "API_REASON_QUOTE_SECRET", "API_MEMBER_REASON_SECRET"):
+        assert secret not in serialized
 
 
 def _make_archive(
@@ -928,3 +968,240 @@ def test_legacy_report_api_does_not_invent_snapshot_metadata(tmp_path: Path) -> 
 
     assert response.status_code == 200, response.text
     assert "snapshot" not in response.json()
+
+
+def test_v5_failed_audit_reader_rebuilds_attempt_ledger_and_request_binding(tmp_path: Path) -> None:
+    run_id = "annual-analysis-failure-ledger-test"
+    audit_id = "40000000-0000-4000-8000-000000000001"
+    attempt_id = "40000000-0000-4000-8000-000000000002"
+    audit_parts = ("artifacts", "runs", run_id, audit_id)
+    attempt_dir = tmp_path.joinpath(*audit_parts, "attempt-01")
+    attempt_dir.mkdir(parents=True)
+    expected_messages = [
+        {"role": "system", "content": "local prompt"},
+        {"role": "user", "content": "{\"source\":\"known\"}"},
+    ]
+    (attempt_dir / "request.json").write_text(json.dumps({
+        "status": "started", "attempt_index": 1, "audit_id": attempt_id,
+        "started_at": "2026-10-08T08:00:00Z", "prompt_version": "annual_review_v3",
+        "evidence_refs": [], "model": "local-model", "timeout_seconds": 2.0,
+        "messages": expected_messages, "stream": False,
+    }), encoding="utf-8")
+    (attempt_dir / "failure.json").write_text(json.dumps({
+        "status": "failed", "audit_id": attempt_id,
+        "category": "call_deadline_exhausted", "provider_admitted": False,
+    }), encoding="utf-8")
+    failure = {
+        "status": "failed", "started_at": "2026-10-08T08:00:00Z",
+        "finished_at": "2026-10-08T08:00:00Z", "duration_seconds": 0.0,
+        "category": "call_deadline_exhausted", "provider_admission_count": 0,
+        "response_count": 0, "attempt_records": [{
+            "attempt_index": 1, "audit_id": attempt_id, "admission_id": None,
+            "provider_admitted": False, "response_accepted": False,
+            "accepted_findings": 0, "status": "rejected", "reason": "call_deadline_exhausted",
+        }],
+    }
+
+    annual_report_read._validate_audited_failure_record(
+        tmp_path, audit_parts, failure, expected_messages=expected_messages,
+        expected_model="local-model", expected_prompt_version="annual_review_v3",
+        expected_evidence_refs=[], expected_admissions=0, expected_responses=0,
+        code="annual_review_audit_invalid",
+    )
+    tampered = {**failure, "provider_admission_count": 1}
+    with pytest.raises(annual_report_read.AnnualReportReadError):
+        annual_report_read._validate_audited_failure_record(
+            tmp_path, audit_parts, tampered, expected_messages=expected_messages,
+            expected_model="local-model", expected_prompt_version="annual_review_v3",
+            expected_evidence_refs=[], expected_admissions=0, expected_responses=0,
+            code="annual_review_audit_invalid",
+        )
+
+
+def _v5_source_binding_reader_fixture(tmp_path: Path) -> tuple[dict[str, object], dict[str, object], dict[str, object], dict[str, object]]:
+    from finagent.agents.annual_issue_pipeline import checkpoint_issue_pipeline
+
+    run_id = "annual-analysis-v5-source-binding-test"
+    source_pdf = tmp_path / "original.pdf"
+    archived_pdf = tmp_path / "source.pdf"
+    record_path = tmp_path / "source-record.json"
+    source_bytes = b"offline source bytes for source binding contract"
+    source_pdf.write_bytes(source_bytes)
+    archived_pdf.write_bytes(source_bytes)
+    source_sha = hashlib.sha256(source_bytes).hexdigest()
+    report: dict[str, object] = {
+        "kind": "fintrace_annual_analysis_report", "run_id": run_id,
+        "company_id": "600000", "report_year": 2025,
+        "source_document_id": "annual-report-2025", "source_sha256": source_sha,
+    }
+    record = {
+        "document_id": report["source_document_id"],
+        "company_id": report["company_id"], "report_period": "2025-12-31",
+        "sha256": source_sha, "local_path": str(source_pdf),
+    }
+    record_bytes = json.dumps(record, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    record_path.write_bytes(record_bytes)
+    source_binding = investigation_append._validate_source_binding(
+        report, record, record_sha256=hashlib.sha256(record_bytes).hexdigest(),
+        source_record_path=record_path, original_pdf_path=source_pdf,
+        archived_pdf_path=archived_pdf,
+    )
+    identity = {
+        "run_id": run_id, "company_id": "600000", "report_year": 2025,
+        "report_period": "2025-12-31", "source_document_id": "annual-report-2025",
+        "source_sha256": source_sha,
+    }
+    discovery_binding = {
+        "source_sha256": source_sha, "company_id": "600000", "report_year": 2025,
+        "source_document_id": "annual-report-2025", "analysis_mode": "model_investigation",
+        "provider_model_fingerprint": "offline-fake-provider-model", "model": "local-fake-model",
+        "plan_version": "annual-discovery-plan-v3", "plan_sha256": "b" * 64,
+        "m3_binding_sha256": None,
+    }
+    execution_binding = {
+        "kind": "fintrace_annual_execution_binding_v5", "execution_version": "execution_v5",
+        **{key: discovery_binding[key] for key in (
+            "source_sha256", "company_id", "report_year", "source_document_id", "analysis_mode",
+            "provider_model_fingerprint", "model",
+        )},
+        "discovery_binding": discovery_binding, "prompts_sha256": "c" * 64,
+        "parser_version": "annual-issue-pipeline-parser-v1-execution-v5",
+        "issue_pipeline_version": "annual_issue_pipeline_v1",
+        "issue_wire_version": ISSUE_WIRE_VERSION,
+        "grouping_prompt_version": "annual_issue_grouping_v1",
+        "review_prompt_version": "annual_review_v3",
+        "review_wire_version": V3_WIRE_SCHEMA,
+        "review_input_projection_version": V3_INPUT_PROJECTION_VERSION,
+        "plan_version": discovery_binding["plan_version"],
+        "plan_sha256": discovery_binding["plan_sha256"],
+        "m3_binding_sha256": None,
+    }
+    discovery: dict[str, object] = {
+        "kind": "fintrace_annual_discovery", "run_id": run_id,
+        "company_id": "600000", "report_year": 2025,
+        "source_document_id": "annual-report-2025", "source_sha256": source_sha,
+        "status": "completed", "prompt_version": "annual_discovery_v3",
+        "coverage": {"complete": True}, "findings": [], "evidences": [],
+        "execution_contract": {
+            "kind": "fintrace_annual_discovery_execution_v4",
+            "binding": discovery_binding,
+        },
+    }
+    pipeline = checkpoint_issue_pipeline(identity, discovery, execution_binding=execution_binding)
+    report["model_issue_pipeline"] = pipeline
+    report["model_investigation"] = {
+        "source_binding": source_binding, "model_issue_pipeline": pipeline,
+    }
+    return report, discovery, pipeline, source_binding
+
+
+def test_v5_issue_pipeline_reader_accepts_source_binding_producer_shape(tmp_path: Path) -> None:
+    report, discovery, pipeline, source_binding = _v5_source_binding_reader_fixture(tmp_path)
+
+    assert set(source_binding) == {
+        "document_id", "company_id", "report_period", "source_sha256",
+        "source_record_sha256", "source_record_path", "source_pdf_path", "archived_pdf_path",
+    }
+    annual_report_read._validate_v5_issue_pipeline(
+        tmp_path, run_id=str(report["run_id"]), report=report,
+        discovery=discovery, issue_pipeline=pipeline,
+        discovery_evidences=(), parent_archive=None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("document_id", "other-document"),
+        ("company_id", "other-company"),
+        ("report_period", "2024-12-31"),
+        ("source_sha256", "0" * 64),
+    ],
+)
+def test_v5_issue_pipeline_reader_rejects_source_binding_mismatch(
+    tmp_path: Path, field: str, value: str,
+) -> None:
+    report, discovery, pipeline, source_binding = _v5_source_binding_reader_fixture(tmp_path)
+    source_binding[field] = value
+
+    with pytest.raises(annual_report_read.AnnualReportReadError) as exc_info:
+        annual_report_read._validate_v5_issue_pipeline(
+            tmp_path, run_id=str(report["run_id"]), report=report,
+            discovery=discovery, issue_pipeline=pipeline,
+            discovery_evidences=(), parent_archive=None,
+        )
+    assert exc_info.value.code == "annual_issue_pipeline_binding_invalid"
+
+
+def test_issue_supplement_index_and_preview_are_source_bound_and_keep_raw_text_out_of_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_id = "issue-preview-controlled"
+    pdf = pymupdf.open()
+    page = pdf.new_page(width=420, height=540)
+    page.insert_text((40, 80), "Same source supplement context")
+    source_bytes = pdf.tobytes()
+    pdf.close()
+    source_sha = hashlib.sha256(source_bytes).hexdigest()
+    raw_text = "Same source supplement context"
+    evidence_id = "supplement-test-001"
+    source_identity = {
+        "run_id": run_id, "company_id": "603288", "report_year": 2024, "report_period": "2024-12-31",
+        "source_document_id": "document-test", "source_sha256": source_sha,
+    }
+    pipeline = {
+        "kind": "annual_issue_pipeline_v1", "source_identity": source_identity,
+        "supplements": [{
+            "evidence_id": evidence_id, "source_document_id": "document-test", "source_sha256": source_sha,
+            "pdf_page": 1, "block_index": 0, "start_char": 0, "end_char": len(raw_text),
+            "bbox": {"x0": 38.0, "y0": 68.0, "x1": 240.0, "y1": 86.0}, "raw_text": raw_text,
+            "section": "management_discussion", "role_status": "accepted",
+            "issue_roles": [{"issue_id": "issue:test", "role": "possible_explanation", "reason_code": "states_timing"}],
+        }],
+    }
+    report = {
+        "run_id": run_id, "model_issue_pipeline": pipeline,
+        "model_investigation": {"model_issue_pipeline": pipeline},
+    }
+    archive = annual_report_read.AnnualReportArchive(
+        run_id=run_id,
+        report=report,
+        manifest_summary={"document_id": "document-test", "source_pdf_sha256": source_sha, "report_sha256": "b" * 64},
+        verification_evidences=(), narrative_evidences=(), source_pdf_bytes=source_bytes, source_provenance={},
+    )
+    monkeypatch.setattr(app_module, "load_annual_report", lambda _root, _run: archive)
+    client = TestClient(create_app(tmp_path))
+
+    report_response = client.get(f"/v1/annual-analyses/{run_id}")
+    assert report_response.status_code == 200
+    assert raw_text not in report_response.text
+    assert '"raw_text"' not in report_response.text
+    index_response = client.get(f"/v1/annual-analyses/{run_id}/issue-evidences")
+    assert index_response.status_code == 200
+    index = index_response.json()
+    assert index["source_sha256"] == source_sha
+    assert index["report_sha256"] == "b" * 64
+    assert index["items"][0]["raw_text"] == raw_text
+    assert index["items"][0]["issue_roles"] == pipeline["supplements"][0]["issue_roles"]
+    assert index["items"][0]["preview_url"] == f"/v1/annual-analyses/{run_id}/issue-evidences/{evidence_id}/preview.png"
+    preview = client.get(f"/v1/annual-analyses/{run_id}/issue-evidences/{evidence_id}/preview.png?focus=true")
+    assert preview.status_code == 200
+    assert preview.headers["content-type"] == "image/png"
+    assert preview.headers["x-evidence-kind"] == "annual_issue_supplement"
+    assert preview.headers["x-evidence-interpretation-code"] == "annual_issue_retrieval_unverified_context_possible_explanation_unknown"
+    assert preview.headers["x-report-sha256"] == "b" * 64
+    assert preview.headers["x-pdf-page"] == "1"
+    assert preview.content.startswith(b"\x89PNG\r\n\x1a\n")
+    missing = client.get(f"/v1/annual-analyses/{run_id}/issue-evidences/foreign-evidence/preview.png")
+    assert missing.status_code == 404
+
+    pipeline["supplements"][0]["role_status"] = "pending"
+    pipeline["supplements"][0]["issue_roles"] = []
+    pending_index = client.get(f"/v1/annual-analyses/{run_id}/issue-evidences")
+    assert pending_index.status_code == 200
+    assert pending_index.json()["items"][0]["issue_roles"] == []
+    assert pending_index.json()["items"][0]["role_status"] == "pending"
+
+    pipeline["supplements"][0]["role_status"] = "accepted"
+    accepted_empty_index = client.get(f"/v1/annual-analyses/{run_id}/issue-evidences")
+    assert accepted_empty_index.status_code == 422

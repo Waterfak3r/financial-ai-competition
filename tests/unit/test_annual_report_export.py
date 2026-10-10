@@ -351,6 +351,100 @@ def test_review_mixed_fact_calculation_and_discovery_refs_survive_all_exports(
         assert "raw_text" not in output
 
 
+def test_issue_pipeline_exports_omit_raw_quotes_from_all_nested_issue_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    created = _archive(tmp_path)
+    run_id = str(created["run_id"])
+    archive = load_annual_report(tmp_path, run_id)
+    report = json.loads(json.dumps(archive.report, ensure_ascii=False))
+    source_sha = archive.manifest_summary["source_pdf_sha256"]
+    candidate_quote = "ISSUE_PRIMARY_QUOTE_SECRET"
+    supplement_text = "ISSUE_SUPPLEMENT_RAW_SECRET"
+    source_identity = {
+        "run_id": run_id,
+        "company_id": report["company_id"],
+        "report_year": report["report_year"],
+        "report_period": "2025-12-31",
+        "source_document_id": report["source_document_id"],
+        "source_sha256": source_sha,
+    }
+    pipeline = {
+        "kind": "annual_issue_pipeline_v1",
+        "status": "completed",
+        "reason": None,
+        "source_identity": source_identity,
+        "input": {"finding_count": 1, "candidate_count": 1, "discovery_coverage_complete": True, "finding_ids": ["disc:test"]},
+        "candidates": [{
+            "candidate_id": "candidate:test", "origin": "discovery", "status": "completed",
+            "finding_id": "disc:test", "member_finding_ids": ["disc:test"], "title": "候选事项",
+            "observation": "报告披露待核查事项。", "why_it_matters": "需要核对。", "follow_up": "回到合同核验。",
+            "priority": "medium", "evidence_ids": ["ev:test"],
+            "citations": [{"evidence_id": "ev:test", "role": "support", "quote": candidate_quote,
+                           "source_document_id": report["source_document_id"], "source_sha256": source_sha,
+                           "pdf_page": 1, "block_index": 0, "start_char": 0,
+                           "bbox": {"x0": 1, "y0": 1, "x1": 2, "y1": 2},
+                           "deep": {"quote": "ISSUE_DEEP_QUOTE_SECRET"}}],
+        }],
+        "issues": [{
+            "issue_id": "issue:test", "origin": "grouping", "status": "accepted", "title": "归并问题",
+            "observation": "已知观察。", "why_it_matters": "需核验。", "follow_up": "补充材料。", "priority": "medium",
+            "member_finding_ids": ["disc:test"], "evidence_ids": ["ev:test"], "verification_status": "unverified",
+            "independent_verification": False, "global_merged_issue_ids": [], "global_relation": None,
+            "review_order_reason": "review_pending; locator=complete; follow_up=explicit; source_order=0; priority_unverified",
+            "citations": [{"evidence_id": "ev:test", "role": "support", "quote": "ISSUE_GLOBAL_QUOTE_SECRET",
+                           "source_document_id": report["source_document_id"], "source_sha256": source_sha,
+                           "pdf_page": 1, "block_index": 0, "start_char": 0,
+                           "bbox": {"x0": 1, "y0": 1, "x1": 2, "y1": 2}}],
+            "member_sources": [{"finding_id": "disc:test", "disposition": "retain", "reason_code": "kept"}],
+        }],
+        "member_decisions": [{"finding_id": "disc:test", "disposition": "retain", "issue_id": "issue:test", "reason_code": "kept"}],
+        "supplements": [{
+            "evidence_id": "supp:test", "source_document_id": report["source_document_id"], "source_sha256": source_sha,
+            "pdf_page": 1, "block_index": 0, "start_char": 0, "end_char": len(supplement_text),
+            "bbox": {"x0": 1, "y0": 1, "x1": 2, "y1": 2}, "raw_text": supplement_text,
+            "section": "management_discussion", "selection_reason": "定向查找", "role": "context",
+            "issue_ids": ["issue:test"], "verification_status": "unverified", "role_status": "accepted",
+            "independent_verification": False, "retrieval_is_verification": False,
+            "issue_roles": [{"issue_id": "issue:test", "role": "context", "reason_code": "clarifies_scope"}],
+            "deep": {"raw_text": "ISSUE_DEEP_RAW_SECRET"},
+        }],
+        "retrieval_coverage": {
+            "scope": "same_source_extracted_text_blocks", "scanned_blocks": 10,
+            "matched_issue_block_pairs": 4, "selected_issue_block_pairs": 2,
+            "selected_excerpt_chars": 100, "selected_unique_source_chars": 80,
+            "omitted_chars": 20, "complete": True,
+        },
+        "global_closure": {"closed": True, "scope": "current_known_findings", "no_priority_allowed": False,
+                           "pending_issue_ids": [], "pending_finding_ids": [], "coverage_gaps": [], "relation_gaps": []},
+        "shards": [], "audit_summary": {"attempt_count": 0, "response_count": 0, "reused_count": 0, "model_called": False},
+    }
+    report["model_issue_pipeline"] = pipeline
+    report["model_investigation"]["model_issue_pipeline"] = pipeline
+    monkeypatch.setattr(annual_export_module, "load_annual_report", lambda _root, _run_id: replace(archive, report=report))
+
+    outputs = {
+        fmt: export_annual_report(tmp_path, run_id, fmt).content.decode("utf-8")
+        for fmt in ("json", "markdown", "html")
+    }
+    projected = json.loads(outputs["json"])["report"]["model_issue_pipeline"]
+    assert "quote" not in projected["candidates"][0]["citations"][0]
+    assert "raw_text" not in projected["supplements"][0]
+    assert projected["candidates"][0]["citations"][0]["pdf_page"] == 1
+    assert projected["supplements"][0]["pdf_page"] == 1
+    assert projected["issues"][0]["review_order_reason"].startswith("review_pending;")
+    assert projected["presentation_order"]["schema_version"] == "annual_issue_display_order_v1"
+    assert projected["presentation_order"]["candidate_order"][0]["finding_id"] == "disc:test"
+    assert projected["retrieval_coverage"]["selected_unique_source_chars"] == 80
+    assert "唯一来源字符 80" in outputs["markdown"]
+    assert "唯一来源字符 80" in outputs["html"]
+    for output in outputs.values():
+        for secret in (candidate_quote, supplement_text, "ISSUE_GLOBAL_QUOTE_SECRET", "ISSUE_DEEP_QUOTE_SECRET", "ISSUE_DEEP_RAW_SECRET"):
+            assert secret not in output
+        assert '"quote"' not in output
+        assert '"raw_text"' not in output
+
+
 def test_html_and_markdown_escape_untrusted_html_and_links(tmp_path: Path) -> None:
     _archive(tmp_path)
     markdown = export_annual_report(tmp_path, "export-test-001", "markdown").content.decode("utf-8")

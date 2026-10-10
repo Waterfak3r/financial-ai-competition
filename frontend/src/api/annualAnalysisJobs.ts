@@ -417,9 +417,9 @@ function readAnnualAnalysisBudget(value: unknown, jobStatus: AnnualAnalysisJobSt
     providerAdmissionCount > taskEffective || providerAttemptsRemaining !== taskEffective - providerAdmissionCount ||
     stageAdmissions !== providerAdmissionCount
   ) throw invalidResponse("analysis_budget 计时或请求准入计数不一致");
-  if (stages.annual_issue_grouping.status !== "reserved" ||
-    stages.annual_issue_grouping.admitted_attempts !== 0 || stages.annual_issue_grouping.planned_attempts !== null) {
-    throw invalidResponse("analysis_budget R3归并阶段预留状态无效");
+  if (stages.annual_issue_grouping.status === "reserved" &&
+    stages.annual_issue_grouping.admitted_attempts !== 0) {
+    throw invalidResponse("缺少归并层时不能记录问题归并阶段准入");
   }
   return {
     schema_version: "annual_analysis_budget_v1",
@@ -448,13 +448,19 @@ function readBudgetStage(
   expectedConfiguredLimit: number,
 ): AnnualAnalysisBudget["stages"][keyof AnnualAnalysisBudget["stages"]] {
   const record = asRecord(value);
-  exactKeys(record, [
+  const requiredKeys = [
     "time_limit_seconds", "attempt_limit", "planned_attempts", "admitted_attempts", "status",
-  ], `analysis_budget.stages.${name}`);
+  ] as const;
+  exactKeys(record, record !== null && Object.hasOwn(record, "elapsed_seconds")
+    ? [...requiredKeys, "elapsed_seconds"]
+    : requiredKeys, `analysis_budget.stages.${name}`);
   const timeLimit = budgetInteger(record?.time_limit_seconds, `analysis_budget.stages.${name}.time_limit_seconds`);
   const attemptLimit = budgetInteger(record?.attempt_limit, `analysis_budget.stages.${name}.attempt_limit`);
   const plannedAttempts = nullableBudgetInteger(record?.planned_attempts, `analysis_budget.stages.${name}.planned_attempts`);
   const admittedAttempts = budgetInteger(record?.admitted_attempts, `analysis_budget.stages.${name}.admitted_attempts`);
+  const elapsedSeconds = record?.elapsed_seconds === undefined
+    ? undefined
+    : budgetSeconds(record.elapsed_seconds, `analysis_budget.stages.${name}.elapsed_seconds`);
   const status = record?.status;
   const statuses = new Set<AnnualAnalysisBudgetStageStatus>([
     "not_started", "planned", "running", "completed", "partial", "budget_exhausted", "reserved",
@@ -463,8 +469,7 @@ function readBudgetStage(
     timeLimit < 1 || timeLimit > 285 || attemptLimit !== expectedConfiguredLimit || admittedAttempts > attemptLimit ||
     plannedAttempts !== null && plannedAttempts > 100_000 ||
     typeof status !== "string" || !statuses.has(status as AnnualAnalysisBudgetStageStatus) ||
-    name === "annual_issue_grouping" && status !== "reserved" ||
-    name !== "annual_issue_grouping" && status === "reserved"
+    status === "reserved" && (name !== "annual_issue_grouping" || admittedAttempts !== 0)
   ) throw invalidResponse(`analysis_budget.stages.${name} 字段或上限无效`);
   return {
     time_limit_seconds: timeLimit,
@@ -472,6 +477,7 @@ function readBudgetStage(
     planned_attempts: plannedAttempts,
     admitted_attempts: admittedAttempts,
     status: status as AnnualAnalysisBudgetStageStatus,
+    ...(elapsedSeconds === undefined ? {} : { elapsed_seconds: elapsedSeconds }),
   };
 }
 

@@ -22,6 +22,11 @@ from finagent.core.model_call_ledger import (
     select_call_gate_database as _ledger_select_gate_database,
 )
 from finagent.core.model_settings import ModelConfigError, ModelSettings, load_model_settings
+from finagent.agents.annual_review_wire import (
+    ISSUE_INPUT_WIRE_SCHEMA,
+    V3_INPUT_PROJECTION_VERSION,
+    V3_WIRE_SCHEMA,
+)
 from finagent.retrieval.annual_discovery_context import (
     COMPACT_PLAN_VERSION,
     annual_discovery_plan_projection,
@@ -38,6 +43,12 @@ _PROMPTS = (
     "annual_review_v2.md",
 )
 _PARSER_VERSION = "annual-discovery-parser-v3-execution-v4"
+_ISSUE_PIPELINE_PROMPTS = (
+    "annual_issue_grouping_v1.md",
+    "annual_issue_global_v1.md",
+    "annual_issue_supplement_v1.md",
+    "annual_review_v3.md",
+)
 
 
 def select_call_gate_database(project_root: Path, job_dir: Path) -> Path:
@@ -60,6 +71,7 @@ def validate_annual_recovery_parent(
     settings: ModelSettings | None = None,
     archive: Any | None = None,
     parsed_pdf: object | None = None,
+    require_issue_pipeline_v5: bool = False,
 ) -> dict[str, Any]:
     """Strictly validate a saved parent and return its current binding.
 
@@ -90,6 +102,13 @@ def validate_annual_recovery_parent(
             report=archive.report,
             parsed_pdf=parsed_pdf,
         )
+        pipeline_binding = build_annual_issue_pipeline_binding_v5(
+            Path(project_root), request, settings=settings, report=archive.report, parsed_pdf=parsed_pdf,
+        )
+        if require_issue_pipeline_v5:
+            pipeline = archive.report.get("model_issue_pipeline")
+            if not isinstance(pipeline, Mapping) or pipeline.get("kind") != "annual_issue_pipeline_v1" or pipeline.get("execution_binding") != pipeline_binding:
+                return {"can_resume": False, "reason": "recovery_pipeline_binding_mismatch", "binding": binding, "pipeline_binding": pipeline_binding}
         layer = archive.report.get("model_discovery")
         if not isinstance(layer, Mapping):
             return {"can_resume": False, "reason": "recovery_discovery_missing", "binding": None}
@@ -119,18 +138,30 @@ def validate_annual_recovery_parent(
         ):
             return {"can_resume": False, "reason": "recovery_parent_not_terminal", "binding": binding}
         batches = contract.get("batches")
-        unfinished = isinstance(batches, list) and any(
+        discovery_unfinished = isinstance(batches, list) and any(
             isinstance(row, Mapping) and row.get("state") != "succeeded" for row in batches
         )
-        if not unfinished:
-            review = archive.report.get("model_review")
-            unfinished = not isinstance(review, Mapping) or review.get("status") != "completed"
+        review = archive.report.get("model_review")
+        review_unfinished = not isinstance(review, Mapping) or review.get("status") != "completed"
+        if (
+            review_unfinished
+            and isinstance(review, Mapping)
+            and review.get("status") == "abstained"
+            and review.get("reason") == "annual_review_v3_request_budget_exceeded"
+        ):
+            # The exact v3 whole-wire overflow is deterministic for this source
+            # and prompt. A child with no other work cannot make it fit.
+            review_unfinished = False
+        unfinished = discovery_unfinished or review_unfinished
+        if not unfinished and require_issue_pipeline_v5:
+            pipeline = archive.report.get("model_issue_pipeline")
+            unfinished = _annual_issue_pipeline_has_executable_work(Path(project_root), pipeline)
         if not unfinished:
             investigation = archive.report.get("model_investigation")
             unfinished = _investigation_has_unfinished_items(investigation)
         if not unfinished:
             return {"can_resume": False, "reason": "recovery_nothing_to_resume", "binding": binding}
-        return {"can_resume": True, "reason": None, "binding": binding}
+        return {"can_resume": True, "reason": None, "binding": binding, "pipeline_binding": pipeline_binding}
     except AnnualReportReadError as exc:
         return {
             "can_resume": False,
@@ -139,6 +170,164 @@ def validate_annual_recovery_parent(
         }
     except (ModelConfigError, ModelCallAdmissionError, OSError, ValueError, KeyError, TypeError):
         return {"can_resume": False, "reason": "recovery_binding_unavailable", "binding": None}
+
+
+def _annual_issue_pipeline_has_executable_work(project_root: Path, pipeline: Any) -> bool:
+    """Return whether a v5 issue pipeline can make new progress on a child run.
+
+    A fixed supplement selection cap and a deterministic oversized wire body
+    are terminal for the current unchanged source/plan. A pending in-cap shard
+    remains retryable. This capability check never sends a request.
+    """
+
+    if not isinstance(pipeline, Mapping) or pipeline.get("kind") != "annual_issue_pipeline_v1":
+        return False
+    closure = pipeline.get("global_closure")
+    if not isinstance(closure, Mapping):
+        return False
+    shards = pipeline.get("shards")
+    if not isinstance(shards, list):
+        return False
+
+    # Use the same prompt, model, serialization, and limits as execution so a
+    # body which cannot fit is not advertised as a resumable request.
+    from finagent.agents import annual_issue_pipeline as issue_pipeline
+
+    binding = pipeline.get("execution_binding")
+    model = binding.get("model") if isinstance(binding, Mapping) else None
+    if not isinstance(model, str) or not model:
+        return False
+    prompt_files = {
+        "grouping": "annual_issue_grouping_v1.md",
+        "global": "annual_issue_global_v1.md",
+        "supplement": "annual_issue_supplement_v1.md",
+    }
+    limits = {
+        "grouping": issue_pipeline.MAX_SHARD_REQUEST_CHARS,
+        "global": issue_pipeline.MAX_GLOBAL_REQUEST_CHARS,
+        "supplement": issue_pipeline.MAX_GLOBAL_REQUEST_CHARS,
+    }
+
+    def request_fits(kind: Any, body_input: Any) -> bool:
+        if kind not in prompt_files or not isinstance(body_input, Mapping):
+            return False
+        prompt_path = Path(project_root) / "config" / "prompts" / prompt_files[kind]
+        try:
+            prompt = prompt_path.read_text(encoding="utf-8")
+            wire = issue_pipeline._wire_body(model, prompt, body_input)
+        except (OSError, TypeError, ValueError):
+            # If the exact current request cannot be reconstructed, do not
+            # promise that this report can safely create a progressing child.
+            return False
+        return len(wire.decode("utf-8")) <= limits[kind]
+
+    def is_permanently_oversized(shard: Mapping[str, Any]) -> bool:
+        return not request_fits(shard.get("kind"), shard.get("input"))
+
+    pending_shards = [item for item in shards if isinstance(item, Mapping) and item.get("status") == "pending"]
+    for shard in pending_shards:
+        if shard.get("reason") == "request_size_exceeded" or is_permanently_oversized(shard):
+            continue
+        # Failed, stopped-before-call, and response-invalid in-cap work may be
+        # retried within the same ledger, deadline, and stage budget policies.
+        return True
+
+    source_value = pipeline.get("source_identity")
+    if not isinstance(source_value, Mapping):
+        return False
+    try:
+        source = issue_pipeline._source_identity(source_value)
+    except (KeyError, TypeError, ValueError):
+        return False
+    existing_shard_ids = {
+        item.get("shard_id") for item in shards if isinstance(item, Mapping)
+    }
+
+    if closure.get("closed") is not True or closure.get("pending_issue_ids") or closure.get("relation_gaps"):
+        candidates = pipeline.get("candidates")
+        if isinstance(candidates, list) and candidates:
+            group_prompt = (Path(project_root) / "config" / "prompts" / "annual_issue_grouping_v1.md").read_text(encoding="utf-8")
+            planned_groups = issue_pipeline._build_group_shards(
+                issue_pipeline._local_exact_duplicate_groups(candidates), {}, source, model, group_prompt,
+            )
+            for index, planned in enumerate(planned_groups):
+                shard_id = f"group:{index:03d}:{planned['semantic_sha256'][:16]}"
+                if shard_id not in existing_shard_ids and request_fits("grouping", planned.get("input")):
+                    return True
+
+        # A process can stop after publishing all local member decisions but
+        # before publishing the cross-shard request. Rebuild that exact request
+        # from the immutable local ledger to avoid a false non-resumable state.
+        group_shard_count = sum(
+            1 for item in shards
+            if isinstance(item, Mapping) and item.get("kind") == "grouping" and item.get("status") == "accepted"
+        )
+        decisions = pipeline.get("member_decisions")
+        issues = pipeline.get("issues")
+        candidates = pipeline.get("candidates")
+        if (
+            group_shard_count > 1 and isinstance(decisions, list) and isinstance(issues, list)
+            and isinstance(candidates, list)
+            and all(isinstance(item, Mapping) and item.get("disposition") != "pending" for item in decisions)
+        ):
+            provisional = [item for item in issues if isinstance(item, Mapping) and item.get("status") == "provisional"]
+            if provisional:
+                global_input = issue_pipeline._build_global_input(provisional, decisions, candidates, source)
+                global_sha = issue_pipeline._semantic_sha(global_input)
+                global_id = f"global:{global_sha[:24]}"
+                if global_id not in existing_shard_ids and request_fits("global", global_input):
+                    return True
+        return False
+
+    retrieval = pipeline.get("retrieval_coverage")
+    if not isinstance(retrieval, Mapping):
+        return False
+    scope = retrieval.get("scope")
+    role_pending = retrieval.get("role_assignments_pending")
+    role_total = retrieval.get("role_assignments_total")
+    role_requested = retrieval.get("role_assignments_requested")
+    if type(role_pending) is not int or type(role_total) is not int or type(role_requested) is not int:
+        return False
+    if scope == "not_started":
+        # A closed set with no retrieval checkpoint can still run the bounded
+        # local source scan and construct the first supplement request.
+        return bool(pipeline.get("issues"))
+
+    supplement_shards = [item for item in shards if isinstance(item, Mapping) and item.get("kind") == "supplement"]
+    if any(item.get("status") == "pending" for item in supplement_shards):
+        # In-cap pending requests were handled above. The remaining pending
+        # shard(s) are permanently oversized and cannot be retried.
+        return False
+    accepted_supplements = [item for item in supplement_shards if item.get("status") == "accepted"]
+    if accepted_supplements:
+        # The runner always submits the first MAX_SUPPLEMENT_PAIRS in stable
+        # retrieval order. An accepted response plus a nonempty tail means the
+        # same first slice would be reused on every child; no later pair can
+        # enter the request under this fixed selection rule.
+        if (
+            role_total > role_requested
+            and role_requested == issue_pipeline.MAX_SUPPLEMENT_PAIRS
+        ):
+            return False
+        # A typed accepted result already resolved the complete submitted
+        # slice. Pending role cells after that point are outside the stable
+        # request or uncovered by the current implementation.
+        return False
+
+    # A hard stop can land after the role plan is published but before its
+    # shard. In that checkpoint, role_assignments_pending means the stable
+    # selection tail only; actual assigned rows still have role_status=pending.
+    supplement_rows = pipeline.get("supplements")
+    issues = pipeline.get("issues")
+    if isinstance(supplement_rows, list) and any(
+        isinstance(item, Mapping) and item.get("role_status") == "pending"
+        for item in supplement_rows
+    ):
+        if not isinstance(issues, list):
+            return False
+        supplement_input = issue_pipeline._supplement_input(issues, supplement_rows, source)
+        return role_requested > 0 and request_fits("supplement", supplement_input)
+    return role_pending > 0 and role_requested > 0
 
 
 def build_annual_recovery_binding(
@@ -192,6 +381,85 @@ def build_annual_recovery_binding(
         "m3_binding_sha256": m3_binding_sha256,
     }
     return binding
+
+
+def build_annual_issue_pipeline_binding_v5(
+    project_root: Path,
+    request: Mapping[str, Any],
+    *,
+    settings: ModelSettings,
+    report: Mapping[str, Any],
+    parsed_pdf: object | None = None,
+) -> dict[str, Any]:
+    """Build an additive execution_v5 binding without changing v3/v4 digests."""
+
+    discovery_binding = build_annual_recovery_binding(
+        project_root, request, settings=settings, report=report, parsed_pdf=parsed_pdf,
+    )
+    root = Path(__file__).resolve().parents[4]
+    new_prompt_hashes: dict[str, str] = {}
+    for name in _ISSUE_PIPELINE_PROMPTS:
+        new_prompt_hashes[name] = hashlib.sha256((root / "config" / "prompts" / name).read_bytes()).hexdigest()
+    required_v4_fields = {
+        "source_sha256", "company_id", "report_year", "source_document_id", "analysis_mode",
+        "provider_model_fingerprint", "model", "prompts_sha256", "parser_version",
+        "plan_version", "execution_version", "plan_sha256", "m3_binding_sha256",
+    }
+    if (
+        set(discovery_binding) != required_v4_fields
+        or discovery_binding.get("execution_version") != "execution_v4"
+        or discovery_binding.get("plan_version") != COMPACT_PLAN_VERSION
+        or discovery_binding.get("parser_version") != _PARSER_VERSION
+        or discovery_binding.get("analysis_mode") not in _MODES
+        or discovery_binding.get("company_id") != request.get("company_id")
+        or discovery_binding.get("report_year") != request.get("report_year")
+        or discovery_binding.get("source_document_id") != request.get("document_id")
+        or discovery_binding.get("analysis_mode") != request.get("mode")
+        or discovery_binding.get("source_sha256") != str(request.get("sha256", "")).lower()
+        or any(
+            not isinstance(discovery_binding.get(field), str)
+            or _SHA256.fullmatch(discovery_binding[field]) is None
+            for field in ("source_sha256", "provider_model_fingerprint", "prompts_sha256", "plan_sha256")
+        )
+        or not isinstance(discovery_binding.get("model"), str)
+        or not discovery_binding["model"].strip()
+        or discovery_binding.get("m3_binding_sha256") is not None
+        and (
+            not isinstance(discovery_binding.get("m3_binding_sha256"), str)
+            or _SHA256.fullmatch(discovery_binding["m3_binding_sha256"]) is None
+        )
+        or discovery_binding.get("analysis_mode") == "model_investigation"
+        and discovery_binding.get("m3_binding_sha256") is not None
+        or discovery_binding.get("analysis_mode") == "integrated_analysis"
+        and discovery_binding.get("m3_binding_sha256") is None
+    ):
+        raise ValueError("recovery_v4_binding_invalid")
+    return {
+        "kind": "fintrace_annual_execution_binding_v5",
+        "execution_version": "execution_v5",
+        "source_sha256": discovery_binding["source_sha256"],
+        "company_id": discovery_binding["company_id"],
+        "report_year": discovery_binding["report_year"],
+        "source_document_id": discovery_binding["source_document_id"],
+        "analysis_mode": discovery_binding["analysis_mode"],
+        "provider_model_fingerprint": discovery_binding["provider_model_fingerprint"],
+        "model": discovery_binding["model"],
+        "discovery_binding": discovery_binding,
+        "prompts_sha256": _sha256_json({
+            "unchanged_execution_v4_prompt_set_sha256": discovery_binding["prompts_sha256"],
+            "issue_pipeline_prompt_sha256": new_prompt_hashes,
+        }),
+        "parser_version": "annual-issue-pipeline-parser-v1-execution-v5",
+        "issue_pipeline_version": "annual_issue_pipeline_v1",
+        "issue_wire_version": ISSUE_INPUT_WIRE_SCHEMA,
+        "grouping_prompt_version": "annual_issue_grouping_v1",
+        "review_prompt_version": "annual_review_v3",
+        "review_wire_version": V3_WIRE_SCHEMA,
+        "review_input_projection_version": V3_INPUT_PROJECTION_VERSION,
+        "plan_version": discovery_binding["plan_version"],
+        "plan_sha256": discovery_binding["plan_sha256"],
+        "m3_binding_sha256": discovery_binding["m3_binding_sha256"],
+    }
 
 
 def recovery_identity_sha256(binding: Mapping[str, Any]) -> str:

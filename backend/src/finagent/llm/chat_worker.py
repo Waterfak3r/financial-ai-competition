@@ -20,6 +20,7 @@ from finagent.core.model_call_ledger import (
     admission_gate_is_open,
     mark_provider_request_started,
 )
+from finagent.llm.chat_completion import serialize_chat_body
 
 
 def main() -> int:
@@ -61,14 +62,9 @@ def main() -> int:
 
 def _network_call(request_data: dict[str, Any], outcome: queue.Queue[dict[str, Any]]) -> None:
     try:
-        payload = {
-            "model": request_data["model"],
-            "messages": request_data["messages"],
-            "stream": False,
-        }
         request = Request(
             request_data["url"],
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            data=serialize_chat_body(request_data["model"], request_data["messages"]),
             headers={
                 "Authorization": f"Bearer {request_data['api_key']}",
                 "Content-Type": "application/json",

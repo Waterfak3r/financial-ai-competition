@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import copy
+import json
 import uuid
 from pathlib import Path
 from typing import Any
@@ -88,6 +88,35 @@ def _successful_review(report: dict[str, Any], _investigation: dict[str, Any], *
 
 def _settings() -> ModelSettings:
     return ModelSettings("https://example.invalid/v1", "local-test-secret", "test-model", 1)
+
+
+def _request_identity(report: dict[str, Any], mode: str) -> dict[str, Any]:
+    return {
+        "mode": mode,
+        "company_id": report["company_id"],
+        "report_year": report["report_year"],
+        "document_id": report["source_document_id"],
+        "source_pdf_path": "603288/2024/mock-document/source.pdf",
+        "sha256": report["source_sha256"],
+    }
+
+
+def _valid_v4_binding(request: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "source_sha256": str(request["sha256"]).lower(),
+        "company_id": request["company_id"],
+        "report_year": request["report_year"],
+        "source_document_id": request["document_id"],
+        "analysis_mode": request["mode"],
+        "provider_model_fingerprint": "a" * 64,
+        "model": "test-model",
+        "prompts_sha256": "b" * 64,
+        "parser_version": "annual-discovery-parser-v3-execution-v4",
+        "plan_version": "annual_discovery_plan_v3",
+        "execution_version": "execution_v4",
+        "plan_sha256": "c" * 64,
+        "m3_binding_sha256": "d" * 64 if request["mode"] == "integrated_analysis" else None,
+    }
 
 
 def _successful_payload(report: dict[str, Any]) -> dict[str, Any]:
@@ -474,6 +503,308 @@ def test_parent_review_reuse_rejects_semantic_input_changes(
     assert reused is None
 
 
+def _v3_review_reuse_fixture() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+    source_sha = "b" * 64
+    finding_id = f"disc:{source_sha[:12]}-00000000000000000001"
+    evidence_id = "adisc-evidence-1"
+    base_identity = {
+        "company_id": "600000", "report_year": 2025,
+        "source_document_id": "annual-report-2025", "source_sha256": source_sha,
+    }
+
+    def make_run(run_id: str, *, reused: bool) -> tuple[dict[str, Any], dict[str, Any]]:
+        from finagent.agents.annual_issue_pipeline import checkpoint_issue_pipeline
+
+        identity = {"run_id": run_id, **base_identity}
+        report = {
+            "kind": "fintrace_annual_analysis_report", **identity,
+            "scope": {"gaps": []}, "confirmed": {"metrics": [], "analyses": []},
+            "pending_review": {
+                "facts": [{
+                    "fact_id": "pending-fact:cashflow", "unit": "CNY", "period": "2025",
+                    "expected_text": "本期待核现金流事实。", "placement_reasons": [],
+                }],
+                "calculations": [], "claims": [], "candidate_signals": [],
+            },
+            "verified_claims": [{
+                "claim_id": "claim:verified-cashflow", "claim_type": "fact",
+                "text": "经营现金流核验记录。", "placement": "verified_claims",
+                "verification_status": "verified",
+                "independent_verification": {
+                    "status": "verified", "reason": None, "expected_text": "经营现金流核验记录。",
+                },
+                "supporting_fact_ids": [], "calculation_ids": [],
+                "supporting_evidence_ids": ["claim-evidence-1"],
+                "evidences": [{
+                    "evidence_id": "claim-evidence-1", "document_id": identity["source_document_id"],
+                    "source_sha256": source_sha, "pdf_page": 2, "raw_text": "经营活动现金流净额。",
+                    "quote": "经营活动现金流净额", "bbox": {"x0": 1, "y0": 2, "x1": 3, "y1": 4},
+                }],
+                "verifications": [{
+                    "verification_id": "verify:claim-verified-cashflow", "status": "verified",
+                    "target_type": "claim", "target_id": "claim:verified-cashflow",
+                    "evidence_ids": ["claim-evidence-1"], "reason": None,
+                    "verified_at": "2026-10-07T02:30:00Z",
+                }],
+                "placement_reasons": [], "limitations": [], "alternative_explanations": [],
+                "follow_up_items": [],
+            }],
+        }
+        batch_row = {
+            "batch_index": 1, "status": "succeeded", "reason": None,
+            "pages": [1], "raw_chars": 48, "accepted_findings": 1,
+            "rejected_findings": 0, "restored_quotes": 0,
+        }
+        discovery = {
+            "kind": "fintrace_annual_discovery", **identity, "status": "completed",
+            "coverage": {
+                "complete": True, "total_pages": 2, "text_pages": 2,
+                "total_blocks": 1, "total_chars": 48, "planned_batches": 1,
+                "processed_batches": 1, "successful_batches": 1, "partial_batches": 0,
+                "failed_batches": 0, "unattempted_batches": 0, "processed_chars": 48,
+                "attempted_chars": 48 if not reused else 0, "unattempted_chars": 0,
+                "planned_chars": 48, "omitted_chars": 0, "unread_pages": [], "failed_pages": [],
+                "no_text_pages": [], "image_pages": [], "unread_image_pages": [],
+                "truncated": False, "source_status": "parsed", "content_status": "text_available",
+                "time_budget_exhausted": False, "text_only_scope": True,
+                "batch_results": [dict(batch_row)],
+            },
+            "findings": [{
+                "finding_id": finding_id, "title": "现金流事项",
+                "observation": "经营现金流较低。", "why_it_matters": "应核对结算。",
+                "follow_up": "检查现金流量表附注。", "priority": "medium",
+                "classification": "unverified_model_finding", "verification_status": "unverified",
+                "evidence_ids": [evidence_id],
+                "citations": [{"evidence_id": evidence_id, "quote": "经营活动现金流净额"}],
+                "batch_index": 1,
+            }],
+            "evidences": [{
+                "evidence_id": evidence_id, "source_document_id": identity["source_document_id"],
+                "source_sha256": source_sha, "pdf_page": 2, "block_index": 0, "start_char": 0,
+                "bbox": {"x0": 1, "y0": 2, "x1": 3, "y1": 4},
+                "raw_text": "经营活动现金流净额", "finding_ids": [finding_id],
+            }],
+            "execution_contract": {
+                "kind": "fintrace_annual_discovery_execution_v3",
+                "provider_admission_count": 0 if reused else 1,
+                "response_count": 0 if reused else 1,
+                "batches": [{
+                    "batch_index": 1, "resolution": "reused" if reused else "executed",
+                    "state": "succeeded", "attempts": [] if reused else [{"provider_admitted": True}],
+                }],
+            },
+        }
+        pipeline = checkpoint_issue_pipeline({**identity, "report_period": "2025-12-31"}, discovery)
+        investigation = {
+            **identity, "status": "completed", "reason": None, "model_name": "test-model",
+            "items": [], "narrative_evidences": [], "discovery": discovery,
+            "model_issue_pipeline": pipeline,
+        }
+        return report, investigation
+
+    parent_report, parent_investigation = make_run("annual-analysis-v3-parent", reused=False)
+    current_report, current_investigation = make_run("annual-analysis-v3-child", reused=True)
+    parent_report["model_review"] = {
+        "status": "completed", "prompt_version": "annual_review_v3", "reason": None,
+        "assessment": "insufficient_evidence", "summary": "需进一步核查。",
+        "reasons": [], "follow_up_items": [], "limitations": ["发现覆盖未完成"],
+        "model_called": True, "call_count": 1, "call_attempt_count": 1,
+        "audit_artifacts": [{
+            "audit_dir": "runs/annual-analysis-v3-parent/00000000-0000-4000-8000-000000000001",
+            "request_path": "runs/annual-analysis-v3-parent/00000000-0000-4000-8000-000000000001/request.json",
+            "response_path": "runs/annual-analysis-v3-parent/00000000-0000-4000-8000-000000000001/response.json",
+            "failure_path": None, "status": "succeeded", "prompt_version": "annual_review_v3",
+        }],
+        "source_identity": appendix._report_identity(parent_report),
+    }
+    return parent_report, current_report, parent_investigation, current_investigation, parent_investigation["model_issue_pipeline"], current_investigation["model_issue_pipeline"]
+
+
+def test_v3_review_reuse_ignores_child_reused_batch_attempt_metadata() -> None:
+    parent_report, current_report, parent_investigation, current_investigation, parent_pipeline, current_pipeline = _v3_review_reuse_fixture()
+
+    reused = appendix._reuse_parent_review_v3(
+        parent_report, current_report, parent_investigation, current_investigation,
+        parent_pipeline, current_pipeline, current_model_name="test-model",
+    )
+
+    assert reused is not None
+    assert reused["reason"] == "review_reused_for_matching_inputs"
+    assert reused["source_identity"]["run_id"] == current_report["run_id"]
+    assert reused["model_called"] is False
+    assert reused["call_count"] == reused["call_attempt_count"] == 0
+
+
+def test_v3_review_reuse_ignores_only_claim_verification_time_and_keeps_original_audit_input() -> None:
+    from finagent.agents import annual_review
+
+    parent_report, current_report, parent_investigation, current_investigation, parent_pipeline, current_pipeline = _v3_review_reuse_fixture()
+    parent_verification = parent_report["verified_claims"][0]["verifications"][0]
+    current_verification = current_report["verified_claims"][0]["verifications"][0]
+    parent_time = parent_verification["verified_at"]
+    current_time = "2026-10-08T04:00:00Z"
+    current_verification["verified_at"] = current_time
+
+    parent_identity = appendix._report_identity(parent_report)
+    current_identity = appendix._report_identity(current_report)
+    parent_signature = appendix._review_reuse_signature_v3(
+        parent_report, parent_investigation, parent_identity, "test-model",
+    )
+    current_signature = appendix._review_reuse_signature_v3(
+        current_report, current_investigation, current_identity, "test-model",
+    )
+    assert parent_signature == current_signature
+
+    reused = appendix._reuse_parent_review_v3(
+        parent_report, current_report, parent_investigation, current_investigation,
+        parent_pipeline, current_pipeline, current_model_name="test-model",
+    )
+    assert reused is not None
+    assert reused["model_called"] is False
+    assert reused["call_count"] == reused["call_attempt_count"] == 0
+
+    # The complete business input keeps each original time. The review-purpose
+    # projection omits this one volatile metadata path, while the reuse
+    # signature separately canonicalizes only valid ISO values.
+    prompt = (Path(__file__).resolve().parents[2] / "config" / "prompts" / "annual_review_v3.md").read_text(encoding="utf-8")
+    parent_input, *_ = annual_review._build_review_input_v3(
+        parent_report, parent_investigation, parent_identity,
+        request_model="test-model", system_prompt=prompt,
+    )
+    current_input, *_ = annual_review._build_review_input_v3(
+        current_report, current_investigation, current_identity,
+        request_model="test-model", system_prompt=prompt,
+    )
+    parent_pool_record = parent_input["claim_verification_pool"][0]["record"]
+    current_pool_record = current_input["claim_verification_pool"][0]["record"]
+    assert parent_pool_record["verified_at"] == parent_time
+    assert current_pool_record["verified_at"] == current_time
+    parent_request = annual_review.build_annual_review_v3_request(
+        parent_input, model="test-model", system_prompt=prompt,
+    )
+    current_request = annual_review.build_annual_review_v3_request(
+        current_input, model="test-model", system_prompt=prompt,
+    )
+    assert parent_input["claim_verification_pool"][0]["record"]["verified_at"] == parent_time
+    assert current_input["claim_verification_pool"][0]["record"]["verified_at"] == current_time
+    assert "verified_at" not in parent_request["projected_input"]["claim_verification_pool"][0]["record"]
+    assert "verified_at" not in current_request["projected_input"]["claim_verification_pool"][0]["record"]
+    assert parent_request["projected_input"] == current_request["projected_input"]
+    assert parent_request["envelope"] == current_request["envelope"]
+    assert parent_request["user_content"] == current_request["user_content"]
+    assert parent_request["semantic_input_sha256"] != current_request["semantic_input_sha256"]
+    assert parent_verification["verified_at"] == parent_time
+    assert current_verification["verified_at"] == current_time
+
+
+@pytest.mark.parametrize(
+    ("timestamp", "present", "expected_state"),
+    [
+        ("<volatile-claim-verification-time>", True, "non_iso_present"),
+        (None, True, "non_iso_present"),
+        ("not-an-iso-datetime", True, "non_iso_present"),
+        (None, False, "missing"),
+    ],
+    ids=["literal-collision-value", "explicit-null", "invalid-text", "missing"],
+)
+def test_v3_review_reuse_timestamp_states_do_not_collide_with_valid_iso_time(
+    timestamp: object, present: bool, expected_state: str,
+) -> None:
+    parent_report, current_report, parent_investigation, current_investigation, parent_pipeline, current_pipeline = _v3_review_reuse_fixture()
+    current_verification = current_report["verified_claims"][0]["verifications"][0]
+    if present:
+        current_verification["verified_at"] = timestamp
+    else:
+        current_verification.pop("verified_at")
+
+    parent_identity = appendix._report_identity(parent_report)
+    current_identity = appendix._report_identity(current_report)
+    parent_signature = appendix._review_reuse_signature_v3(
+        parent_report, parent_investigation, parent_identity, "test-model",
+    )
+    current_signature = appendix._review_reuse_signature_v3(
+        current_report, current_investigation, current_identity, "test-model",
+    )
+
+    assert parent_signature != current_signature
+    parent_material = json.loads(parent_signature)["input"]
+    current_material = json.loads(current_signature)["input"]
+    parent_pool_row = parent_material["claim_verification_pool"][0]
+    current_pool_row = current_material["claim_verification_pool"][0]
+    assert parent_pool_row["timestamp_state"] == "valid_iso_present"
+    assert "verified_at" not in parent_pool_row["record"]
+    assert current_pool_row["timestamp_state"] == expected_state
+    if present:
+        assert current_pool_row["record"]["verified_at"] == timestamp
+    else:
+        assert "verified_at" not in current_pool_row["record"]
+    assert current_pool_row["reference_id"] in current_material["verified_claims"][0]["verification_refs"]
+
+    reused = appendix._reuse_parent_review_v3(
+        parent_report, current_report, parent_investigation, current_investigation,
+        parent_pipeline, current_pipeline, current_model_name="test-model",
+    )
+    assert reused is None
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "status", "conflict", "checks", "limitations", "expected_text", "evidence_quote",
+        "financial_id", "financial_unit", "financial_period", "claim_id",
+    ],
+)
+def test_v3_review_reuse_rejects_changed_claim_verification_business(mutation: str) -> None:
+    parent_report, current_report, parent_investigation, current_investigation, _parent_pipeline, _current_pipeline = _v3_review_reuse_fixture()
+    verification = current_report["verified_claims"][0]["verifications"][0]
+    if mutation == "status":
+        verification["status"] = "conflict"
+    elif mutation == "conflict":
+        verification["conflict"] = "原文与待核声明不一致。"
+    elif mutation == "checks":
+        verification["checks"] = [{"name": "quote_match", "status": "failed"}]
+    elif mutation == "limitations":
+        verification["limitations"] = ["该核验仅覆盖当前页。"]
+    elif mutation == "expected_text":
+        verification["expected_text"] = "不同的预期文本。"
+    elif mutation == "evidence_quote":
+        current_report["verified_claims"][0]["evidences"][0]["quote"] = "不同的现金流引用。"
+    elif mutation == "financial_id":
+        current_report["pending_review"]["facts"][0]["fact_id"] = "pending-fact:other"
+    elif mutation == "financial_unit":
+        current_report["pending_review"]["facts"][0]["unit"] = "USD"
+    elif mutation == "financial_period":
+        current_report["pending_review"]["facts"][0]["period"] = "2024"
+    else:
+        current_report["verified_claims"][0]["claim_id"] = "claim:changed-cashflow"
+
+    parent_signature = appendix._review_reuse_signature_v3(
+        parent_report, parent_investigation, appendix._report_identity(parent_report), "test-model",
+    )
+    current_signature = appendix._review_reuse_signature_v3(
+        current_report, current_investigation, appendix._report_identity(current_report), "test-model",
+    )
+    assert parent_signature != current_signature
+
+
+@pytest.mark.parametrize("mutation", ["coverage_gap", "candidate_member", "member_decision"])
+def test_v3_review_reuse_rejects_changed_coverage_or_member_business(mutation: str) -> None:
+    parent_report, current_report, parent_investigation, current_investigation, parent_pipeline, current_pipeline = _v3_review_reuse_fixture()
+    if mutation == "coverage_gap":
+        current_investigation["discovery"]["coverage"]["unread_pages"] = [2]
+    elif mutation == "candidate_member":
+        current_pipeline["candidates"][0]["observation"] = "同一页中的不同事项。"
+    else:
+        current_pipeline["member_decisions"][0]["reason_code"] = "different_member_resolution_reason"
+
+    reused = appendix._reuse_parent_review_v3(
+        parent_report, current_report, parent_investigation, current_investigation,
+        parent_pipeline, current_pipeline, current_model_name="test-model",
+    )
+
+    assert reused is None
+
+
 @pytest.mark.parametrize(
     ("field", "value", "expected_reason"),
     (
@@ -828,7 +1159,8 @@ def test_recoverable_payload_keeps_discovery_and_sums_all_stages_in_checkpoint(
     settings = _settings()
     monkeypatch.setattr(appendix, "_repository_root", lambda: repository)
     monkeypatch.setattr(
-        annual_recovery, "build_annual_recovery_binding", lambda *_args, **_kwargs: {"binding": "stable"}
+        annual_recovery, "build_annual_recovery_binding",
+        lambda _root, request, **_kwargs: _valid_v4_binding(request),
     )
     discovery = {
         "kind": "fintrace_annual_discovery",
@@ -877,12 +1209,12 @@ def test_recoverable_payload_keeps_discovery_and_sums_all_stages_in_checkpoint(
         identity=identity,
         binding_source_report=report,
         archived_pdf_path=source_pdf,
-        source_record={"document_id": identity["source_document_id"]},
+        source_record={"document_id": identity["source_document_id"], "report_period": "2024-12-31"},
         settings=settings,
         run_dir=run_dir,
         artifacts_root=artifacts_root,
         request_mode="model_investigation",
-        request_identity={"mode": "model_investigation"},
+        request_identity=_request_identity(report, "model_investigation"),
         resume_parent_run_id=None,
         progress_callback=None,
         checkpoint_callback=lambda snapshot, _state, _parent: checkpoints.append(snapshot),
@@ -912,7 +1244,8 @@ def test_v3_provider_stop_prevents_fixed_and_review_calls(
     settings = _settings()
     monkeypatch.setattr(appendix, "_repository_root", lambda: repository)
     monkeypatch.setattr(
-        annual_recovery, "build_annual_recovery_binding", lambda *_args, **_kwargs: {"binding": "stable"}
+        annual_recovery, "build_annual_recovery_binding",
+        lambda _root, request, **_kwargs: _valid_v4_binding(request),
     )
     discovery = {
         "kind": "fintrace_annual_discovery",
@@ -944,12 +1277,12 @@ def test_v3_provider_stop_prevents_fixed_and_review_calls(
         identity=identity,
         binding_source_report=report,
         archived_pdf_path=source_pdf,
-        source_record={"document_id": identity["source_document_id"]},
+        source_record={"document_id": identity["source_document_id"], "report_period": "2024-12-31"},
         settings=settings,
         run_dir=run_dir,
         artifacts_root=artifacts_root,
         request_mode="model_investigation",
-        request_identity={"mode": "model_investigation"},
+        request_identity=_request_identity(report, "model_investigation"),
         resume_parent_run_id=None,
         progress_callback=None,
         checkpoint_callback=lambda snapshot, _state, _parent: checkpoints.append(snapshot),
@@ -971,7 +1304,8 @@ def test_fatal_candidate_rejection_skips_review_and_remains_resumable(
     settings = _settings()
     monkeypatch.setattr(appendix, "_repository_root", lambda: repository)
     monkeypatch.setattr(
-        annual_recovery, "build_annual_recovery_binding", lambda *_args, **_kwargs: {"binding": "stable"}
+        annual_recovery, "build_annual_recovery_binding",
+        lambda _root, request, **_kwargs: _valid_v4_binding(request),
     )
     discovery = {
         "kind": "fintrace_annual_discovery",
@@ -1027,7 +1361,7 @@ def test_fatal_candidate_rejection_skips_review_and_remains_resumable(
         run_dir=run_dir,
         artifacts_root=artifacts_root,
         request_mode="model_investigation",
-        request_identity={"mode": "model_investigation"},
+        request_identity=_request_identity(report, "model_investigation"),
         resume_parent_run_id=None,
         progress_callback=None,
         checkpoint_callback=lambda snapshot, _state, _parent: checkpoints.append(snapshot),
@@ -1037,10 +1371,10 @@ def test_fatal_candidate_rejection_skips_review_and_remains_resumable(
     assert result["model_call_attempt_count"] == 1
     assert result["investigation_call_attempt_count"] == 0
     assert result["model_review_call_attempt_count"] == 0
-    assert result["final_review"]["status"] == "not_called"
+    assert result["final_review"]["status"] == "abstained"
     assert result["final_review"]["reason"] == "ledger_provider_mismatch"
     assert annual_recovery._investigation_has_unfinished_items(fixed) is True
-    assert checkpoints[-1]["model_review"]["status"] == "not_called"
+    assert checkpoints[-1]["model_review"]["status"] == "abstained"
 
 
 @pytest.mark.parametrize("stage_reason", ["stage_budget_exhausted", "call_deadline_exhausted"])
@@ -1051,7 +1385,8 @@ def test_fixed_stage_budget_exhaustion_keeps_review_reservation_available(
     identity = appendix._report_identity(report)
     monkeypatch.setattr(appendix, "_repository_root", lambda: repository)
     monkeypatch.setattr(
-        annual_recovery, "build_annual_recovery_binding", lambda *_args, **_kwargs: {"binding": "stable"}
+        annual_recovery, "build_annual_recovery_binding",
+        lambda _root, request, **_kwargs: _valid_v4_binding(request),
     )
     discovery = {
         "kind": "fintrace_annual_discovery",
@@ -1084,12 +1419,12 @@ def test_fixed_stage_budget_exhaustion_keeps_review_reservation_available(
         identity=identity,
         binding_source_report=report,
         archived_pdf_path=source_pdf,
-        source_record={"document_id": identity["source_document_id"]},
+        source_record={"document_id": identity["source_document_id"], "report_period": "2024-12-31"},
         settings=_settings(),
         run_dir=run_dir,
         artifacts_root=artifacts_root,
         request_mode="model_investigation",
-        request_identity={"mode": "model_investigation"},
+        request_identity=_request_identity(report, "model_investigation"),
         resume_parent_run_id=None,
         progress_callback=None,
         checkpoint_callback=None,
@@ -1111,7 +1446,8 @@ def test_rejected_resume_persists_own_zero_call_v3_snapshot_without_parent_inher
     identity = appendix._report_identity(report)
     settings = _settings()
     parent_run_id = "annual-analysis-parent-rejected"
-    binding = {"analysis_mode": "integrated_analysis", "plan_sha256": "b" * 64}
+    request_identity = _request_identity(report, "integrated_analysis")
+    binding = _valid_v4_binding(request_identity)
     zero_call_discovery = {
         "kind": "fintrace_annual_discovery",
         **identity,
@@ -1129,7 +1465,7 @@ def test_rejected_resume_persists_own_zero_call_v3_snapshot_without_parent_inher
     monkeypatch.setattr(
         annual_recovery,
         "build_annual_recovery_binding",
-        lambda *_args, **_kwargs: binding,
+        lambda _root, request, **_kwargs: _valid_v4_binding(request),
     )
     monkeypatch.setattr(
         report_read,
@@ -1174,7 +1510,7 @@ def test_rejected_resume_persists_own_zero_call_v3_snapshot_without_parent_inher
             run_dir=run_dir,
             artifacts_root=artifacts_root,
             request_mode="integrated_analysis",
-            request_identity={"mode": "integrated_analysis"},
+            request_identity=request_identity,
             resume_parent_run_id=parent_run_id,
             progress_callback=None,
             checkpoint_callback=lambda snapshot, state, parent: checkpoints.append(

@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from pathlib import Path
 from uuid import uuid4
@@ -75,10 +76,12 @@ def _write_strict_v3_recovery_fixture(
     state: str,
     is_partial: bool,
     discovery_complete: bool = False,
+    include_issue_pipeline_v5: bool = False,
 ) -> tuple[dict[str, object], dict[str, object], ModelSettings]:
     """Build an archive-reader-valid v3 report and matching raw source locally."""
 
     from tests.unit.test_annual_recovery_report_read import (
+        _as_v4_contract,
         _discovery,
         _original_review_with_audit,
         _review_investigation,
@@ -88,8 +91,10 @@ def _write_strict_v3_recovery_fixture(
     from finagent.core.annual_checkpoints import save_annual_checkpoint
     from finagent.core.annual_recovery import (
         build_annual_recovery_binding,
+        build_annual_issue_pipeline_binding_v5,
         recovery_identity_sha256,
     )
+    from finagent.agents.annual_issue_pipeline import checkpoint_issue_pipeline
 
     run = _write_run(project_root, suffix, mode="model_investigation")
     relative_source = "603288/2024/doc-recovery-fixture/fixture.pdf"
@@ -134,18 +139,48 @@ def _write_strict_v3_recovery_fixture(
             run,
             report["model_discovery"],
         )
+    report["model_discovery"]["prompt_version"] = "annual_discovery_v3"
+    contract = _as_v4_contract(report["model_discovery"])
+    report["model_discovery"]["execution_contract"] = contract
     binding = build_annual_recovery_binding(
         project_root,
         request,
         settings=settings,
         report=report,
     )
-    contract = report["model_discovery"]["execution_contract"]
     contract["plan_sha256"] = binding["plan_sha256"]
     contract["identity_sha256"] = recovery_identity_sha256(binding)
     contract["binding"] = binding
     if discovery_complete:
         report["model_review"] = _original_review_with_audit(run, report)
+    if include_issue_pipeline_v5:
+        if discovery_complete:
+            raise AssertionError("v5 recovery fixtures model an unfinished AI pipeline")
+        issue_identity = {
+            "run_id": run["run_id"],
+            "company_id": request["company_id"],
+            "report_year": request["report_year"],
+            "report_period": "2024-12-31",
+            "source_document_id": request["document_id"],
+            "source_sha256": request["sha256"],
+        }
+        issue_binding = build_annual_issue_pipeline_binding_v5(
+            project_root, request, settings=settings, report=report,
+        )
+        issue_pipeline = checkpoint_issue_pipeline(
+            issue_identity, report["model_discovery"], execution_binding=issue_binding,
+        )
+        investigation = _review_investigation(run, report["model_discovery"])
+        investigation["source_binding"] = {
+            "company_id": request["company_id"],
+            "report_year": request["report_year"],
+            "report_period": "2024-12-31",
+            "document_id": request["document_id"],
+            "source_sha256": request["sha256"],
+        }
+        investigation["model_issue_pipeline"] = issue_pipeline
+        report["model_investigation"] = investigation
+        report["model_issue_pipeline"] = issue_pipeline
 
     save_annual_checkpoint(project_root, str(run["run_id"]), {
         "state": state,
@@ -269,6 +304,21 @@ def _wait_terminal(client: TestClient, job_id: str, *, timeout: float = 5.0) -> 
             return state
         time.sleep(0.01)
     raise AssertionError(f"任务 {job_id} 未在 {timeout} 秒内结束。")
+
+
+def _assert_job_gate_closed(job_state_path: Path, job_id: str) -> Path:
+    from finagent.core.model_call_ledger import ModelCallAdmissionError, open_admission_gate
+
+    state = json.loads(job_state_path.read_text(encoding="utf-8"))
+    gate_database = Path(state["_call_gate_db"])
+    with sqlite3.connect(gate_database) as connection:
+        assert connection.execute(
+            "SELECT closed FROM call_gates WHERE gate_key = ?", (job_id,)
+        ).fetchone() == (1,)
+    with pytest.raises(ModelCallAdmissionError) as closed:
+        open_admission_gate(gate_database, job_id)
+    assert closed.value.code == "call_gate_closed"
+    return gate_database
 
 
 @pytest.fixture(autouse=True)
@@ -499,6 +549,191 @@ def test_successful_job_returns_existing_report_run_id(tmp_path: Path, monkeypat
     assert report.json()["report"]["source_sha256"] == source["sha256"]
     state_file = tmp_path / "artifacts" / "annual-analysis-jobs" / initial["job_id"] / "job.json"
     assert json.loads(state_file.read_text(encoding="utf-8"))["status"] == "completed"
+    _assert_job_gate_closed(state_file, initial["job_id"])
+
+
+@pytest.mark.parametrize("archive_status", ["completed", "completed_with_issues"])
+def test_successful_terminal_publishes_only_after_its_gate_is_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    archive_status: str,
+) -> None:
+    monkeypatch.setattr(
+        jobs_module,
+        "resolve_model_settings",
+        lambda _root: ModelSettings(
+            base_url="http://127.0.0.1:9/v1",
+            api_key="constructed-test-only",
+            model="local-fixture-model",
+            timeout_seconds=1,
+        ),
+    )
+    source = _make_source(tmp_path)
+    close_observations: list[tuple[str, int]] = []
+    original_close = jobs_module.close_admission_gate
+
+    def status_runner(project_root: Path, _artifacts_root: Path, request: dict[str, object]) -> CliResult:
+        run_id = _write_success_archive(
+            project_root,
+            request,
+            status=archive_status,
+            run_id=request.get("_reserved_run_id") if isinstance(request.get("_reserved_run_id"), str) else None,
+        )
+        return CliResult(0, f"status={archive_status} run_id={run_id}", "")
+
+    def observed_close(database_path: Path, gate_key: str) -> None:
+        state_path = tmp_path / "artifacts" / "annual-analysis-jobs" / gate_key / "job.json"
+        before = json.loads(state_path.read_text(encoding="utf-8"))["status"]
+        original_close(database_path, gate_key)
+        with sqlite3.connect(database_path) as connection:
+            closed = connection.execute(
+                "SELECT closed FROM call_gates WHERE gate_key = ?", (gate_key,)
+            ).fetchone()[0]
+        close_observations.append((before, closed))
+
+    monkeypatch.setattr(jobs_module, "_invoke_cli", status_runner)
+    monkeypatch.setattr(jobs_module, "close_admission_gate", observed_close)
+    client = TestClient(create_app(tmp_path))
+    created = client.post("/v1/annual-analysis-jobs", json=_request(source))
+
+    assert created.status_code == 202
+    job_id = created.json()["job_id"]
+    state = _wait_terminal(client, job_id)
+
+    assert state["status"] == archive_status
+    assert close_observations[0] == ("running", 1)
+    state_file = tmp_path / "artifacts" / "annual-analysis-jobs" / job_id / "job.json"
+    _assert_job_gate_closed(state_file, job_id)
+
+
+def test_terminal_close_touches_only_this_job_gate_in_shared_ledger(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from finagent.core.model_call_ledger import open_admission_gate
+
+    source = _make_source(tmp_path)
+    shared_database = tmp_path / "shared-call-ledger.sqlite3"
+    parent_job_id = f"annual-job-{uuid4().hex}"
+    open_admission_gate(shared_database, parent_job_id)
+    monkeypatch.setattr(
+        jobs_module,
+        "select_call_gate_database",
+        lambda _root, _job_dir: shared_database,
+    )
+    monkeypatch.setattr(jobs_module, "_invoke_cli", _successful_runner)
+    client = TestClient(create_app(tmp_path))
+
+    created = client.post("/v1/annual-analysis-jobs", json=_request(source))
+    assert created.status_code == 202
+    job_id = created.json()["job_id"]
+    state = _wait_terminal(client, job_id)
+
+    assert state["status"] == "completed"
+    with sqlite3.connect(shared_database) as connection:
+        gates = dict(connection.execute(
+            "SELECT gate_key, closed FROM call_gates WHERE gate_key IN (?, ?)",
+            (parent_job_id, job_id),
+        ).fetchall())
+    assert gates == {parent_job_id: 0, job_id: 1}
+    _assert_job_gate_closed(
+        tmp_path / "artifacts" / "annual-analysis-jobs" / job_id / "job.json",
+        job_id,
+    )
+    open_admission_gate(shared_database, parent_job_id)
+
+
+def test_gate_close_failure_keeps_sealed_report_readable_and_pending(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from finagent.core.model_call_ledger import ModelCallAdmissionError
+
+    monkeypatch.setattr(
+        jobs_module,
+        "resolve_model_settings",
+        lambda _root: ModelSettings(
+            base_url="http://127.0.0.1:9/v1",
+            api_key="constructed-test-only",
+            model="local-fixture-model",
+            timeout_seconds=1,
+        ),
+    )
+    source = _make_source(tmp_path)
+    close_allowed = False
+    original_close = jobs_module.close_admission_gate
+    close_statuses: list[str] = []
+
+    def status_runner(project_root: Path, _artifacts_root: Path, request: dict[str, object]) -> CliResult:
+        run_id = _write_success_archive(
+            project_root,
+            request,
+            status="completed_with_issues",
+            run_id=request.get("_reserved_run_id") if isinstance(request.get("_reserved_run_id"), str) else None,
+        )
+        from finagent.core.annual_checkpoints import save_annual_checkpoint
+
+        report_path = project_root / "artifacts" / "reports" / run_id / "report.json"
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        save_annual_checkpoint(project_root, run_id, {
+            "state": "completed_with_issues",
+            "is_partial": False,
+            "parent_run_id": None,
+            "source_sha256": request["sha256"],
+            "report": report,
+        })
+        return CliResult(0, f"status=completed_with_issues run_id={run_id}", "")
+
+    def controlled_close(database_path: Path, gate_key: str) -> None:
+        state_path = tmp_path / "artifacts" / "annual-analysis-jobs" / gate_key / "job.json"
+        close_statuses.append(json.loads(state_path.read_text(encoding="utf-8"))["status"])
+        if not close_allowed:
+            raise ModelCallAdmissionError("ledger_unavailable")
+        original_close(database_path, gate_key)
+
+    monkeypatch.setattr(jobs_module, "_invoke_cli", status_runner)
+    monkeypatch.setattr(jobs_module, "close_admission_gate", controlled_close)
+    client = TestClient(create_app(tmp_path))
+
+    created = client.post("/v1/annual-analysis-jobs", json=_request(source))
+    assert created.status_code == 202
+    job_id = created.json()["job_id"]
+    pending = _wait_terminal(client, job_id)
+
+    assert pending["status"] == "interrupted"
+    assert close_statuses[0] == "running"
+    assert "completed_with_issues" not in close_statuses
+    assert pending["error"]["code"] == "call_gate_unavailable"
+    assert pending["recovery_capability"]["can_resume"] is False
+    assert pending["result_availability"]["status"] == "available"
+    report_response = client.get(pending["result_url"])
+    assert report_response.status_code == 200
+    assert report_response.json()["manifest"]["status"] == "completed_with_issues"
+    run_id = pending["run_id"]
+    run_dir = tmp_path / "artifacts" / "runs" / run_id
+    report_dir = tmp_path / "artifacts" / "reports" / run_id
+    sealed_files = (
+        run_dir / "manifest.json",
+        run_dir / "checkpoint-current.json",
+        report_dir / "report.json",
+    )
+    sealed_bytes = tuple(path.read_bytes() for path in sealed_files)
+    state_file = tmp_path / "artifacts" / "annual-analysis-jobs" / job_id / "job.json"
+    gate_database = Path(json.loads(state_file.read_text(encoding="utf-8"))["_call_gate_db"])
+    with sqlite3.connect(gate_database) as connection:
+        assert connection.execute(
+            "SELECT closed FROM call_gates WHERE gate_key = ?", (job_id,)
+        ).fetchone() == (0,)
+
+    close_allowed = True
+    recovered = client.get(f"/v1/annual-analysis-jobs/{job_id}")
+    assert recovered.status_code == 200
+    settled = recovered.json()
+    assert settled["status"] == "completed_with_issues"
+    assert settled["error"] is None
+    assert settled["recovery_capability"]["can_resume"] is False
+    assert tuple(path.read_bytes() for path in sealed_files) == sealed_bytes
+    _assert_job_gate_closed(state_file, job_id)
 
 
 def test_integrated_mode_passes_http_contract_and_returns_both_layers(
@@ -659,7 +894,7 @@ def test_failed_cli_archive_is_persisted_as_failed_job(tmp_path: Path, monkeypat
     source = _make_source(tmp_path)
 
     def failed_runner(project_root: Path, _artifacts_root: Path, request: dict[str, object]) -> CliResult:
-        run_id = f"annual-analysis-{uuid4()}"
+        run_id = str(request["_reserved_run_id"])
         run_dir = project_root / "artifacts" / "runs" / run_id
         run_dir.mkdir(parents=True)
         (run_dir / "source.pdf").write_bytes(
@@ -688,11 +923,53 @@ def test_failed_cli_archive_is_persisted_as_failed_job(tmp_path: Path, monkeypat
     created = client.post("/v1/annual-analysis-jobs", json=_request(source))
 
     state = _wait_terminal(client, created.json()["job_id"])
+    job_id = created.json()["job_id"]
 
     assert state["status"] == "failed"
     assert state["run_id"].startswith("annual-analysis-")
     assert "ValueError" in state["error"]["message"]
     assert "internal detail" not in json.dumps(state)
+    _assert_job_gate_closed(
+        tmp_path / "artifacts" / "annual-analysis-jobs" / job_id / "job.json",
+        job_id,
+    )
+
+
+@pytest.mark.parametrize(
+    ("failure_case", "expected_error"),
+    [
+        ("run_id_missing", "analysis_run_id_missing"),
+        ("archive_missing", "analysis_archive_invalid"),
+    ],
+)
+def test_early_cli_identity_and_archive_failures_close_the_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_case: str,
+    expected_error: str,
+) -> None:
+    source = _make_source(tmp_path)
+
+    def incomplete_runner(_project_root: Path, _artifacts_root: Path, request: dict[str, object]) -> CliResult:
+        if failure_case == "run_id_missing":
+            return CliResult(2, "status=failed", "")
+        reserved = request["_reserved_run_id"]
+        return CliResult(2, f"status=failed run_id={reserved}", "")
+
+    monkeypatch.setattr(jobs_module, "_invoke_cli", incomplete_runner)
+    client = TestClient(create_app(tmp_path))
+    created = client.post("/v1/annual-analysis-jobs", json=_request(source))
+
+    assert created.status_code == 202
+    job_id = created.json()["job_id"]
+    state = _wait_terminal(client, job_id)
+
+    assert state["status"] == "failed"
+    assert state["error"]["code"] == expected_error
+    _assert_job_gate_closed(
+        tmp_path / "artifacts" / "annual-analysis-jobs" / job_id / "job.json",
+        job_id,
+    )
 
 
 def test_cli_timeout_is_persisted_without_subprocess_output(tmp_path: Path, monkeypatch) -> None:
@@ -707,8 +984,9 @@ def test_cli_timeout_is_persisted_without_subprocess_output(tmp_path: Path, monk
 
     state = _wait_terminal(client, created.json()["job_id"])
 
-    assert state["status"] == "failed"
-    assert state["error"]["code"] == "analysis_timeout"
+    assert state["status"] == "interrupted"
+    assert state["error"]["code"] == "process_stop_unconfirmed"
+    assert state["error"]["message"].startswith("已请求停止并正在确认")
     assert "secret" not in json.dumps(state)
 
 
@@ -1139,7 +1417,7 @@ def test_queued_cancel_is_idempotent_and_releases_its_slot_once(tmp_path: Path, 
         service.shutdown()
 
 
-def test_cancel_after_durable_v3_final_seal_preserves_completed_with_issues(
+def test_cancel_after_durable_v5_final_seal_preserves_completed_with_issues(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1152,6 +1430,7 @@ def test_cancel_after_durable_v3_final_seal_preserves_completed_with_issues(
         suffix=193,
         state="completed_with_issues",
         is_partial=False,
+        include_issue_pipeline_v5=True,
     )
     run_id = str(run["run_id"])
     parent_request = {key: request[key] for key in (
@@ -1203,7 +1482,7 @@ def test_cancel_after_durable_v3_final_seal_preserves_completed_with_issues(
     durable_files_before = tuple(path.read_bytes() for path in (checkpoint_path, manifest_path, report_path))
     try:
         # This is the durable-seal / still-running-job race. Strict reader and
-        # recovery helper validate the v3 seal. Completion remains visible
+        # recovery helper validate the v4 discovery plus v5 issue seal. Completion remains visible
         # while resume stays closed until the exact runner stop marker arrives.
         service._finish_cancelled(job_id)
         projected = service.get(job_id)
@@ -1214,6 +1493,10 @@ def test_cancel_after_durable_v3_final_seal_preserves_completed_with_issues(
         assert projected["result_availability"]["snapshot_sequence"] == 1
         assert projected["result_availability"]["is_partial"] is False
         assert projected["recovery_capability"] == {"can_resume": False, "reason": "parent_active"}
+        with sqlite3.connect(gate_db) as connection:
+            assert connection.execute(
+                "SELECT closed FROM call_gates WHERE gate_key = ?", (job_id,)
+            ).fetchone() == (1,)
         assert tuple(path.read_bytes() for path in (checkpoint_path, manifest_path, report_path)) == durable_files_before
         with pytest.raises(jobs_module.AnnualAnalysisJobError) as pending:
             service.resume(job_id, run_id)
@@ -1237,7 +1520,7 @@ def test_cancel_after_durable_v3_final_seal_preserves_completed_with_issues(
         service.shutdown()
 
 
-def test_service_cancel_checkpoint_is_strictly_readable_and_resumable_after_restart(
+def test_service_cancel_checkpoint_is_strictly_readable_and_resumable_after_restart_v5(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1249,6 +1532,7 @@ def test_service_cancel_checkpoint_is_strictly_readable_and_resumable_after_rest
         suffix=194,
         state="running",
         is_partial=True,
+        include_issue_pipeline_v5=True,
     )
     run_id = str(run["run_id"])
     parent_job_id = f"annual-job-{uuid4().hex}"
@@ -1482,7 +1766,7 @@ def test_failed_process_stop_keeps_partial_checkpoint_readable_and_not_resumable
         service.shutdown()
 
 
-def test_exact_stopped_marker_allows_terminal_partial_checkpoint(
+def test_exact_stopped_marker_keeps_v4_readable_but_api_read_only(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1540,6 +1824,10 @@ def test_exact_stopped_marker_allows_terminal_partial_checkpoint(
             settings=settings,
             archive=archive,
         )["can_resume"] is True
+        assert projected["recovery_capability"] == {"can_resume": False, "reason": "recovery_not_available"}
+        with pytest.raises(jobs_module.AnnualAnalysisJobError) as read_only:
+            service.resume(job_id, run_id)
+        assert read_only.value.code == "recovery_not_available"
     finally:
         service.shutdown()
 
@@ -1594,6 +1882,7 @@ def test_timeout_keeps_partial_read_only_until_exact_runner_stop_marker(
         suffix=fixture_suffix,
         state="running",
         is_partial=True,
+        include_issue_pipeline_v5=True,
     )
     run_id = str(run["run_id"])
     parent_request = {key: request[key] for key in (
@@ -1701,6 +1990,7 @@ def test_timeout_seals_failed_partial_only_after_owned_process_exit_is_observed(
         suffix=206,
         state="running",
         is_partial=True,
+        include_issue_pipeline_v5=True,
     )
     run_id = str(run["run_id"])
     parent_request = {key: request[key] for key in (
@@ -1787,6 +2077,7 @@ def test_restart_waits_for_exact_runner_stop_before_sealing_and_resuming(
         suffix=196,
         state="running",
         is_partial=True,
+        include_issue_pipeline_v5=True,
     )
     run_id = str(run["run_id"])
     parent_job_id = f"annual-job-{uuid4().hex}"
@@ -1881,6 +2172,7 @@ def test_restart_preserves_failed_manifest_partial_pointer_for_resume(
         suffix=197,
         state="running",
         is_partial=True,
+        include_issue_pipeline_v5=True,
     )
     run_id = str(run["run_id"])
     manifest_path = run["run_dir"] / "manifest.json"
@@ -1930,7 +2222,7 @@ def test_restart_preserves_failed_manifest_partial_pointer_for_resume(
         archive = load_annual_report(tmp_path, run_id)
         assert archive.manifest_summary["status"] == "failed"
         assert archive.snapshot is not None and archive.snapshot["state"] == "failed"
-        assert settled["status"] == "interrupted"
+        assert settled["status"] == "failed"
         assert settled["error"]["code"] == "service_interrupted"
         assert settled["result_availability"]["snapshot_state"] == "failed"
         assert settled["recovery_capability"] == {"can_resume": True, "reason": "recoverable_batches"}
@@ -2079,10 +2371,11 @@ def test_service_exposes_and_creates_one_child_for_sealed_recoverable_report(
     monkeypatch.setattr(jobs_module, "resolve_model_settings", lambda _root: constructed_settings)
     validations: list[str] = []
 
-    def validate_parent(_root, run_id, _request, *, settings=None, archive=None):
+    def validate_parent(_root, run_id, _request, *, settings=None, archive=None, require_issue_pipeline_v5=False):
         validations.append(run_id)
         assert settings is constructed_settings
         assert archive is not None and archive.snapshot["is_partial"] is False
+        assert require_issue_pipeline_v5 is True
         return {"can_resume": True, "reason": None, "binding": {"fixture": True}}
 
     monkeypatch.setattr(jobs_module, "validate_annual_recovery_parent", validate_parent)
@@ -2168,3 +2461,48 @@ def test_importing_api_submodule_does_not_construct_app_or_recover_jobs(tmp_path
     )
 
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("issue_pipeline", "expected_status", "expected_elapsed"),
+    [
+        ({"status": "running", "reason": None, "phase_timings": {"annual_issue_grouping_elapsed_seconds": 1.234}}, "running", 1.234),
+        (None, "partial", None),
+    ],
+)
+def test_grouping_budget_projection_uses_pipeline_state_and_only_measured_elapsed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    issue_pipeline: dict[str, object] | None,
+    expected_status: str,
+    expected_elapsed: float | None,
+) -> None:
+    run_id = f"annual-analysis-budget-{uuid4().hex}"
+    report = {"model_discovery": {"prompt_version": "annual_discovery_v3"}}
+    if issue_pipeline is not None:
+        report["model_issue_pipeline"] = issue_pipeline
+    now = datetime.now(timezone.utc).isoformat()
+    state = {
+        "job_id": f"annual-job-{uuid4().hex}",
+        "run_id": run_id,
+        "status": "running",
+        "stage": "annual_issue_grouping",
+        "created_at": now,
+        "running_started_at": now,
+        "_running_started_monotonic": time.monotonic() - 1.5,
+        "_call_gate_db": str(tmp_path / "gate.sqlite3"),
+        "_analysis_budget_contract": jobs_module._job_budget_contract("new_run"),
+    }
+    monkeypatch.setattr(jobs_module, "read_gate_stage_admission_counts", lambda *_args: {
+        "annual_discovery": 0, "annual_investigation": 0,
+        "annual_issue_grouping": 1, "annual_review": 0,
+    })
+    monkeypatch.setattr(jobs_module, "load_annual_report", lambda *_args: SimpleNamespace(report=report))
+    budget = jobs_module._analysis_budget_projection(tmp_path, state)
+    assert budget is not None
+    grouping = budget["stages"]["annual_issue_grouping"]
+    assert grouping["status"] == expected_status
+    if expected_elapsed is None:
+        assert "elapsed_seconds" not in grouping
+    else:
+        assert grouping["elapsed_seconds"] == expected_elapsed

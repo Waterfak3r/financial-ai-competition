@@ -28,10 +28,14 @@ from finagent.api.annual_analysis_history import (
 from finagent.api.annual_report_read import (
     AnnualReportReadError,
     DISCOVERY_EVIDENCE_INTERPRETATION,
+    ISSUE_SUPPLEMENT_INTERPRETATION,
     NARRATIVE_EVIDENCE_INTERPRETATION,
+    annual_issue_supplement_evidence_index,
     load_annual_report,
     render_discovery_evidence_preview,
     render_evidence_preview,
+    redact_issue_pipeline_text_for_api,
+    render_issue_supplement_preview,
     render_narrative_evidence_preview,
 )
 from finagent.api.annual_report_export import AnnualReportExportError, export_annual_report
@@ -330,6 +334,28 @@ def create_app(project_root: Path | None = None) -> FastAPI:
             "items": items,
         }
 
+    @app.get("/v1/annual-analyses/{run_id}/issue-evidences")
+    def get_annual_analysis_issue_evidences(run_id: str) -> dict:
+        try:
+            archive = load_annual_report(app.state.project_root, run_id)
+            index = annual_issue_supplement_evidence_index(archive)
+        except AnnualReportReadError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": exc.message},
+            ) from None
+        items = [
+            {
+                **item,
+                "preview_url": (
+                    f"/v1/annual-analyses/{run_id}/issue-evidences/"
+                    f"{item['evidence_id']}/preview.png"
+                ),
+            }
+            for item in index["items"]
+        ]
+        return {**index, "interpretation_label": ISSUE_SUPPLEMENT_INTERPRETATION, "items": items}
+
     @app.get("/v1/annual-analyses/{run_id}/discovery-evidences")
     def get_annual_analysis_discovery_evidences(run_id: str) -> dict:
         try:
@@ -421,6 +447,41 @@ def create_app(project_root: Path | None = None) -> FastAPI:
             },
         )
 
+    @app.get("/v1/annual-analyses/{run_id}/issue-evidences/{evidence_id}/preview.png")
+    def get_annual_analysis_issue_evidence_preview(
+        run_id: str,
+        evidence_id: str,
+        focus: bool = False,
+    ) -> Response:
+        try:
+            archive = load_annual_report(app.state.project_root, run_id)
+            image, page_number = render_issue_supplement_preview(archive, evidence_id, focus=focus)
+            evidence = next(
+                item for item in annual_issue_supplement_evidence_index(archive)["items"]
+                if item["evidence_id"] == evidence_id
+            )
+        except AnnualReportReadError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": exc.message},
+            ) from None
+        return Response(
+            content=image,
+            media_type="image/png",
+            headers={
+                "Cache-Control": "no-store",
+                "X-PDF-Page": str(page_number),
+                "X-Report-SHA256": archive.manifest_summary["report_sha256"],
+                "X-Evidence-Kind": "annual_issue_supplement",
+                "X-Evidence-Interpretation-Code": "annual_issue_retrieval_unverified_context_possible_explanation_unknown",
+                "X-Preview-Mode": "focus" if focus else "full_page",
+                "X-Preview-Region": json.dumps(
+                    {"bbox": evidence["bbox"], "coordinate_space": "unrotated_pdf_points"},
+                    separators=(",", ":"),
+                ),
+            },
+        )
+
     @app.get("/v1/annual-analyses/{run_id}/evidence/{evidence_id}/preview.png")
     def get_annual_analysis_evidence_preview(
         run_id: str,
@@ -494,7 +555,7 @@ def create_app(project_root: Path | None = None) -> FastAPI:
                 detail={"code": exc.code, "message": exc.message},
             ) from None
         response = {
-            "report": archive.report,
+            "report": redact_issue_pipeline_text_for_api(archive.report),
             "manifest": archive.manifest_summary,
             "source_provenance": archive.source_provenance,
             # This curated index contains only evidence_ids attached to a

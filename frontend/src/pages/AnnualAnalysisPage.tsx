@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent, MouseEvent, ReactNode, RefObject } from "react";
 import { loadAnnualAnalysisCapabilities } from "../api/annualAnalysisCapabilities";
-import { AnnualReportApiError, downloadAnnualAnalysisExport, loadAnnualAnalysis, loadVerificationEvidencePreview } from "../api/annualReports";
+import { AnnualReportApiError, downloadAnnualAnalysisExport, loadAnnualAnalysis, loadAnnualIssueSupplementEvidenceIndex, loadAnnualIssueSupplementPreview, loadVerificationEvidencePreview } from "../api/annualReports";
 import { loadAnnualAnalysisHistory } from "../api/annualAnalysisHistory";
 import {
   cancelAnnualAnalysisJob,
@@ -22,6 +22,9 @@ import type {
   PdfBox,
   M3AnnualScreening,
   AnnualAnalysisSnapshot,
+  AnnualIssuePipeline,
+  AnnualIssueSupplementEvidence,
+  AnnualIssueSupplementEvidenceIndex,
   VerificationEvidence,
   VerifiedClaim,
 } from "../types/annualReport";
@@ -65,7 +68,7 @@ interface UploadedFileContext {
 }
 
 interface Preview {
-  kind: "verified_financial_value" | "narrative_context" | "annual_discovery";
+  kind: "verified_financial_value" | "narrative_context" | "annual_discovery" | "annual_issue_supplement";
   evidenceId: string;
   pageNumber: number;
   objectUrl: string;
@@ -79,7 +82,9 @@ type NarrativeLoadState = { runId: string; value: NarrativeEvidenceResponse | nu
 type PreviewTarget =
   | { kind: "verified_financial_value"; evidenceId: string }
   | { kind: "narrative_context"; evidenceId: string }
-  | { kind: "annual_discovery"; evidenceId: string; findingId: string };
+  | { kind: "annual_discovery"; evidenceId: string; findingId: string }
+  | { kind: "annual_issue_supplement"; evidenceId: string };
+type IssueEvidenceLoadState = { runId: string; value: AnnualIssueSupplementEvidenceIndex } | null;
 
 interface SourcePage {
   pageNumber: number;
@@ -129,6 +134,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewZoom, setPreviewZoom] = useState(100);
   const [narrativeState, setNarrativeState] = useState<NarrativeLoadState>(null);
+  const [issueEvidenceState, setIssueEvidenceState] = useState<IssueEvidenceLoadState>(null);
   const [history, setHistory] = useState<Awaited<ReturnType<typeof loadAnnualAnalysisHistory>> | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -388,9 +394,11 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
   useEffect(() => {
     if (response === null) {
       setNarrativeState(null);
+      setIssueEvidenceState(null);
       narrativeRequestSequence.current += 1;
       return;
     }
+    setIssueEvidenceState(null);
     const requestSequence = narrativeRequestSequence.current + 1;
     narrativeRequestSequence.current = requestSequence;
     setNarrativeState({ runId: response.report.run_id, value: null, error: null });
@@ -516,6 +524,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
     setResponse(null);
     setLoadError(null);
     setNarrativeState(null);
+    setIssueEvidenceState(null);
     setPreview(null);
     setPreviewTarget(null);
     setPreviewError(null);
@@ -761,6 +770,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
     setPreviewZoom(100);
     previewRequest.current += 1;
     setNarrativeState(null);
+    setIssueEvidenceState(null);
     narrativeRequestSequence.current += 1;
     setJob(null);
     setJobError(null);
@@ -884,7 +894,53 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
     void loadEvidencePreview({ kind: "annual_discovery", evidenceId, findingId }, true);
   }
 
-  async function loadEvidencePreview(target: PreviewTarget, focus: boolean) {
+  async function onIssueSupplementPreview(evidenceId: string) {
+    if (response === null || requestLock.current || response.report.model_issue_pipeline === null || response.report.model_issue_pipeline === undefined) return;
+    evidenceReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const target: PreviewTarget = { kind: "annual_issue_supplement", evidenceId };
+    setPreviewTarget(target);
+    const cached = issueEvidenceState?.runId === response.report.run_id ? issueEvidenceState.value : null;
+    if (cached !== null) {
+      if (!cached.items.some((item) => item.evidence_id === evidenceId)) {
+        setPreviewError("该补证不在当前报告重新核对的同源原文索引中，未请求页图。");
+        return;
+      }
+      void loadEvidencePreview(target, true, cached);
+      return;
+    }
+    const requestId = previewRequest.current + 1;
+    previewRequest.current = requestId;
+    setPreview(null);
+    setPreviewError(null);
+    setPreviewBusyId(evidenceId);
+    setPreviewZoom(100);
+    try {
+      const index = await loadAnnualIssueSupplementEvidenceIndex(
+        response.report.run_id,
+        response.report.source_document_id,
+        response.report.source_sha256,
+        response.manifest.report_sha256,
+        response.report.model_issue_pipeline,
+      );
+      if (previewRequest.current !== requestId) return;
+      setIssueEvidenceState({ runId: response.report.run_id, value: index });
+      if (!index.items.some((item) => item.evidence_id === evidenceId)) {
+        setPreviewError("该补证不在当前报告重新核对的同源原文索引中，未请求页图。");
+        return;
+      }
+      await loadEvidencePreview(target, true, index);
+    } catch (error) {
+      if (previewRequest.current === requestId) setPreviewError(errorMessage(error));
+    } finally {
+      if (previewRequest.current === requestId) setPreviewBusyId(null);
+    }
+  }
+
+  async function loadEvidencePreview(
+    target: PreviewTarget,
+    focus: boolean,
+    issueIndexOverride?: AnnualIssueSupplementEvidenceIndex,
+  ) {
     if (response === null) return;
     const requestId = previewRequest.current + 1;
     previewRequest.current = requestId;
@@ -905,11 +961,18 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
             if (evidence === undefined) throw new AnnualReportApiError("该片段不在本次报告绑定的原文定位清单中。");
             return await loadNarrativeEvidencePreview(response.report.run_id, evidence, response.manifest.report_sha256, focus);
           })()
-          : await (async () => {
+          : target.kind === "annual_discovery"
+            ? await (async () => {
               const evidence = response.discovery_evidences?.items.find((item) => item.evidence_id === target.evidenceId);
               if (evidence === undefined) throw new AnnualReportApiError("该发现引用不在当前报告绑定的原文定位清单中。");
               return await loadDiscoveryEvidencePreview(response.report.run_id, evidence, response.manifest.report_sha256, focus);
-            })();
+            })()
+            : await (async () => {
+                const index = issueIndexOverride ?? (issueEvidenceState?.runId === response.report.run_id ? issueEvidenceState.value : null);
+                const evidence = index?.items.find((item) => item.evidence_id === target.evidenceId);
+                if (evidence === undefined) throw new AnnualReportApiError("该同源补证不在当前报告绑定的原文白名单中。");
+                return await loadAnnualIssueSupplementPreview(response.report.run_id, evidence, response.manifest.report_sha256, focus);
+              })();
       if (previewRequest.current !== requestId) return;
       setPreview({
         kind: target.kind,
@@ -1318,6 +1381,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
             narrativeState={narrativeState?.runId === response.report.run_id ? narrativeState : null}
             onNarrativePreview={onNarrativePreview}
             onDiscoveryPreview={onDiscoveryPreview}
+            onIssueSupplementPreview={onIssueSupplementPreview}
             resultOrigin={resultOrigin}
             selectedHistoryItem={selectedHistoryItem}
             activeMode={job?.run_id === response.report.run_id ? job.request.mode : null}
@@ -1339,6 +1403,11 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
             : null}
           discoveryEvidence={previewTarget.kind === "annual_discovery"
             ? response.discovery_evidences?.items.find((item) => item.evidence_id === previewTarget.evidenceId) ?? null
+            : null}
+          issueEvidence={previewTarget.kind === "annual_issue_supplement"
+            ? issueEvidenceState?.runId === response.report.run_id
+              ? issueEvidenceState.value.items.find((item) => item.evidence_id === previewTarget.evidenceId) ?? null
+              : null
             : null}
           preview={preview}
           busy={previewBusyId !== null}
@@ -1651,6 +1720,7 @@ function EvidenceDrawer({
   metric,
   narrative,
   discoveryEvidence,
+  issueEvidence,
   report,
   preview,
   busy,
@@ -1667,6 +1737,7 @@ function EvidenceDrawer({
   metric: ConfirmedMetric | null;
   narrative: NarrativeEvidence | null;
   discoveryEvidence: AnnualDiscoveryEvidenceIndexItem | null;
+  issueEvidence: AnnualIssueSupplementEvidence | null;
   report: AnnualReport;
   preview: Preview | null;
   busy: boolean;
@@ -1680,8 +1751,9 @@ function EvidenceDrawer({
 }) {
   const isNarrative = target.kind === "narrative_context";
   const isDiscovery = target.kind === "annual_discovery";
-  const pageNumber = evidence?.pdf_page ?? narrative?.pdf_page ?? discoveryEvidence?.pdf_page ?? preview?.pageNumber ?? null;
-  const title = isDiscovery ? "待核查线索原文定位" : isNarrative ? "原文片段定位" : "独立核验金额证据";
+  const isIssueSupplement = target.kind === "annual_issue_supplement";
+  const pageNumber = evidence?.pdf_page ?? narrative?.pdf_page ?? discoveryEvidence?.pdf_page ?? issueEvidence?.pdf_page ?? preview?.pageNumber ?? null;
+  const title = isIssueSupplement ? "同源定向补证原文定位" : isDiscovery ? "待核查线索原文定位" : isNarrative ? "原文片段定位" : "独立核验金额证据";
   const displayRow = evidence?.row_label?.trim() || "待定位";
   return (
     <div
@@ -1689,7 +1761,7 @@ function EvidenceDrawer({
       onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}
     >
       <section
-        className={`annual-evidence-drawer${isDiscovery ? " is-discovery" : isNarrative ? " is-narrative" : " is-financial-value"}`}
+        className={`annual-evidence-drawer${isDiscovery || isIssueSupplement ? " is-discovery" : isNarrative ? " is-narrative" : " is-financial-value"}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="annual-evidence-drawer-title"
@@ -1698,13 +1770,15 @@ function EvidenceDrawer({
       >
         <header className="annual-evidence-drawer-heading">
           <div>
-            <p className="eyebrow">{isDiscovery ? "未核验模型观点的原文片段" : isNarrative ? "叙述片段" : "独立核验白名单"} · {pageNumber === null ? "页码待定位" : `PDF 第 ${pageNumber} 页`}</p>
+            <p className="eyebrow">{isIssueSupplement ? "同源检索原文" : isDiscovery ? "未核验模型观点的原文片段" : isNarrative ? "叙述片段" : "独立核验白名单"} · {pageNumber === null ? "页码待定位" : `PDF 第 ${pageNumber} 页`}</p>
             <h2 id="annual-evidence-drawer-title">{title}</h2>
           </div>
           <button ref={closeRef} type="button" className="secondary" onClick={onClose}>关闭</button>
         </header>
 
-        {isDiscovery ? (
+        {isIssueSupplement ? (
+          <p className="annual-evidence-interpretation">同源检索角色只表示上下文、可能解释或未知，不构成事实反证、独立验证或舞弊结论。</p>
+        ) : isDiscovery ? (
           <p className="annual-evidence-interpretation">年报原文定位，模型发现未经独立语义核验。高亮仅覆盖文字块范围，不表示逐字定位或核验结论。</p>
         ) : isNarrative ? (
           <p className="annual-evidence-interpretation">{NARRATIVE_EVIDENCE_INTERPRETATION_LABEL}。</p>
@@ -1729,7 +1803,7 @@ function EvidenceDrawer({
           <div className="annual-evidence-image-viewport">
             <img
               src={preview.objectUrl}
-              alt={`${isDiscovery ? "待核查线索原文定位" : isNarrative ? "原文片段定位" : "独立核验金额证据"}，PDF 第 ${preview.pageNumber} 页，${preview.mode === "focus" ? "文字块区域" : "整页"}`}
+              alt={`${isIssueSupplement ? "同源定向补证原文定位" : isDiscovery ? "待核查线索原文定位" : isNarrative ? "原文片段定位" : "独立核验金额证据"}，PDF 第 ${preview.pageNumber} 页，${preview.mode === "focus" ? "文字块区域" : "整页"}`}
               className="annual-evidence-image"
               style={{ width: `${zoom}%` }}
             />
@@ -1762,6 +1836,27 @@ function EvidenceDrawer({
                 </dl>
               </details>
             </>
+          ) : isIssueSupplement && issueEvidence !== null ? (
+            <>
+              <p className="annual-evidence-pending">以下原文只为受控定位阅读。问题关系是模型归类，检索命中不表示已找到独立解释或反证。</p>
+              <blockquote className="annual-evidence-raw-text">{issueEvidence.raw_text}</blockquote>
+              <dl className="annual-evidence-details">
+                <dt>章节范围</dt><dd>{issueEvidence.section}</dd>
+                <dt>问题关系</dt><dd>{issueEvidence.role_status === "pending" && issueEvidence.issue_roles.length === 0 ? "角色尚待标注" : issueEvidence.issue_roles.map((role) => `${role.issue_id}：${role.role}（${role.reason_code}）`).join("；")}</dd>
+                <dt>角色处理</dt><dd>{issueEvidence.role_status}</dd>
+                <dt>来源页 / 块</dt><dd>{issueEvidence.pdf_page} / {issueEvidence.block_index}</dd>
+                <dt>字符范围</dt><dd>{issueEvidence.start_char}–{issueEvidence.end_char}</dd>
+                <dt>来源文档</dt><dd><code>{issueEvidence.source_document_id}</code></dd>
+              </dl>
+              <details className="annual-technical-record annual-evidence-technical">
+                <summary>同源来源与定位校验</summary>
+                <dl>
+                  <dt>证据编号</dt><dd><code>{issueEvidence.evidence_id}</code></dd>
+                  <dt>来源 SHA256</dt><dd><code>{issueEvidence.source_sha256}</code></dd>
+                  <dt>PDF 区域</dt><dd><code>{JSON.stringify(issueEvidence.bbox)}</code></dd>
+                </dl>
+              </details>
+            </>
           ) : isNarrative && narrative !== null ? (
             <>
               <p className="annual-evidence-pending">高亮位置对应报告引用的文字；可切换到整页查看前后文。</p>
@@ -1789,7 +1884,7 @@ function EvidenceDrawer({
               </details>
               </details>
             </>
-          ) : isNarrative ? <p className="annual-evidence-pending">原文片段不在已核对的定位清单中，详情待定位。</p> : (
+          ) : isIssueSupplement ? <p className="annual-evidence-pending">同源补证不在已核对的定位清单中，详情待定位。</p> : isNarrative ? <p className="annual-evidence-pending">原文片段不在已核对的定位清单中，详情待定位。</p> : (
             <>
               <dl className="annual-evidence-details">
                 <dt>表名</dt><dd>{evidence?.table_title?.trim() || "待定位"}</dd>
@@ -2028,11 +2123,12 @@ function AnnualAnalysisBudgetDetails({ budget }: { budget: AnnualAnalysisBudget 
           <li key={label}>
             <strong>{label}</strong>
             <span>{stage.status === "reserved"
-              ? "公司问题归并与补证已预留，本轮尚未执行"
+              ? "本份归档没有新问题归并层"
               : budgetStageStatusText(stage.status)}</span>
             <small>
               阶段时限 {stage.time_limit_seconds} 秒；阶段准入上限 {stage.attempt_limit} 次；已准入 {stage.admitted_attempts} 次
               {stage.planned_attempts === null ? "" : `；计划 ${stage.planned_attempts} 次`}
+              {stage.elapsed_seconds === undefined ? "" : `；本轮用时 ${formatDurationSeconds(stage.elapsed_seconds)}`}
             </small>
           </li>
         ))}
@@ -2478,6 +2574,136 @@ function DiscoveryReason({ reason, labelPrefix }: { reason: string; labelPrefix:
   );
 }
 
+function AnnualIssuePipelineSection({
+  pipeline,
+  previewBusyId,
+  onDiscoveryPreview,
+  onIssueSupplementPreview,
+}: {
+  pipeline: AnnualIssuePipeline;
+  previewBusyId: string | null;
+  onDiscoveryPreview: (evidenceId: string, findingId: string) => void;
+  onIssueSupplementPreview: (evidenceId: string) => void;
+}) {
+  if (pipeline.source_binding_status !== "matched") return null;
+  const input = pipeline.input;
+  const closure = pipeline.global_closure;
+  const findingIds = Array.isArray(input.finding_ids) ? input.finding_ids.filter((item): item is string => typeof item === "string") : [];
+  const decisions = new Map(pipeline.member_decisions.map((item) => [String(item.finding_id ?? ""), item]));
+  const issuesByMember = new Map<string, AnnualReportRecord>();
+  for (const issue of pipeline.issues) {
+    for (const member of Array.isArray(issue.member_finding_ids) ? issue.member_finding_ids : []) {
+      if (typeof member === "string") issuesByMember.set(member, issue);
+    }
+  }
+  const pipelineStatus = typeof pipeline.status === "string" ? pipeline.status : "未知";
+  const displayReasonByFinding = new Map(pipeline.presentation_order.candidate_order.map((item) => [item.finding_id, item.reason]));
+  const displayRankByFinding = new Map(pipeline.presentation_order.candidate_order.map((item, index) => [item.finding_id, index]));
+  const displayCandidates = [...pipeline.candidates].sort((left, right) =>
+    (displayRankByFinding.get(String(left.finding_id ?? "")) ?? Number.MAX_SAFE_INTEGER) -
+    (displayRankByFinding.get(String(right.finding_id ?? "")) ?? Number.MAX_SAFE_INTEGER),
+  );
+  const coverageComplete = input.discovery_coverage_complete === true;
+  const pendingIssueCount = Array.isArray(closure.pending_issue_ids) ? closure.pending_issue_ids.length : 0;
+  const pendingFindingCount = Array.isArray(closure.pending_finding_ids) ? closure.pending_finding_ids.length : 0;
+  const readText = (value: unknown, fallback = "未提供") => typeof value === "string" && value !== "" ? value : fallback;
+  return (
+    <section id="annual-issue-pipeline" className="annual-discovery-section" aria-labelledby="annual-issue-pipeline-title" tabIndex={-1}>
+      <h3 id="annual-issue-pipeline-title">年度问题归并与处理账</h3>
+      <p className="annual-discovery-technical-note" role="note">
+        所有合格发现均保留在候选账中。展示次序综合最终评审引用、原文定位完整性与后续核查动作；模型给出的优先级仍是未核验意见。问题关系闭合只覆盖当前已知发现；补证角色与模型归并都不是独立核验。
+      </p>
+      <div className="annual-discovery-coverage">
+        <dl>
+          <div><dt>当前状态</dt><dd>{pipelineStatus} · {readText(pipeline.reason, "无待处理原因")}</dd></div>
+          <div><dt>已知发现 / 候选数</dt><dd>{String(input.finding_count ?? findingIds.length)} / {String(input.candidate_count ?? pipeline.candidates.length)}</dd></div>
+          <div><dt>已知关系闭合</dt><dd>{closure.closed === true ? "是" : "否"} · 全文覆盖{coverageComplete ? "完整" : "未完整或未知"}</dd></div>
+          <div><dt>待处理成员 / 问题</dt><dd>{pendingFindingCount} / {pendingIssueCount}</dd></div>
+          <div><dt>无优先事项意见</dt><dd>{closure.no_priority_allowed === true ? "允许" : "当前不允许"}</dd></div>
+        </dl>
+      </div>
+      {Array.isArray(closure.relation_gaps) && closure.relation_gaps.length > 0 ? (
+        <div className="annual-discovery-limitations"><h4>跨片关系缺口</h4><ul>{closure.relation_gaps.map((item, index) => <li key={index}>{String(item)}</li>)}</ul></div>
+      ) : null}
+      {Array.isArray(closure.coverage_gaps) && closure.coverage_gaps.length > 0 ? (
+        <div className="annual-discovery-limitations"><h4>发现覆盖缺口</h4><ul>{closure.coverage_gaps.map((item, index) => <li key={index}>{String(item)}</li>)}</ul></div>
+      ) : null}
+      <div className="annual-discovery-findings">
+        {displayCandidates.map((candidate, index) => {
+          const findingId = readText(candidate.finding_id, `候选 ${index + 1}`);
+          const decision = decisions.get(findingId);
+          const issue = issuesByMember.get(findingId);
+          const citations = recordArray(candidate.citations);
+          const allIssueMembers = issue === undefined ? [] : Array.isArray(issue.member_finding_ids) ? issue.member_finding_ids.filter((item): item is string => typeof item === "string") : [];
+          return (
+            <article className="annual-discovery-finding" key={findingId}>
+              <header className="annual-discovery-finding-heading">
+                <h4>{readText(candidate.title, "未命名候选问题")}</h4>
+                <div className="annual-discovery-badges">
+                  <span className="annual-discovery-priority">模型建议：{readText(candidate.priority, "优先级未知")}</span>
+                  <span className="annual-discovery-unverified">处理：{readText(decision?.disposition, "待处理")}</span>
+                </div>
+              </header>
+              <p className="annual-discovery-observation">{readText(candidate.observation)}</p>
+              <dl className="annual-discovery-opinions">
+                <div><dt>处理理由</dt><dd>{readText(decision?.reason_code)}</dd></div>
+                <div><dt>关注原因</dt><dd>{readText(candidate.why_it_matters)}</dd></div>
+                <div><dt>后续核查</dt><dd>{readText(candidate.follow_up)}</dd></div>
+                <div><dt>展示顺序依据</dt><dd>{readText(displayReasonByFinding.get(findingId), "按发现来源顺序显示")}</dd></div>
+                <div><dt>问题 ID</dt><dd>{readText(decision?.issue_id, "尚未归并")}</dd></div>
+                {issue === undefined ? null : <div><dt>问题状态与完整成员</dt><dd>{readText(issue.status)} · {allIssueMembers.join("、")}</dd></div>}
+              </dl>
+              {citations.length === 0 ? null : (
+                <details className="annual-discovery-finding-details">
+                  <summary>原文引用与 PDF 定位</summary>
+                  {citations.map((citation, citationIndex) => (
+                    <section className="annual-discovery-citation" key={String(citation.evidence_id ?? citationIndex)}>
+                      <small className="annual-discovery-source-meta">
+                        PDF 第 {String(citation.pdf_page ?? "?")} 页 · 块 {String(citation.block_index ?? "?")} · 字符 {String(citation.start_char ?? "?")} · {readText(citation.evidence_id)}
+                      </small>
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => onDiscoveryPreview(readText(citation.evidence_id, ""), findingId)}
+                        disabled={previewBusyId === String(citation.evidence_id ?? "")}
+                      >
+                        {previewBusyId === String(citation.evidence_id ?? "") ? "正在读取页图…" : "查看发现原文与页图"}
+                      </button>
+                    </section>
+                  ))}
+                </details>
+              )}
+            </article>
+          );
+        })}
+      </div>
+      {pipeline.supplements.length === 0 ? null : (
+        <details className="annual-discovery-details">
+          <summary>同源定向检索片段（{pipeline.supplements.length}）</summary>
+          <div className="annual-discovery-findings">
+            {pipeline.supplements.map((supplement, index) => (
+              <article className="annual-discovery-citation" key={readText(supplement.evidence_id, String(index))}>
+                <p><strong>{readText(supplement.section)} · PDF 第 {String(supplement.pdf_page ?? "?")} 页 / 块 {String(supplement.block_index ?? "?")} / 字符 {String(supplement.start_char ?? "?")}–{String(supplement.end_char ?? "?")}</strong></p>
+                <p>问题关系：{recordArray(supplement.issue_roles).length === 0 && supplement.role_status === "pending" ? "角色尚待标注" : recordArray(supplement.issue_roles).map((role) => `${readText(role.issue_id)}：${readText(role.role)}（${readText(role.reason_code)}）`).join("；") || readText(supplement.role)} · {readText(supplement.role_status)}</p>
+                <small className="annual-discovery-source-meta">此检索片段只是潜在支持、上下文或可能解释，不是事实反证或独立验证。</small>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => onIssueSupplementPreview(readText(supplement.evidence_id, ""))}
+                  disabled={previewBusyId === String(supplement.evidence_id ?? "")}
+                >
+                  {previewBusyId === String(supplement.evidence_id ?? "") ? "正在读取页图…" : "查看受控原文与 PDF 页图"}
+                </button>
+              </article>
+            ))}
+          </div>
+        </details>
+      )}
+      {findingIds.length > 0 && pipeline.candidates.length === 0 ? <p role="alert">当前候选列表与发现全集不一致，已停止展示归并结论。</p> : null}
+    </section>
+  );
+}
+
 function discoverySummary(discovery: AnnualModelDiscovery | null, mode: string | null, legacyAi: boolean): string {
   if (discovery === null) {
     if (legacyAi) return "此报告保存了旧版候选 AI 调查；没有按来源 PDF 全文扫描生成的动态发现条目。";
@@ -2502,6 +2728,7 @@ function AnnualReportView({
   narrativeState,
   onNarrativePreview,
   onDiscoveryPreview,
+  onIssueSupplementPreview,
   resultOrigin,
   selectedHistoryItem,
   activeMode,
@@ -2512,6 +2739,7 @@ function AnnualReportView({
   narrativeState: NarrativeLoadState;
   onNarrativePreview: (evidenceId: string) => void;
   onDiscoveryPreview: (evidenceId: string, findingId: string) => void;
+  onIssueSupplementPreview: (evidenceId: string) => void;
   resultOrigin: "new" | "history";
   selectedHistoryItem: AnnualAnalysisHistoryItem | null;
   activeMode: AnnualAnalysisJobMode | null;
@@ -2530,6 +2758,7 @@ function AnnualReportView({
   const coreMetrics = CORE_METRICS.map((spec) => buildCoreMetricRow(spec, report, evidenceById));
   const reportModelInvestigation = report.model_investigation;
   const discovery = report.model_discovery ?? null;
+  const issuePipeline = report.model_issue_pipeline ?? null;
   const reportModelReview = report.model_review ?? null;
   const historicInvestigationRecord = record(reportModelInvestigation);
   const historicInvestigationRecorded = reportModelInvestigation !== undefined && reportModelInvestigation !== null;
@@ -2686,6 +2915,7 @@ function AnnualReportView({
               : "本次筛查摘要"}
         </a>
         <a href="#annual-discovery" onClick={expandReportDetails}>AI 待核查线索</a>
+        {issuePipeline === null ? null : <a href="#annual-issue-pipeline" onClick={expandReportDetails}>问题归并与处理账</a>}
         <a href="#annual-financial-overview" onClick={expandReportDetails}>财务概览</a>
         <a href="#annual-candidate-overview" onClick={expandReportDetails}>基础年度比较</a>
         <a href="#annual-confirmed-metrics" onClick={expandReportDetails}>核实数据</a>
@@ -2711,6 +2941,14 @@ function AnnualReportView({
         onToggleFinding={toggleDiscoveryFinding}
         onPreview={onDiscoveryPreview}
       />
+      {issuePipeline === null ? null : (
+        <AnnualIssuePipelineSection
+          pipeline={issuePipeline}
+          previewBusyId={previewBusyId}
+          onDiscoveryPreview={onDiscoveryPreview}
+          onIssueSupplementPreview={onIssueSupplementPreview}
+        />
+      )}
 
       <section id="annual-financial-overview" className="annual-financial-overview" aria-labelledby="annual-indicators-title" tabIndex={-1}>
         <div className="annual-overview-heading">

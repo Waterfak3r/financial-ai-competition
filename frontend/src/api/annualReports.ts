@@ -4,6 +4,9 @@ import type {
   AnnualAnalysisReport,
   AnnualAnalysisResponse,
   AnnualAnalysisSnapshot,
+  AnnualIssuePipeline,
+  AnnualIssueSupplementEvidence,
+  AnnualIssueSupplementEvidenceIndex,
   AnnualReportRecord,
   AnnualSourceProvenance,
   CandidateSignal,
@@ -136,6 +139,116 @@ export async function loadAnnualAnalysis(runId: string): Promise<AnnualAnalysisR
   return readAnnualAnalysisResponse(payload, checkedRunId);
 }
 
+export async function loadAnnualIssueSupplementEvidenceIndex(
+  runId: string,
+  sourceDocumentId: string,
+  sourceSha256: string,
+  reportSha256: string,
+  pipeline: AnnualIssuePipeline,
+): Promise<AnnualIssueSupplementEvidenceIndex> {
+  const checkedRunId = runId.trim();
+  if (!RUN_ID_PATTERN.test(checkedRunId) || pipeline.source_binding_status !== "matched") {
+    throw new AnnualReportApiError("运行 ID 或问题来源绑定无效，未读取补证原文。");
+  }
+  const response = await fetch(ANNUAL_ANALYSIS_PATH + "/" + encodeURIComponent(checkedRunId) + "/issue-evidences", {
+    method: "GET",
+    headers: { Accept: "application/json" },
+    cache: "no-store",
+    credentials: "omit",
+  }).catch(() => {
+    throw new AnnualReportApiError("无法连接本地同源补证索引服务。请确认后端仍在运行。");
+  });
+  const payload = await readJson(response);
+  if (!response.ok) {
+    const failure = failureMessage(response.status, payload, "读取同源补证原文索引");
+    throw new AnnualReportApiError(failure.message, response.status, failure.code);
+  }
+  const record = requireRecord(payload, "issue_evidences");
+  exactKeys(record, ["run_id", "source_document_id", "source_sha256", "report_sha256", "interpretation_label", "items"], "issue_evidences");
+  const actualSourceSha = requireString(record.source_sha256, "issue_evidences.source_sha256").toLowerCase();
+  const actualReportSha = requireString(record.report_sha256, "issue_evidences.report_sha256").toLowerCase();
+  if (
+    record.run_id !== checkedRunId || record.source_document_id !== sourceDocumentId ||
+    actualSourceSha !== sourceSha256.toLowerCase() || actualReportSha !== reportSha256.toLowerCase() ||
+    record.interpretation_label !== "同源定向检索片段，角色仅表示上下文、可能解释或未知，不是独立验证"
+  ) throw invalidResponse("issue_evidences 来源或解释标记无效");
+  const expectedSupplements = pipeline.supplements;
+  const items = requireArray(record.items, "issue_evidences.items").map((item, index) => {
+    const path = `issue_evidences.items[${index}]`;
+    const row = requireRecord(item, path);
+    exactKeys(row, [
+      "evidence_id", "source_document_id", "source_sha256", "pdf_page", "block_index", "start_char", "end_char",
+      "bbox", "raw_text", "section", "role_status", "issue_roles", "preview_url",
+    ], path);
+    const evidenceId = requireString(row.evidence_id, `${path}.evidence_id`);
+    const rowSourceId = requireString(row.source_document_id, `${path}.source_document_id`);
+    const rowSourceSha = requireString(row.source_sha256, `${path}.source_sha256`).toLowerCase();
+    const page = requireInteger(row.pdf_page, `${path}.pdf_page`);
+    const block = safeNonNegativeInteger(row.block_index, `${path}.block_index`);
+    const start = safeNonNegativeInteger(row.start_char, `${path}.start_char`);
+    const end = safeNonNegativeInteger(row.end_char, `${path}.end_char`);
+    const rawText = requireString(row.raw_text, `${path}.raw_text`);
+    const section = requireString(row.section, `${path}.section`);
+    const roleStatus = requireString(row.role_status, `${path}.role_status`);
+    const bboxRecord = requireRecord(row.bbox, `${path}.bbox`);
+    exactKeys(bboxRecord, ["x0", "y0", "x1", "y1"], `${path}.bbox`);
+    const bbox = {
+      x0: finiteNumber(bboxRecord.x0), y0: finiteNumber(bboxRecord.y0),
+      x1: finiteNumber(bboxRecord.x1), y1: finiteNumber(bboxRecord.y1),
+    };
+    const issueRoles = requireArray(row.issue_roles, `${path}.issue_roles`).map((roleValue, roleIndex) => {
+      const rolePath = `${path}.issue_roles[${roleIndex}]`;
+      const role = requireRecord(roleValue, rolePath);
+      exactKeys(role, ["issue_id", "role", "reason_code"], rolePath);
+      const roleName = requireString(role.role, `${rolePath}.role`);
+      if (!["context", "possible_explanation", "unknown"].includes(roleName)) throw invalidResponse(`${rolePath}.role`);
+      return {
+        issue_id: requireString(role.issue_id, `${rolePath}.issue_id`),
+        role: roleName as AnnualIssueSupplementEvidence["issue_roles"][number]["role"],
+        reason_code: requireString(role.reason_code, `${rolePath}.reason_code`),
+      };
+    });
+    const previewUrl = requireString(row.preview_url, `${path}.preview_url`);
+    const expectedUrl = `/v1/annual-analyses/${checkedRunId}/issue-evidences/${encodeURIComponent(evidenceId)}/preview.png`;
+    const previous = index === 0 ? null : itemsAtIndex(record.items, index - 1);
+    if (
+      rowSourceId !== sourceDocumentId || rowSourceSha !== sourceSha256.toLowerCase() || page < 1 || end <= start ||
+      Array.from(rawText).length !== end - start || roleStatus !== "pending" && roleStatus !== "accepted" ||
+      roleStatus === "accepted" && issueRoles.length === 0 ||
+      bbox.x0 < 0 || bbox.y0 < 0 || bbox.x1 <= bbox.x0 || bbox.y1 <= bbox.y0 || previewUrl !== expectedUrl ||
+      previous !== null && previous >= evidenceId
+    ) throw invalidResponse(`${path} 来源定位或排序无效`);
+    return { evidence_id: evidenceId, source_document_id: rowSourceId, source_sha256: rowSourceSha,
+      pdf_page: page, block_index: block, start_char: start, end_char: end, bbox, raw_text: rawText,
+      section, role_status: roleStatus as AnnualIssueSupplementEvidence["role_status"], issue_roles: issueRoles, preview_url: previewUrl };
+  });
+  if (items.length !== expectedSupplements.length) throw invalidResponse("补证原文索引数量与问题处理账不一致");
+  for (const item of items) {
+    const expected = expectedSupplements.find((candidate) => candidate.evidence_id === item.evidence_id);
+    if (
+      expected === undefined || expected.source_document_id !== item.source_document_id ||
+      expected.source_sha256 !== item.source_sha256 || expected.pdf_page !== item.pdf_page ||
+      expected.block_index !== item.block_index || expected.start_char !== item.start_char || expected.end_char !== item.end_char ||
+      expected.section !== item.section || expected.role_status !== item.role_status ||
+      !sameJsonValue(expected.bbox, item.bbox) || !sameJsonValue(expected.issue_roles, item.issue_roles)
+    ) throw invalidResponse("补证原文索引与当前问题处理账不一致");
+  }
+  return {
+    run_id: checkedRunId,
+    source_document_id: sourceDocumentId,
+    source_sha256: actualSourceSha,
+    report_sha256: actualReportSha,
+    interpretation_label: "同源定向检索片段，角色仅表示上下文、可能解释或未知，不是独立验证",
+    items,
+  };
+}
+
+function itemsAtIndex(items: unknown, index: number): string | null {
+  if (!Array.isArray(items) || index < 0 || index >= items.length) return null;
+  const row = optionalRecord(items[index]);
+  return typeof row?.evidence_id === "string" ? row.evidence_id : null;
+}
+
 export async function downloadAnnualAnalysisExport(
   runId: string,
   format: AnnualReportExportFormat,
@@ -246,12 +359,42 @@ export async function loadVerificationEvidencePreview(
   return validateEvidencePreviewResponse(response, evidence.pdf_page, evidence.value_region.bbox, expectedReportSha256, "verified_financial_value", focus);
 }
 
+export async function loadAnnualIssueSupplementPreview(
+  runId: string,
+  evidence: AnnualIssueSupplementEvidence,
+  expectedReportSha256: string,
+  focus = true,
+): Promise<EvidencePreviewImage> {
+  if (!RUN_ID_PATTERN.test(runId) || !EVIDENCE_ID_PATTERN.test(evidence.evidence_id)) {
+    throw new AnnualReportApiError("运行 ID 或同源补证 ID 格式无效。");
+  }
+  const url = ANNUAL_ANALYSIS_PATH + "/" + encodeURIComponent(runId) + "/issue-evidences/" +
+    encodeURIComponent(evidence.evidence_id) + "/preview.png?focus=" + String(focus);
+  const response = await fetch(url, {
+    method: "GET",
+    headers: { Accept: "image/png" },
+    cache: "no-store",
+    credentials: "omit",
+  }).catch(() => {
+    throw new AnnualReportApiError("无法连接本地同源补证页图服务。请确认后端仍在运行。");
+  });
+  if (!response.ok) {
+    const payload = await readJson(response);
+    const failure = failureMessage(response.status, payload, "读取同源补证页图");
+    throw new AnnualReportApiError(failure.message, response.status, failure.code);
+  }
+  if ((response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase() !== "image/png") {
+    throw new AnnualReportApiError("同源补证页图不是 PNG 图片，已停止显示。", response.status);
+  }
+  return validateEvidencePreviewResponse(response, evidence.pdf_page, evidence.bbox, expectedReportSha256, "annual_issue_supplement", focus);
+}
+
 async function validateEvidencePreviewResponse(
   response: Response,
   expectedPage: number,
   expectedBox: PdfBox,
   expectedReportSha256: string,
-  expectedKind: "verified_financial_value" | "narrative_context",
+  expectedKind: "verified_financial_value" | "narrative_context" | "annual_issue_supplement",
   focus: boolean,
 ): Promise<EvidencePreviewImage> {
   const pageHeader = response.headers.get("X-PDF-Page");
@@ -261,6 +404,9 @@ async function validateEvidencePreviewResponse(
   }
   if (response.headers.get("X-Evidence-Kind") !== expectedKind) {
     throw new AnnualReportApiError("证据预览类型与证据白名单不一致，已停止显示。", response.status);
+  }
+  if (expectedKind === "annual_issue_supplement" && response.headers.get("X-Evidence-Interpretation-Code") !== "annual_issue_retrieval_unverified_context_possible_explanation_unknown") {
+    throw new AnnualReportApiError("同源补证页图缺少未核验角色解释标记，已停止显示。", response.status);
   }
   const mode = response.headers.get("X-Preview-Mode");
   const expectedMode = focus ? "focus" : "full_page";
@@ -1627,9 +1773,23 @@ function readReport(value: Record<string, unknown>, path: string): AnnualAnalysi
         ? null
         : readModelReview(
             requireRecord(value.model_review, path + ".model_review"),
-            path + ".model_review",
-            { runId, companyId, reportYear, sourceDocumentId, sourceSha256 },
-          );
+          path + ".model_review",
+          { runId, companyId, reportYear, sourceDocumentId, sourceSha256 },
+        );
+  const modelIssuePipeline =
+    value.model_issue_pipeline === undefined
+      ? undefined
+      : value.model_issue_pipeline === null
+        ? null
+        : readAnnualIssuePipeline(requireRecord(value.model_issue_pipeline, path + ".model_issue_pipeline"), path + ".model_issue_pipeline", {
+            runId, companyId, reportYear, sourceDocumentId, sourceSha256,
+          });
+  if (modelIssuePipeline !== undefined && modelIssuePipeline !== null && value.model_investigation !== undefined && value.model_investigation !== null) {
+    const nested = requireRecord(value.model_investigation, path + ".model_investigation").model_issue_pipeline;
+    if (nested !== undefined && !sameJsonValue(nested, value.model_issue_pipeline)) {
+      throw invalidResponse(path + ".model_issue_pipeline 与调查附录不一致");
+    }
+  }
   return {
     kind: "fintrace_annual_analysis_report",
     title: optionalString(value.title) ?? undefined,
@@ -1696,7 +1856,121 @@ function readReport(value: Record<string, unknown>, path: string): AnnualAnalysi
             sourceSha256,
           }),
     model_review: modelReview,
+    model_issue_pipeline: modelIssuePipeline,
   };
+}
+
+function readAnnualIssuePipeline(
+  value: Record<string, unknown>,
+  path: string,
+  expected: { runId: string; companyId: string; reportYear: number; sourceDocumentId: string; sourceSha256: string },
+): AnnualIssuePipeline {
+  const kind = requireString(value.kind, path + ".kind");
+  const status = requireString(value.status, path + ".status");
+  if (kind !== "annual_issue_pipeline_v1" || !new Set(["pending", "running", "partial", "completed", "failed", "abstained"]).has(status)) {
+    throw invalidResponse(path + " kind/status");
+  }
+  const source = requireRecord(value.source_identity, path + ".source_identity");
+  if (
+    requireString(source.run_id, path + ".source_identity.run_id") !== expected.runId ||
+    requireString(source.company_id, path + ".source_identity.company_id") !== expected.companyId ||
+    requireInteger(source.report_year, path + ".source_identity.report_year") !== expected.reportYear ||
+    requireString(source.source_document_id, path + ".source_identity.source_document_id") !== expected.sourceDocumentId ||
+    requireString(source.source_sha256, path + ".source_identity.source_sha256").toLowerCase() !== expected.sourceSha256.toLowerCase() ||
+    typeof source.report_period !== "string" || source.report_period.trim() === ""
+  ) throw invalidResponse(path + ".source_identity");
+  const input = requireRecord(value.input, path + ".input");
+  if (
+    !Array.isArray(input.finding_ids) || input.finding_ids.some((item) => typeof item !== "string") ||
+    requireInteger(input.finding_count, path + ".input.finding_count") !== input.finding_ids.length ||
+    requireInteger(input.candidate_count, path + ".input.candidate_count") < 0 ||
+    typeof input.discovery_coverage_complete !== "boolean"
+  ) throw invalidResponse(path + ".input");
+  const candidates = readRecordArray(value.candidates, path + ".candidates");
+  const issues = readRecordArray(value.issues, path + ".issues");
+  const memberDecisions = readRecordArray(value.member_decisions, path + ".member_decisions");
+  const supplements = readRecordArray(value.supplements, path + ".supplements");
+  const globalClosure = requireRecord(value.global_closure, path + ".global_closure");
+  const presentation = requireRecord(value.presentation_order, path + ".presentation_order");
+  exactKeys(presentation, ["schema_version", "issue_order", "candidate_order"], path + ".presentation_order");
+  if (presentation.schema_version !== "annual_issue_display_order_v1") throw invalidResponse(path + ".presentation_order.schema_version");
+  const issueOrder = requireArray(presentation.issue_order, path + ".presentation_order.issue_order").map((item, index) => {
+    const entry = requireRecord(item, `${path}.presentation_order.issue_order[${index}]`);
+    exactKeys(entry, ["issue_id", "reason"], `${path}.presentation_order.issue_order[${index}]`);
+    return {
+      issue_id: requireString(entry.issue_id, `${path}.presentation_order.issue_order[${index}].issue_id`),
+      reason: readIssueDisplayReason(entry.reason, `${path}.presentation_order.issue_order[${index}].reason`),
+    };
+  });
+  const candidateOrder = requireArray(presentation.candidate_order, path + ".presentation_order.candidate_order").map((item, index) => {
+    const entry = requireRecord(item, `${path}.presentation_order.candidate_order[${index}]`);
+    exactKeys(entry, ["finding_id", "reason"], `${path}.presentation_order.candidate_order[${index}]`);
+    return {
+      finding_id: requireString(entry.finding_id, `${path}.presentation_order.candidate_order[${index}].finding_id`),
+      reason: readIssueDisplayReason(entry.reason, `${path}.presentation_order.candidate_order[${index}].reason`),
+    };
+  });
+  const issueIds = issues.map((item) => requireString(item.issue_id, path + ".issues.issue_id"));
+  const candidateIds = candidates.map((item) => requireString(item.finding_id, path + ".candidates.finding_id"));
+  if (
+    issueOrder.length !== issueIds.length || new Set(issueOrder.map((item) => item.issue_id)).size !== issueOrder.length ||
+    issueOrder.some((item) => !issueIds.includes(item.issue_id)) ||
+    candidateOrder.length !== candidateIds.length || new Set(candidateOrder.map((item) => item.finding_id)).size !== candidateOrder.length ||
+    candidateOrder.some((item) => !candidateIds.includes(item.finding_id))
+  ) throw invalidResponse(path + ".presentation_order membership");
+  if (
+    candidates.length !== input.finding_count || globalClosure.scope !== "current_known_findings" ||
+    typeof globalClosure.closed !== "boolean" || typeof globalClosure.no_priority_allowed !== "boolean" ||
+    !Array.isArray(globalClosure.pending_issue_ids) || !Array.isArray(globalClosure.coverage_gaps) ||
+    !Array.isArray(globalClosure.relation_gaps) || globalClosure.closed === false && globalClosure.no_priority_allowed === true
+  ) throw invalidResponse(path + ".global_closure");
+  const sourceBindingStatus = value.source_binding_status === undefined ? "matched" : requireString(value.source_binding_status, path + ".source_binding_status");
+  if (sourceBindingStatus !== "matched" && sourceBindingStatus !== "mismatch") throw invalidResponse(path + ".source_binding_status");
+  if (sourceBindingStatus === "matched") {
+    for (const [index, candidate] of candidates.entries()) {
+      if (
+        typeof candidate.finding_id !== "string" || !input.finding_ids.includes(candidate.finding_id) ||
+        typeof candidate.title !== "string" || typeof candidate.observation !== "string" ||
+        !Array.isArray(candidate.citations) || !Array.isArray(candidate.evidence_ids)
+      ) throw invalidResponse(`${path}.candidates[${index}]`);
+    }
+    for (const [index, decision] of memberDecisions.entries()) {
+      if (
+        typeof decision.finding_id !== "string" || !input.finding_ids.includes(decision.finding_id) ||
+        !["pending", "retain", "merge", "exclude"].includes(String(decision.disposition)) ||
+        typeof decision.reason_code !== "string"
+      ) throw invalidResponse(`${path}.member_decisions[${index}]`);
+    }
+  }
+  return {
+    kind: "annual_issue_pipeline_v1",
+    status,
+    reason: nullableString(value.reason, path + ".reason"),
+    source_binding_status: sourceBindingStatus,
+    input,
+    candidates,
+    issues,
+    member_decisions: memberDecisions,
+    supplements,
+    global_closure: globalClosure,
+    presentation_order: {
+      schema_version: "annual_issue_display_order_v1",
+      issue_order: issueOrder,
+      candidate_order: candidateOrder,
+    },
+    ...(value.retrieval_coverage === undefined ? {} : { retrieval_coverage: requireRecord(value.retrieval_coverage, path + ".retrieval_coverage") }),
+    ...(value.shards === undefined ? {} : { shards: readRecordArray(value.shards, path + ".shards") }),
+    ...(value.audit_summary === undefined ? {} : { audit_summary: requireRecord(value.audit_summary, path + ".audit_summary") }),
+    ...(value.verification_notice === undefined ? {} : { verification_notice: requireString(value.verification_notice, path + ".verification_notice") }),
+  };
+}
+
+function readIssueDisplayReason(value: unknown, path: string): string {
+  const reason = requireString(value, path);
+  if (reason.trim() === "" || reason.length > 800 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(reason)) {
+    throw invalidResponse(path);
+  }
+  return reason;
 }
 
 function readModelReview(
@@ -1711,7 +1985,7 @@ function readModelReview(
   },
 ): AnnualAnalysisModelReview {
   const status = requireString(value.status, path + ".status");
-  if (status !== "completed" && status !== "failed" && status !== "not_called") {
+  if (status !== "completed" && status !== "failed" && status !== "not_called" && status !== "abstained") {
     throw invalidResponse(path + ".status");
   }
   const assessmentValue = nullableString(value.assessment, path + ".assessment");
@@ -1752,11 +2026,12 @@ function readModelReview(
     (reusedForMatchingInputs && (
       status !== "completed" || modelCalled || callCount !== 0 || callAttemptCount !== 0 ||
       !auditArtifacts.length || auditArtifacts.some((artifact, index) =>
-        !isReusedAnnualReviewAudit(artifact, `${path}.audit_artifacts[${index}]`),
+        !isReusedAnnualReviewAudit(artifact, `${path}.audit_artifacts[${index}]`, value.prompt_version === "annual_review_v3"),
       )
     )) ||
     (status !== "completed" && reason === null) ||
-    (status === "not_called" && modelCalled)
+    (status === "not_called" && modelCalled) ||
+    (status === "abstained" && (modelCalled || callCount !== 0 || callAttemptCount !== 0))
   ) {
     throw invalidResponse(path);
   }
@@ -1788,11 +2063,18 @@ function readModelReview(
     call_attempt_count: callAttemptCount,
     audit_artifacts: auditArtifacts,
     source_identity: sourceIdentity,
+    ...(typeof value.prompt_version === "string" ? { prompt_version: value.prompt_version } : {}),
   };
 }
 
-function isReusedAnnualReviewAudit(value: AnnualReportRecord, path: string): boolean {
-  exactKeys(value, ["audit_dir", "request_path", "response_path", "failure_path", "status", "prompt_version"], path);
+function isReusedAnnualReviewAudit(value: AnnualReportRecord, path: string, v3 = false): boolean {
+  exactKeys(value, [
+    "audit_dir", "request_path", "response_path", "failure_path", "status", "prompt_version",
+    ...(v3 ? [
+      "request_body_sha256", "semantic_input_sha256", "projected_input_sha256",
+      "review_wire_version", "review_input_projection_version",
+    ] : []),
+  ], path);
   const auditDir = requireString(value.audit_dir, `${path}.audit_dir`);
   const runIdPattern = "annual-analysis-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}";
   const auditIdPattern = "[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}";
@@ -1802,7 +2084,14 @@ function isReusedAnnualReviewAudit(value: AnnualReportRecord, path: string): boo
     value.response_path !== `${auditDir}/response.json` ||
     value.failure_path !== null ||
     value.status !== "succeeded" ||
-    value.prompt_version !== "annual_review_v2"
+    value.prompt_version !== (v3 ? "annual_review_v3" : "annual_review_v2") ||
+    v3 && (
+      typeof value.request_body_sha256 !== "string" || !SHA256_PATTERN.test(value.request_body_sha256) ||
+      typeof value.semantic_input_sha256 !== "string" || !SHA256_PATTERN.test(value.semantic_input_sha256) ||
+      typeof value.projected_input_sha256 !== "string" || !SHA256_PATTERN.test(value.projected_input_sha256) ||
+      value.review_wire_version !== "annual_model_review_v3_compact_v4" ||
+      value.review_input_projection_version !== "annual_review_v3_purpose_projection_v1"
+    )
   ) {
     return false;
   }

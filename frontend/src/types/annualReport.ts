@@ -164,7 +164,7 @@ export interface M3AnnualScreening {
   limitations: string[];
 }
 
-export type ModelReviewStatus = "completed" | "failed" | "not_called";
+export type ModelReviewStatus = "completed" | "failed" | "not_called" | "abstained";
 export type ModelReviewAssessment =
   | "prioritize_review"
   | "no_priority_issue_identified_within_scope"
@@ -200,6 +200,54 @@ export interface AnnualAnalysisModelReview {
     source_document_id: string;
     source_sha256: string;
   };
+  prompt_version?: string;
+}
+
+export interface AnnualIssuePipeline {
+  kind: "annual_issue_pipeline_v1";
+  status: string;
+  reason: string | null;
+  source_binding_status: "matched" | "mismatch";
+  input: AnnualReportRecord;
+  candidates: AnnualReportRecord[];
+  issues: AnnualReportRecord[];
+  member_decisions: AnnualReportRecord[];
+  supplements: AnnualReportRecord[];
+  global_closure: AnnualReportRecord;
+  presentation_order: {
+    schema_version: "annual_issue_display_order_v1";
+    issue_order: Array<{ issue_id: string; reason: string }>;
+    candidate_order: Array<{ finding_id: string; reason: string }>;
+  };
+  retrieval_coverage?: AnnualReportRecord;
+  shards?: AnnualReportRecord[];
+  audit_summary?: AnnualReportRecord;
+  verification_notice?: string;
+}
+
+export interface AnnualIssueSupplementEvidence {
+  evidence_id: string;
+  source_document_id: string;
+  source_sha256: string;
+  pdf_page: number;
+  block_index: number;
+  start_char: number;
+  end_char: number;
+  bbox: PdfBox;
+  raw_text: string;
+  section: string;
+  role_status: "pending" | "accepted";
+  issue_roles: Array<{ issue_id: string; role: "context" | "possible_explanation" | "unknown"; reason_code: string }>;
+  preview_url: string;
+}
+
+export interface AnnualIssueSupplementEvidenceIndex {
+  run_id: string;
+  source_document_id: string;
+  source_sha256: string;
+  report_sha256: string;
+  interpretation_label: "同源定向检索片段，角色仅表示上下文、可能解释或未知，不是独立验证";
+  items: AnnualIssueSupplementEvidence[];
 }
 
 export interface AnnualAnalysisReport {
@@ -242,6 +290,7 @@ export interface AnnualAnalysisReport {
   m3_screening?: M3AnnualScreening | null;
   model_investigation?: AnnualReportRecord | null;
   model_discovery?: AnnualModelDiscovery | null;
+  model_issue_pipeline?: AnnualIssuePipeline | null;
   model_review?: AnnualAnalysisModelReview | null;
 }
 

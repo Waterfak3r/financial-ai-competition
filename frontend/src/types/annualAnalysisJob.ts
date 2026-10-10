@@ -99,6 +99,7 @@ export interface AnnualAnalysisStageBudget {
   planned_attempts: number | null;
   admitted_attempts: number;
   status: AnnualAnalysisBudgetStageStatus;
+  elapsed_seconds?: number;
 }
 
 export interface AnnualAnalysisProviderAttemptLimits {
