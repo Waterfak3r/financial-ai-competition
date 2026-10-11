@@ -6,6 +6,8 @@
 
 React + TypeScript + Vite 负责本机展示，Python + FastAPI 负责处理与核验。LangGraph 是第一版唯一的智能体编排框架；模型通过后端 Chat Completions 连接器调用，本地 Python 使用 Decimal 计算。项目不内置默认供应方或型号，不含账户系统。
 
+开发工具配置位于 [.omp/](../.omp/)，用于 OMP 主控及子代理的开发协作，不由 frontend/backend 加载，也不改变应用内部 LangGraph 的编排契约。协作规则见 [AGENTS.md](../AGENTS.md)，使用与交接步骤见[开发说明](development.md)。
+
 ```mermaid
 flowchart TD
     A["已存文本 PDF 与来源记录"] --> B["提取与标准化"]
@@ -61,7 +63,9 @@ flowchart TD
 | quarterly | `ingestion/quarterly.py`、`finance/quarterly.py`、`verification/quarterly.py` 与 `reports/quarterly_analysis.py` 承载季度层，不改变年度 FinancialFactV2 |
 | core | 公共路径、配置与异常；`annual_checkpoints` 管不可变快照、原子指针和最终封存，`annual_recovery` 管恢复绑定及能力，`annual_work_budget` 管版本固定默认合同和 live 阶段分配，`model_call_ledger` 管跨进程原子请求准入、计数与关闭门控 |
 
-前端 `pages` 组织年度分析、设置和旧预检；`components` 承载公共组件；`api` 处理请求及错误；`types` 定义读取类型；`styles` 管展示。财务计算和模型调用不在浏览器执行。未来拆分页面应保留现有报告读取、任务恢复与旧归档兼容。
+前端 `pages` 组织年度分析、设置和旧预检；`components` 承载公共组件及 `AnnualReportOverview` 重点概览；`api` 处理请求及错误；`types` 定义读取类型；`styles` 管展示。财务计算和模型调用不在浏览器执行。普通入口以显式 AI 复选框及高级 M3 选项映射既有四 mode，不改变后端请求或历史模式。报告按“标题与状态 → 重点概览 → 基础财务对照 → 完整线索与处理账”阅读；概览选择和来源限制见[全文发现页面契约](annual-discovery.md#页面旧归档与任务阶段)。
+
+新建入口与历史列表采用可键盘操作的原生折叠。显式选择报告后收起导航并聚焦报告标题；报告轮询不反复聚焦，不收起用户已打开的入口，也不打断正在输入的新任务。补跑和重新全量分析使用被选中归档/任务的原来源与完整模式，不读取新建表单当前选项；重新读取只走 GET。旧预检作为独立旧流程保留。
 
 ## 3. HTTP 与任务契约
 
@@ -164,7 +168,7 @@ Claim 类型为 fact、calculation、inference、hypothesis；同比属于 calcu
 
 补证模块从同源提取块扫描并按章节标识和文本重合选片；它不承诺识别所有相关解释。`retrieval_coverage` 分开记录扫描、命中、选片、未选配对及角色完成；`selected_excerpt_chars` 是所选片段字符总量，`selected_unique_source_chars` 按同页同块的字符区间并集计量，`omitted_chars` 是未进入定向补证片段的原文字符，不是发现层遗漏。补证 ID 绑定来源 SHA、页、块及起点，严格读取仍重核终点、原文与坐标。原发现自带引文为固定 `primary_finding_quote`；检索片段只可标为 context、possible_explanation 或 unknown，全部保持未核验，不能充当独立事实反证。定向检索上限及其未处理项留在覆盖账，不以关键词命中补记核验通过。
 
-合法 `role_status=pending` 的补证可有空 issue_roles；受控原文索引和抽屉仍展示经过同源/同 SHA 校验的文字与页图，明确“角色尚待标注”。accepted 状态须有有效逐问题角色，不能将空角色伪造为已完成标注。
+合法 `role_status=pending` 的补证可在原报告中缺省 issue_roles，而受控原文索引将其规范为空数组；前端仅兼容这一缺省与空数组的对应关系。索引和抽屉仍须通过同源/同 SHA、报告快照哈希、页块字符范围、坐标、数量顺序及预览路由检查，明确角色尚待标注。accepted 状态须有有效非空逐问题角色并精确匹配，不能将缺省或空角色伪造为已完成标注。
 
 新 v5 绑定包含精确原 v4 发现绑定、新提示词哈希、事项解析与评审版本，不接受跨 v3/v4 的续跑。归并、跨片关系、补证角色和新评审仅在业务输入、来源、配置及原成功审计均匹配时零新请求复用；父归档不改写，易变 run/调用/耗时元数据不代替业务输入。常规 API 与三格式导出对新事项层移除原文，保留引用 ID、位置、成员路径、角色、缺口及审计计数；原文由受控索引和页图读取。`presentation_order` 是独立展示投影，依据完成评审的理由/跟进引用、定位完整性、明确核查动作及候选账稳定顺序排序，不按 raw priority 排序，也不回写评审的业务输入。
 

@@ -1,0 +1,2 @@
+# Word 文档使用原始二进制差异，避免系统 textconv 生成不可回收的隔离补丁。
+*.docx binary

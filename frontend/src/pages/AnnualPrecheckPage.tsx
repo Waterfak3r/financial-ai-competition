@@ -276,20 +276,12 @@ export function AnnualPrecheckPage() {
         <nav className="primary-navigation" aria-label="分析流程">
           <ul className="nav-list">
             <li>
-              <NavButton view="annual-analysis" current={view} onSelect={setView} icon={<DocIcon />} label="分析年报" />
-            </li>
-            <li>
-              <NavActionButton
-                icon={<FormIcon />}
-                label="上传年报"
-                onSelect={() => focusAnnualAnalysisTarget("annual-source-choice-upload-radio", ".annual-start-another")}
-              />
-            </li>
-            <li>
-              <NavActionButton
-                icon={<TableIcon />}
-                label="回看归档"
-                onSelect={() => focusAnnualAnalysisTarget("annual-history-list")}
+              <NavButton
+                view="annual-analysis"
+                current={view}
+                onSelect={() => focusAnnualAnalysisTarget("annual-job-create", ".annual-start-another")}
+                icon={<DocIcon />}
+                label="分析年报"
               />
             </li>
             <li>
@@ -329,17 +321,17 @@ export function AnnualPrecheckPage() {
               <span className="local-workspace-mark"><span aria-hidden="true" />本机工作区</span>
               <button
                 type="button"
-                className="topbar-action"
-                onClick={() => focusAnnualAnalysisTarget("annual-source-choice-upload-radio", ".annual-start-another")}
+                className="topbar-action topbar-action-primary"
+                onClick={() => focusAnnualAnalysisTarget("annual-job-create", ".annual-start-another")}
               >
-                上传年报
+                分析年报
               </button>
               <button
                 type="button"
-                className="topbar-action topbar-action-primary"
-                onClick={() => focusAnnualAnalysisTarget("annual-history-list")}
+                className="topbar-action"
+                onClick={() => focusAnnualAnalysisTarget("annual-history-list", ".annual-history-fold")}
               >
-                回看归档
+                已有分析
               </button>
             </div>
           ) : view === "settings" ? (
@@ -477,22 +469,7 @@ function NavButton({
   );
 }
 
-function NavActionButton({
-  icon,
-  label,
-  onSelect,
-}: {
-  icon: ReactNode;
-  label: string;
-  onSelect: () => void;
-}) {
-  return (
-    <button type="button" className="nav-item nav-action-item" onClick={onSelect}>
-      {icon}
-      {label}
-    </button>
-  );
-}
+
 
 function HomeView({
   summary,

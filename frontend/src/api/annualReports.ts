@@ -230,7 +230,7 @@ export async function loadAnnualIssueSupplementEvidenceIndex(
       expected.source_sha256 !== item.source_sha256 || expected.pdf_page !== item.pdf_page ||
       expected.block_index !== item.block_index || expected.start_char !== item.start_char || expected.end_char !== item.end_char ||
       expected.section !== item.section || expected.role_status !== item.role_status ||
-      !sameJsonValue(expected.bbox, item.bbox) || !sameJsonValue(expected.issue_roles, item.issue_roles)
+      !sameJsonValue(expected.bbox, item.bbox) || (expected.issue_roles === undefined ? item.issue_roles.length !== 0 : !sameJsonValue(expected.issue_roles, item.issue_roles))
     ) throw invalidResponse("补证原文索引与当前问题处理账不一致");
   }
   return {

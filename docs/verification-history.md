@@ -277,6 +277,45 @@ C-02 独立季度 CLI 已以 `af13785d9ba9d635ea79e670c42beb54415d9bbd` 提交�
 
 源码 ZIP 将从包含本报告、运行指南和正式证据的文档交付 commit/tree 独立构建；准确 package ID、source commit/tree、ZIP SHA256、manifest 和同机中文空格路径副本演练结果应以包外清单与独立验收记录为准。该同机检查不替代另一台 Windows 电脑干净安装、现场网络/API 或真人财务复核。
 
+<a id="annual-analysis-recovery-review"></a>
+
+## 2026-10-06 年度分析可用性审阅与离线归档对照
+
+用户反馈两个 AI 模式运行缓慢、部分批次成功但最终结果不可用，并要求形成供下一会话使用的恢复任务书。本次检查工作区 HEAD 为 `b3c418ce4566b2161a9d86571c353f891e978d56`，对应 README 所述 c0 软件基线后的文档提交。审阅范围为当前代码、启动日志、三份历史实际运行归档与发现层读取契约；没有修复业务代码、启动新的在线分析或执行浏览器验收。具体软件恢复目标见[任务书](annual-analysis-recovery-plan.md)，均为待实施项。
+
+### 实际运行记录
+
+下表时间来自既有 job 状态，均按北京时间显示。响应次数指获得模型响应，不表示响应通过业务校验；发现数量不是已确认风险数量。
+
+| 案例与来源 | job_id / run_id | 运行时间与结果 |
+| --- | --- | --- |
+| 海天味业 2024，`integrated_analysis` | `annual-job-7da3cb43ac544fb8bff6bbd3b99eae1a` / `annual-analysis-de327ccc-ab3d-4295-ad4e-7bb87acf8518` | 10/05 14:00:47–14:12:01，11 分 14 秒。v2 发现层 42 批，37 成功、1 部分有效、4 失败；39 响应 / 42 尝试，保留 102 条发现，最终评审完成。job 却因 `analysis_archive_invalid` / `annual_discovery_invalid` 标为失败。 |
+| 海天味业 2024，`model_investigation` | `annual-job-b85de6c54bea4c3eb38fe7e6a2acedad` / `annual-analysis-211c5753-e91d-4757-994f-7788b24e57fa` | 10/05 14:14:02–14:16:17，2 分 15 秒。v2 扫描 42 批全部失败，审计分类为 3 次 timeout、39 次 connection_error；定向调查两次调用成功，最终评审连接失败。job 同样因发现层归档校验标为失败。 |
+| 用户提供的茅台 2025，`integrated_analysis` | `annual-job-c40343564b0f470282a342372dc959a4` / `annual-analysis-de3b94f9-2242-4775-8240-8f84ffe56cab` | 10/05 08:44:31–09:08:55，24 分 24 秒。v1 扫描 23 批，6 成功、14 次响应校验失败、3 次调用超时；20 响应 / 23 尝试，保留 28 条发现。8 条基础事实、0 项确认计算，可比性证据不足；最终评审完成，job 为 `completed_with_issues`。 |
+
+海天集成运行的扫描调用平均耗时约 41.90 秒；执行元数据为 `bounded_rolling`、`max_in_flight=3`。其 102 条发现中 37 条 priority 为 high，但实际最终评审输入仅含 12 条发现，coverage 记录省略 90 条。主控只读取既有审计并汇总安全字段，没有访问模型设置或发送新请求。连接失败类别不足以确定服务商、代理、DNS 等具体原因。
+
+### 归档失败对照
+
+本机 `artifacts/tmp/startup-0fd598f919974a6c827eab22d1df9a6b/` 的日志目录创建于 10/05 08:43，`api.stderr.log` 记录 API 进程 26720 启动；同一目录的 `api.stdout.log` 包含下午两个失败 job 的轮询，更新至 14:16。支持 v2 的读取器提交 `159d57d` 时间为当日 11:11；启动脚本复用既有 API，未启用后端自动重载，而年度 CLI 子进程读取磁盘代码。日志及下列离线对照共同支持“旧常驻 API 读取新版 CLI 产物”的诊断；本次没有对当时进程内存取证或现场重放整段在线运行。
+
+- 当前 `load_annual_report` 对上述三份报告全部读取成功。
+- 从 `eacd4301c5d8f76c2ba144530fa9ed98b87c9a52` 提取旧 `annual_report_read.py` 离线加载：两份海天报告在 `model_discovery.prompt_version=annual_discovery_v2` 处均被拒绝，错误为 `422 annual_discovery_invalid`、消息“年度开放式发现提示词版本无效。”；茅台 v1 报告可读。
+- 旧读取器第 616 行仅允许 v1；当前读取器第 637 行允许已知版本集合。job runner 捕获读取失败并写入 `analysis_archive_invalid`，与现存 job 记录吻合。
+- 原失败 job 的持久状态不因新读取器可用而自动改变；当前页面的任务刷新仅在成功状态加载报告。因此“新代码能读”不等于用户已经恢复访问，更不等于新的 AI 请求不会失败。
+
+正式[归档读取对照](../artifacts/evaluations/project-recovery-review-20261006/archive-read-replay.json)保存上述结果和三份 manifest、来源 PDF、report 共 9 个文件的前后哈希，均未变化。原辅助脚本和旧读取器副本保留在 `artifacts/tmp/review-20261006/`，未作为正式功能或测试依赖；不复制用户原 PDF 或模型请求/响应到交付材料。
+
+### 本次检查与限制
+
+实际执行的定向命令：
+
+```powershell
+python -m pytest -c backend/pyproject.toml tests/unit/test_annual_discovery_contract.py tests/unit/test_annual_report_read_api.py -k discovery -q --junitxml=artifacts/tmp/review-20261006/targeted-tests.xml
+```
+
+结果为 **12 passed、25 deselected**，正式 [JUnit 记录](../artifacts/evaluations/project-recovery-review-20261006/targeted-tests.xml)记录 12 个测试、0 失败、0 错误。本次没有运行完整业务套件、前端构建、新在线分析、浏览器主流程或真人语义复核；不能据此声称产品已恢复。后续编制任务书只做文档事实、链接和差异检查，不把这些业务测试重复记为文档阶段新执行。
+
 <a id="annual-analysis-recovery-r1-intermediate"></a>
 
 ## 2026-10-06 恢复 goal 开工与 R1 中间状态审阅
@@ -599,3 +638,92 @@ R4 入口保护清单的 6233 个文件已再次重算；当时仅 R3 的闲置 
 主控随后完成最后三份已落盘产物的只读核对：（1）受影响回归与前端构建 [`affected-regression-20261010T041718Z-532a1162a60c`](../artifacts/evaluations/annual-recovery-r4-20261010/affected-regression-20261010T041718Z-532a1162a60c/run-result.json) 按指定命令实际运行 `pytest` exit 0，251 项中 **245 passed、6 skipped、0 failures、0 errors**（JUnit 112.142 秒，外层 112.695 秒；6 项跳过为 5 个需专用 `FINTRACE_R4_*` 变量的 harness 入口及 1 个 Windows 符号链接测试，不计入通过数），`npm run typecheck`（2.933 秒）与 `npm run build`（3.028 秒）均 exit 0；114 个冻结文件（81 运行源码、10 业务配置、23 前端文件，manifest `38592c3737fb1a36bbb0be9c9c3ac193a99b1c95f2050883bfb7e465a14fd201`）及 9 个选定测试文件运行前后零变化，独立重算 `junit.xml`、`pytest.stdout.txt`、`npm-typecheck.stdout.txt`、`npm-build.stdout.txt` 与 [`independent-freeze-check.json`](../artifacts/evaluations/annual-recovery-r4-20261010/affected-regression-20261010T041718Z-532a1162a60c/independent-freeze-check.json) 哈希全部吻合。（2）只读克隆诊断 `artifacts/tmp/annual-api-get-projection-diagnostic-20261010T041825361Z-25d29f048db54e6b98c152f1e9630b74` 证实单次 `GET /v1/annual-analysis-jobs/{job_id}` 在锁外串行执行 4 次严格 `load_annual_report`（`result_availability`、`recovery_progress`、`discovery_recovery`、`analysis_budget`），冷/热轮单次 GET 分别耗时 **4.058 秒 / 3.530 秒**，逼近测试轮询器固定的 `urlopen(timeout=5)`；原失败目录 7 份关键证据哈希前后不变。（3）浏览器尝试 [`browser-r4-browser-20261010-d19273d8be104d3189351faaa198a653`](../artifacts/evaluations/annual-recovery-r4-20261010/browser-r4-browser-20261010-d19273d8be104d3189351faaa198a653/browser-result.json) 的超时截图 [`resume-child-report-wait-timeout.viewport.png`](../artifacts/evaluations/annual-recovery-r4-20261010/browser-r4-browser-20261010-d19273d8be104d3189351faaa198a653/resume-child-report-wait-timeout.viewport.png) 与 207023 字符捕获 DOM 证实续跑子报告 `annual-analysis-71264d19-e2d1-4924-a832-d89964f0b45f`（job `annual-job-fb5dfd6e37974bf993253775d8e5849a`）已在页面完整渲染，45 秒超时源于临时脚本 `querySelector('.annual-technical-record code')` 命中上方弃权卡片的 `abstained` 而非 `#annual-scope` 中的分析编号；未重跑的子报告三格式下载、抽屉和故障矩阵后半段不写为通过。主控据此按当前诚实边界在原分支仅暂存 R4 任务文件完成本地 commit（保留用户原有 39 行验收记录、路线文档、计划书 Word 改动与茅台 PDF 在工作区），真实模型请求累计仍为 **0/80，剩余 80**。
 
 2026-10-10 至 2026-10-11 在分支 `test/agy-grok-recovery-20261010`（基于 R4 提交 `75269d7`）按用户指令直接修正并跑通上述两项 R4 验收脚本，114 个冻结生产文件（manifest `38592c3737fb1a36bbb0be9c9c3ac193a99b1c95f2050883bfb7e465a14fd201`、清单文件 SHA `53575e0277038bd96a4ed184284cf88013c43a7feb3846cf1763b32935c3deeb`）全程零改动：（1）**R4 完整故障矩阵与恢复运行验收** [`runtime-acceptance-20261010T115633027Z-02ca3683409b4204af0f31fbeceaedae`](../artifacts/evaluations/annual-recovery-r4-20261010/runtime-acceptance-20261010T115633027Z-02ca3683409b4204af0f31fbeceaedae/attempt-result.json)（`attempt-result.json` SHA `a2a9de325c7d91244138031321034577b7ca372cc4684f7773b0e61daaac52d0`、外层 [`runner-result.json`](../artifacts/evaluations/annual-recovery-r4-20261010/runtime-acceptance-20261010T115633027Z-02ca3683409b4204af0f31fbeceaedae/runner-result.json) SHA `96176adabd86efff1a03959aa778ac47c3af4615e82cdd2b4a838b6d5b5d39da`）：仅修正测试文件 `tests/integration/test_annual_issue_recovery_runtime.py`（SHA `563da5369b2344ed5516c53bc11ab2c798ad86431fcae47a6dd4d538f65518fa`）中的轮询单次超时与测试桩/断言错配，实际运行 `pytest` exit 0（**3 passed in 158.97s**，`status: "passed"`、`failures: {}`），9 个子场景（`preflight`、`reuse_parent`、`reuse_child`、`business_input_drift_child`、`business_input_drift_continuation`、`cancel_group`、`http401_supplement`、`deadline_global`、`owner_hard_exit`）全部通过，本地 loopback 模拟请求 59 次、SQLite 准入 59 次，外部真实 provider 调用为 0。（2）**R4 浏览器端到端验收** [`browser-r4-browser-20261010-2a837f7e50834b0ca9c01333477af97f-attempt6`](../artifacts/evaluations/annual-recovery-r4-20261010/browser-r4-browser-20261010-2a837f7e50834b0ca9c01333477af97f-attempt6/browser-result.json)（`browser-result.json` SHA `2820220eb00107b38f4d23b569d0ee56c43e173955139507e00ab6ca52a1e2b8`，runner SHA `4bc4b15a16905450367b58d949c8b35d842eeaacd8bd4dcfefea114b8551b8d4`，driver SHA `3c3590ba51e02ecdf68696dfcfae95d2678961d1d51ea64ef916e0d577253202`）：在不修改 `test_annual_issue_recovery_runtime.py` 与 114 个冻结生产文件的前提下，仅修正临时浏览器脚本选择器、移除过时超时环境变量注入、在内存覆写合成 PDF 右列宽度使 bbox 落入 595pt 页宽内、忽略 `file://` 打开离线 HTML 时 Chromium 对 `<meta>` 中 `frame-ancestors` 的固定提示，并在浏览器补证回看路由中为 `role_status=="pending"` 的补证项补齐空数组 `issue_roles: []` 以对齐 `/issue-evidences` 接口。实际运行 exit 0（`status: "completed_with_recorded_checks"`、`failures: []`），21 项检查全部为 `true`，覆盖父任务 `annual-job-e5070eef86dc4df89d67482efb896e21` / `annual-analysis-c1e36ba8-cd93-4a32-87b9-27e1dcdcdaf8` 实时部分结果与取消、子续跑任务 `annual-job-db125c246fe843fb8860abc44b867620` / `annual-analysis-d278cfe4-c9c2-45e2-a9aa-a2e36dfe1209` 复用父发现完成、1440×900 与 390×844 视口无横向溢出、JSON/Markdown/HTML 三格式同快照导出（SHA 分别为 `81e7df76f48a9ca75a053b3f7df4d584c8f08c997c4075c3e59bc77c23f50f76`、`fe539c7d01109b1b1db41b454b246636002251f61205daea9ae00514c8ef9529`、`23883a583b8588dfaf18635c94cd9188c9511fc1cea8d2585b673557d28aed96`）、离线 `file://` HTML 打开零外网依赖、URL 刷新与历史前进/后退绑定、pending 补证运行 `annual-analysis-80655be3-377a-4179-a3d1-1be8cb95b30c` 原文索引 200 与同源 bbox 页图预览、抽屉键盘焦点循环及 Escape 返回、内存投影负例拒绝及源码冻结不变，12 张正式截图落盘，本地 loopback 模拟请求 19 次、SQLite 准入 19 次，外部真实 provider 调用为 0。验收过程同时记录两项冻结生产细节供后续阶段参考：离线 HTML 导出 `<meta http-equiv="Content-Security-Policy">` 含 `frame-ancestors 'none'` 在 `file://` 下触发浏览器忽略提示；`report.json` 中 `role_status=="pending"` 的补证项省略 `issue_roles` 键而 `/issue-evidences` 返回 `issue_roles: []`，前端 `loadAnnualIssueSupplementEvidenceIndex` 按 `sameJsonValue` 严格比较时需两端键一致。真实模型请求累计仍为 **0/80，剩余 80**。
+
+<a id="omp-collaboration-20261011"></a>
+
+## 2026-10-11 OMP 多模型协作体系与本地技能同步
+
+在 `test/omp-multimodel-20261011` 分支按用户优先指令暂停 R5，先验收开发协作体系。应用模型凭据未读取，真实年报未外发；没有在主工作区暂存、提交或恢复用户已有文件。用户确认旧计划书 Word 的删除是有意改动，原文件保持删除。
+
+### 隔离初始化故障与修正
+
+最初两个隔离实现任务 `ImplementR5Ui`、`PrepareR5Smoke` 都在初始化阶段因 Word 补丁 `git apply` 失败退出，未捕获任务增量；不能把该失败当作实现模型的代码质量结果。原始错误归档在[初始化失败记录](../artifacts/evaluations/omp-collaboration-20261011/initial-isolation-failures.json)。
+
+实际 `git check-attr` 显示 `.docx` 使用 `diff=astextplain`：普通 `git diff --binary` 仍产生 30688 字节的转换后文本 hunk，`--no-textconv --binary` 才产生 69564 字节的原始二进制补丁。[OMP 18.8.9 的 rcopy 实现](https://github.com/can1357/oh-my-pi/blob/v18.8.9/crates/pi-iso/src/rcopy.rs#L140-L155) 在 dirty-state seeding 中未加 `--no-textconv`；失败任务没有 backend telemetry，不断言其实际候选选择。项目新增 `.gitattributes` 将 `*.docx` 标为 binary 后，原生隔离生产者已实际执行并回收补丁，未修改全局 Git 配置或恢复 Word。前后依据见[补丁表示检查](../artifacts/evaluations/omp-collaboration-20261011/deletion-patch-representation.json)及[文件属性修正验证](../artifacts/evaluations/omp-collaboration-20261011/binary-attribute-verification.json)。
+
+### 原生角色与交付链路
+
+五个自定义角色均已实际运行；身份独立核对原生 JSONL `model_change`，不是从 `@default` 或角色意向推定，五项 `resolvedModelIsFallback` 均为 false。实际映射为 implementer `xai-oauth/grok-4.6`、writer/reviewer `openai-codex/gpt-6.1-sol`、editor `google-antigravity/gemini-3.8-flash`、scout `openai-codex/gpt-6-luna`；记录见[实际模型身份](../artifacts/evaluations/omp-collaboration-20261011/runtime-models.json)。只读角色未获 shell/编辑工具，所有角色禁止再委派；最多两个 implementer 是主控派发约束，不声称 OMP 总并发设置会自动强制这一角色上限。
+
+Grok 在隔离副本生成临时 CLI 探针及三份生产者角色正文修正；GPT writer 在另一隔离副本写完整初稿，主控检查并回收单文件增量、保存全文后，Gemini editor 读取完整快照并交付独立润色稿。GPT reviewer 独立对照完整稿件、实际补丁和隔离文件，未发现阻止回收的问题；三个原生补丁均保持 `apply=false`，未提前写入父工作区，也未混入用户原有改动。主控对每份补丁顺序执行 `git apply --check` 与 `git apply`，均 exit 0。见[writer 回收](../artifacts/evaluations/omp-collaboration-20261011/writer-integration.json)、[实现与润色回收](../artifacts/evaluations/omp-collaboration-20261011/producer-integration.json)及[独立审查](../artifacts/evaluations/omp-collaboration-20261011/independent-producer-review.json)；完整初稿及三个原生补丁留在同一正式证据目录。
+
+整合后实际运行 `python artifacts/tmp/omp-collaboration-20261011/call_budget_probe.py --limit <L> --used <U>`，七个场景 `[0,0]`、`[3,0]`、`[3,2]`、`[3,3]`、`[-1,0]`、`[3,-1]`、`[3,4]` 全部符合预定 JSON、stderr 和退出码，见[CLI 原始结果](../artifacts/evaluations/omp-collaboration-20261011/cli-smoke.json)。该原创探针只证明编辑、隔离、审查、增量回收和执行边界，不接入 FINTRACE，不是业务或在线模型验收。
+
+### 文档与跨宿主边界
+
+协作操作已同步到 `AGENTS.md`、`docs/development.md` 及四份相应生产/审阅角色正文：默认隔离与显式降级分开、增量相对任务起点、全文交接、终稿主审、前版语义/逻辑偏移与新增或沿用的无依据内容检查。主工作区降级没有用于本轮隔离验收。临时稿被 Git 忽略时通过完整、版本明确的只读快照交接，不假定它会随隔离起点复制。
+
+本机 Codex 与 Claude 的 `herdr/SKILL.md` 已同步项目合同适配节，保留各自原有 Herdr 显式触发、`HERDR_ENV`、拓扑/cwd 限制与 CLI；两份文件字节相同，SHA256 为 `646348ac6b3284d92b964a3f62cd158ea567067f51ab4ce6f879c8c410a5a912`。没有修改 PPT、数学建模或 Codex 内置系统审查技能，没有为不存在的 Gemini/OMP 全局协作技能新建替代文件；这些本机技能不属于仓库产物。独立技能审阅未发现阻断问题，但未启动 Claude/Codex/Herdr 进行其宿主运行验收。
+
+本轮核对 114 个既有 R4 冻结生产文件（81 运行源码、10 业务配置、23 前端文件）全部与原清单 SHA 相同；六份变更协作文档/角色文件无失效本地链接或行尾空白，见[文档与来源保护检查](../artifacts/evaluations/omp-collaboration-20261011/document-source-qa.json)。未重跑应用后端套件或前端构建，不把历史通过数计入本轮；没有应用行为改动，也没有新的 R5 或真实年报性能通过结论。
+
+新版 reviewer 另以 Gemini 的真实润色终稿为主审对象，对照完整初稿、前版链路与可信来源，实际抓到一项初稿沿用的范围错误：“本轮仅新增探针、正式文档均未改动”不符合已授权角色合同调整及主控文档维护事实；Gemini 没有引入该错误，不能因初终稿一致而放行。独立记录见[第一次终稿事实审查](../artifacts/evaluations/omp-collaboration-20261011/initial-final-text-review.json)。同时，三份原创受控注错（暂停→在线验收完成、初始化失败→Grok 代码质量因果归因、初终稿相同但没有依据的 27% 费用下降及报告引用）均被准确拒绝；它们不是 Gemini 真实输出，也不构成财务数据或模型质量统计。两份跨宿主技能新增节的独立审阅及未运行边界见[技能同步审查](../artifacts/evaluations/omp-collaboration-20261011/skills-sync-review.json)。
+
+该真实范围问题随后完成修正闭环：替代隔离 writer `CorrectProbeWriter` 基于完整初稿及两份可信记录快照，修复范围事实并保留其余限定；替代隔离 editor `PolishCorrectedProbe` 完整读取纠正后 13 行，只做等义润色。两者实际模型仍为 GPT 与 Gemini，非 fallback，见[纠正链路模型身份](../artifacts/evaluations/omp-collaboration-20261011/correction-runtime-models.json)。同一独立 reviewer 对照实际 Gemini 隔离终稿、修正后 writer 全文、原版本链和可信依据，确认原 P2 已修复、没有新的语义/逻辑/状态偏移或无依据内容，并核对仅新增指定文件，见[修正终稿复核](../artifacts/evaluations/omp-collaboration-20261011/corrected-final-text-review.json)。主控随后顺序检查并回收两份原生补丁，四次操作均 exit 0，见[writer 修正回收](../artifacts/evaluations/omp-collaboration-20261011/writer-correction-integration.json)及[editor 修正回收](../artifacts/evaluations/omp-collaboration-20261011/editor-correction-integration.json)。回收后真实终稿与审阅快照逐行文字一致；父工作区为 13 个 CRLF、归档快照为 LF，只有 Windows 行尾差异，没有为字节相等重写文件。完整初稿、首次 Gemini 终稿、纠正初稿、纠正 Gemini 终稿与原始发现分别保留，不把修复后的通过回写成原稿从未出错。
+
+<a id="omp-model-routing-20261011-061628"></a>
+
+## 2026-10-11 开发角色模型调整复核
+
+用户再次调整角色模型后，在 `test/omp-multimodel-20261011` 只读核对有效设置：writer、reviewer 的 `task.agentModelOverrides` 从 `openai-codex/gpt-6.1-sol` 改为 `openai-codex/gpt-6-luna`；implementer、editor、scout 仍分别为 Grok、Gemini、Luna，未重新派发这三个未变角色。项目角色别名与职责正文未改，仍由代理覆盖优先选择实际模型。非凭据配置摘要见[本轮有效配置](../artifacts/evaluations/omp-model-routing-20261011T061628487Z/effective-model-config.json)；上节模型映射是上一轮历史记录，不回写成新配置。
+
+新建隔离 writer `CheckUpdatedWriter` 与只读 reviewer `CheckUpdatedReviewer` 实际执行；原生 JSONL `model_change` 分别为 `c7842b64`、`3fcdee21`，两者均为 `openai-codex/gpt-6-luna`，`resolvedModelIsFallback=false`，`thinking_level_change` 均为 high，见[本轮运行身份](../artifacts/evaluations/omp-model-routing-20261011T061628487Z/runtime-models.json)。writer 只读指定材料，在返回值交付完整三段短稿并区分配置目标与待核实运行身份，没有文件增量；全文见[writer 实际结果](../artifacts/evaluations/omp-model-routing-20261011T061628487Z/writer-role-result.json)。没有重新修改模型配置、角色提示词或本机技能。
+
+Luna reviewer 重新主审既有真实 Gemini 纠正终稿并对照完整前版，正确拒绝三类原创受控错误；首次同时提出三项事实/证据疑虑，其中误称原始稿与首次 Gemini 稿已引用两个 local 快照。主控提供实际可读快照、版本依据行和完整增量后，reviewer 实际重读来源，撤回规范性要求被误判为已审计事实及引用定位缺口，更正旧稿引用说法；保护范围项修订为不覆盖全盘用户内容/恶意写入审计的验证边界。首次意见及更正分别保留，见[初审原始结果](../artifacts/evaluations/omp-model-routing-20261011T061628487Z/reviewer-initial-result.json)和[证据澄清](../artifacts/evaluations/omp-model-routing-20261011T061628487Z/reviewer-evidence-clarification.json)，不把审阅模型自述直接当作事实。
+
+本轮通过范围是两项变更角色的新模型解析、真实调用及受限职责探针，见[本轮验收结果](../artifacts/evaluations/omp-model-routing-20261011T061628487Z/acceptance-result.json)。未改应用文件、未重跑业务测试/构建、未实施 R5、未调用真实年报供应方，也没有成本或模型质量优劣的对照结论；受控注错不是 Gemini 的真实错误统计。
+
+<a id="annual-analysis-recovery-r5"></a>
+
+## 2026-10-11 R5 普通入口、重点概览与交互闭环
+
+在 `test/omp-multimodel-20261011` 恢复软件任务，R5 当前增量按指定软件范围接受，不代表整个恢复 goal 或 R6 完成。[本轮证据索引](../artifacts/evaluations/annual-recovery-r5-20261011T072234788Z/acceptance-summary.json)区分实际通过场景、首次失败及未完成关卡。主工作区没有自动暂存、提交、重置或恢复用户文件；旧计划书 Word 保持用户有意删除，比赛材料和冻结便携包未重建。
+
+### 原生协作与实际增量
+
+普通入口/状态与重点概览按明确文件所有权分别由隔离 implementer 产出，独立 reviewer 只读审查后，主控顺序检查并回收纠正后的原生补丁，再处理浏览器发现的小范围整合问题。初版与纠正版均留证，未将初版直接当作已验收实现。实际启动事件显示实现端为 `xai-oauth/grok-4.6`、reviewer 为 `openai-codex/gpt-6-luna`；compact 卡片实现端也实测为 Grok、medium thinking、非 fallback 启动。见[原生运行身份](../artifacts/evaluations/annual-recovery-r5-20261011T072234788Z/runtime-model-events.json)、[compact 启动身份](../artifacts/evaluations/annual-recovery-r5-20261011T072234788Z/compact-runtime-model-events.json)、[原生增量回收](../artifacts/evaluations/annual-recovery-r5-20261011T072234788Z/native-delta-recovery.json)及[最终小范围静态复核](../artifacts/evaluations/annual-recovery-r5-20261011T072234788Z/static-review-final-integration.json)。启动身份不是整场 fallback、成本或模型质量优劣审计；本轮没有重新执行 writer→Gemini editor 链路，其通过范围见前节。
+
+改动限定六个前端文件：年度分析页、旧预检页、`api/annualReports.ts`、`styles/app.css`，以及新增的 `components/AnnualReportOverview.tsx` 与其专属样式。普通入口以 AI 复选框和高级 M3 映射旧四 mode；恢复操作沿用原来源/模式。概览仅选最多三项，不复活可信处理账已排除成员；完整发现、成员账、补证和导出不被截断。默认保留完整观察及首个合法原文入口，关注理由/动作和更多补证使用原生折叠。后端、业务提示词与预算合同未改。
+
+### 实际浏览器与消费者验证
+
+Vite 加载当前前端，API 使用本轮当前后端的隔离副本。真实海天材料仅作本地确定性分析及旧失败归档只读；AI 请求只允许本轮生成的三份原创模拟 PDF SHA，使用 loopback provider 和 dummy 凭据，没有读取真实模型凭据或发送真实年报。隔离根未复制原资料登记，截图“来源性质未确认”保留原样，不将它提升成登记已核对。
+
+| 场景 | 实际结果与证据 |
+| --- | --- |
+| 普通入口与本机样例 | 模型未配置时 AI 提交被能力检查阻止，未增加 provider 请求；关闭 AI 后海天 2024 基础任务完成，`model_called=false`，三项财务对照及原文入口可读。run 为 `annual-analysis-d8962ff5-7f03-44e1-a2d4-a30c631d83b4`。见[本地 API 结果](../artifacts/evaluations/annual-recovery-r5-20261011T072234788Z/sample-local-api-result.json)。 |
+| 上传与四 mode | 实际上传、本地独立 M3、AI 独立及 M3+AI 均由 UI 创建，后端分别记录既有四 mode；独立 M3 未调用模型。构造材料没有财务事实，任务诚实保留 `completed_with_issues`，不把它写成真实财务核验通过。 |
+| 部分结果与补跑 | 原创模拟归并请求阻塞后保存部分报告；UI 补跑子任务复用五个成功扫描批次，三次新请求均非 discovery，父报告 SHA 不变。即使新建表单改成其他选项，子任务仍为原 `model_investigation`。见[续跑原始结果](../artifacts/evaluations/annual-recovery-r5-20261011T072234788Z/resume-runtime-result.json)。 |
+| 全量重跑与取消 | 重跑创建新运行并实际重新请求五个扫描批次；UI 取消后保存结果仍可读。该例最终 job 为 `completed_with_issues`，事项 reason 为 `cancelled`、评审为 `abstained/cancelled`，不是最终 job 状态 `cancelled`。见[重跑/取消原始结果](../artifacts/evaluations/annual-recovery-r5-20261011T072234788Z/full-rerun-cancel-result.json)。 |
+| 合法 pending 补证 | 新集成任务的角色标注返回受控 401；四条补证在原报告省略 issue_roles、真实索引规范为空数组，实际页图打开。修复后无需修改正例响应；compact 后又在 390px 用键盘展开并打开真实页图。见[最终 pending 原文](../artifacts/evaluations/annual-recovery-r5-20261011T072234788Z/narrow-pending-supplement-final.json)。 |
+| 严格消费者边界 | 实际加载 Vite 提供的 TS 消费者；九个受控负例分别改 pending 非空角色、accepted 空/错角色、源 SHA、文档、bbox、预览路由、报告 SHA 或项目数量，全部被拒绝。正例四条 pending 和四条 accepted 均通过。负例仅在专属脚本替换 fetch 响应并恢复；不是放宽来源或模拟正例 PNG。见[消费者结果](../artifacts/evaluations/annual-recovery-r5-20261011T072234788Z/supplement-consumer-boundaries.json)。 |
+| 排除、合法空与评审失败 | 单条发现被明确排除后首屏零卡片，完整处理账仍留一条，不称无风险；合法空发现归档仍可读；另一次受控评审 401 明确“评审未完成”且保留发现。三类情况分开演练，不声称覆盖所有混合成员规模。 |
+| 旧失败记录与导航 | 历史键盘选择及直接 job URL 仍能读取旧海天失败报告，原 job 保持 failed，provider 计数不增加；刷新、前进/后退保持所选归档。旧基础预检实际创建并显示结果，未调用模型。 |
+| 后部发现与完整内容 | 原创 R4 只读归档有八条发现、五个事项、八条成员、十八条补证；首屏第一项为独有第十六页履约保函披露，主引用页图一击打开。完整定位展开并聚焦对应 finding；搜索履约保函只命中对应项，清空后恢复八条。context、possible_explanation、unknown 的补证页图均在 compact 后实际打开，未升级为核验。 |
+| 桌面与窄屏 | 1440×900 的三张 AI 卡片约 195px 高，核心指标区及表头进入自然聚焦首屏；1366×768 的同一模拟归档可见核心区明确缺口，并非凭空财务表。390×844 页面宽为 390px、首个原文入口可见、原生折叠及入口焦点可用。见[桌面 settled](../artifacts/evaluations/annual-recovery-r5-20261011T072234788Z/compact-ai-first-screen-1440-settled.json)、[窄屏最终选择](../artifacts/evaluations/annual-recovery-r5-20261011T072234788Z/narrow-report-fresh-selection-final.json)。 |
+| 轮询与焦点 | 活动任务中 Enter 可关闭/重开入口，后续真实轮询至最终报告仍保留用户打开的入口及 SUMMARY 焦点；历史明确选择则收起历史并聚焦新报告。见[最终活动轮询](../artifacts/evaluations/annual-recovery-r5-20261011T072234788Z/final-active-poll-terminal-surface.json)。 |
+| 下载与离线 HTML | 页面实际下载 JSON/Markdown/HTML；三文件来源及报告身份一致，磁盘字节与对应严格导出 API 相同。下载的 HTML 实际以 file URL 打开，无脚本、无横向溢出；合成 AI 归档 JSON 仍导出完整八发现/五事项/八成员/十八补证，不因概览三项截断。见[三格式文件证明](../artifacts/evaluations/annual-recovery-r5-20261011T072234788Z/ui-export-downloads-complete.json)、[离线 HTML](../artifacts/evaluations/annual-recovery-r5-20261011T072234788Z/offline-html-export-1366.json)、[完整导出比较](../artifacts/evaluations/annual-recovery-r5-20261011T072234788Z/overview-export-completeness.json)。 |
+
+浏览器首次发现并修正：展开 summary 被 CSS 隐藏而无法键盘关闭；旧归档异步加载打断新任务输入；历史选择后导航未收起且焦点滚到旧布局；轮询重复抢焦点。另在 390px 实测标题继承桌面 `flex-basis:12rem` 后变成 192px 高，导致卡片大空白，现仅在既有窄屏媒体查询改为 `flex:0 1 auto`，实际标题约 22px、卡片约 254px。初始失败和未稳定滚动截图保留为诊断，只使用证据索引指定的 final/settled 案例作通过依据。
+
+### 构建、计账与收束
+
+最终窄屏修正后实际执行 `frontend` 的 `npm run build`，`tsc --noEmit && vite build` exit 0，Vite 8.3.0 编译 29 个模块；仍有 minified JS 大于 500kB 提示，本次没有为消除提示另做拆包。见[最后构建原始输出](../artifacts/evaluations/annual-recovery-r5-20261011T072234788Z/frontend-build-post-mobile-fix.json)。没有重跑后端套件，没有新增自动前端测试框架；本轮使用真实浏览器和 TS 消费者场景，不将旧测试数算作当前通过。
+
+九个任务 gate 的实际账本准入与 loopback HTTP 均为 39 次，生成账本上限 80、剩余 41；三份原创 SHA 均在 allowlist，真实海天 SHA 不在其中，所有记录 peer 为 127.0.0.1、授权为 dummy。应用真实供应方调用为零。这一生成账本不是既往真实在线 goal 额度，也不是 OMP 开发代理费用或额度。见[模型边界](../artifacts/evaluations/annual-recovery-r5-20261011T072234788Z/model-boundary-final.json)、[实际计账](../artifacts/evaluations/annual-recovery-r5-20261011T072234788Z/ledger-accounting-final.json)及同目录只读账本副本。
+
+81 个后端源码 SHA 与本轮起点清单全部一致；真实原 PDF、旧失败 report.json/job.json 与开工复制的隔离文件逐字节 SHA 一致。该检查只覆盖列明文件，不是整盘用户资料审计，见[最终源码与保护范围](../artifacts/evaluations/annual-recovery-r5-20261011T072234788Z/final-source-and-protection.json)。浏览器 tab 已关闭，控制服务关闭其拥有的 API/Vite/provider，supervisor exit 0；Windows 下被 terminate 的两个子进程返回 1，未冒称其正常 CLI exit 0。见[所属服务停止](../artifacts/evaluations/annual-recovery-r5-20261011T072234788Z/owned-runtime-stop.json)及[supervisor 退出](../artifacts/evaluations/annual-recovery-r5-20261011T072234788Z/runtime-supervisor-exit.json)。临时目录按项目约定保留。
+
+本轮维护 README 的当前能力/操作、architecture 的前端与角色缺省契约、annual-discovery 的页面顺序、恢复任务书的阶段状态及产品路线的当前状态链接；roadmap、data-policy、开发角色配置及比赛提交材料的契约没有变化，未复制新的验收流水。仍未完成：真人非金融用户 30 秒理解试验、R6 两份指定年报的新版真实服务 Web/API/性能及跨公司语义复核、非原开发机演练和独立比赛交付。没有新凭据或真实数据外发授权，不能把本轮 mock、旧归档或源码审阅作为这些关卡通过。
+
+用户随后明确授权本地 commit。提交范围为本轮 OMP 协作规则/角色配置、Word 二进制属性修正及 R5 前端与相关文档；运行证据和输入仍按 `.gitignore` 保留本地，不强制纳入 Git。用户原有计划书的删除/新增及 `tem/` 财报资料不纳入该提交，也不恢复或删除。该授权不包含远端推送或新的真实模型调用。

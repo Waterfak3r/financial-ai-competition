@@ -34,6 +34,7 @@ import { NARRATIVE_EVIDENCE_INTERPRETATION_LABEL } from "../types/narrativeEvide
 import type { NarrativeEvidence, NarrativeEvidenceResponse } from "../types/narrativeEvidence";
 import type { AnnualAnalysisBudget, AnnualAnalysisJob, AnnualAnalysisJobMode, AnnualAnalysisJobRequest } from "../types/annualAnalysisJob";
 import type { TextPdfUploadReceipt } from "../types/precheck";
+import { AnnualReportOverview } from "../components/AnnualReportOverview";
 
 const SAMPLE_RUN_ID = "annual-analysis-21d8da07-097b-4cdf-97ce-6e109c8cc1b8";
 const RUN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
@@ -108,6 +109,7 @@ interface SourceLocationResult {
 export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [runId, setRunId] = useState(SAMPLE_RUN_ID);
   const [sourceChoice, setSourceChoice] = useState<AnnualSourceChoice>("sample");
+  const [startFormOpen, setStartFormOpen] = useState(true);
   const [companyId, setCompanyId] = useState("");
   const [reportYear, setReportYear] = useState("");
   const [pdfFile, setPdfFile] = useState<File | null>(null);
@@ -155,10 +157,18 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
   const jobRefreshLock = useRef(false);
   const jobReadSequence = useRef(0);
   const reportRequest = useRef(0);
+  const reportFocusRun = useRef<string | null>(null);
   const lastLoadedJobRevision = useRef(new Map<string, string>());
   const pendingReportRead = useRef<{ job: AnnualAnalysisJob; generation: number } | null>(null);
   const taskGeneration = useRef(0);
   const previewRequest = useRef(0);
+  const entryIdle = response === null && job === null && jobAction === null;
+
+  useEffect(() => {
+    const entry = document.querySelector(".annual-start-another");
+    if (!entry?.contains(document.activeElement)) setStartFormOpen(entryIdle);
+  }, [entryIdle]);
+
 
   useEffect(() => {
     const requestOffset = historyOffset;
@@ -378,18 +388,34 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
 
   useEffect(() => {
     if (response === null) {
+      reportFocusRun.current = null;
       return;
     }
-    const heading = document.getElementById("annual-report-heading");
-    if (heading === null) {
+    const reportRunId = response.report.run_id;
+    if (reportFocusRun.current === reportRunId) return;
+    const navigationTarget = document.activeElement?.closest<HTMLDetailsElement>(".annual-start-another, .annual-history-fold");
+    if (navigationTarget?.open) {
+      reportFocusRun.current = reportRunId;
       return;
     }
-    heading.focus({ preventScroll: true });
-    heading.scrollIntoView({
-      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
-      block: "start",
+    if (startFormOpen) return;
+    const focusFrame = window.requestAnimationFrame(() => {
+      const currentNavigation = document.activeElement?.closest<HTMLDetailsElement>(".annual-start-another, .annual-history-fold");
+      if (currentNavigation?.open) {
+        reportFocusRun.current = reportRunId;
+        return;
+      }
+      const heading = document.getElementById("annual-report-heading");
+      if (heading === null) return;
+      reportFocusRun.current = reportRunId;
+      heading.focus({ preventScroll: true });
+      heading.scrollIntoView({
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+        block: "start",
+      });
     });
-  }, [response]);
+    return () => window.cancelAnimationFrame(focusFrame);
+  }, [response, startFormOpen]);
 
   useEffect(() => {
     if (response === null) {
@@ -500,20 +526,21 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
       return;
     }
     if (modeUsesModel(requestedMode) && modelDiscoverySupported !== true) {
-      setJobError("AI 全文分析不可用：当前后端尚未加载全文分析版本，请重启后端。标准分析和本地试行筛查仍可使用。");
+      setJobError("云端 AI 不可用：当前后端尚未加载全文分析版本，请重启后端。可取消“启用云端 AI”后继续本地基础核验。");
       return;
     }
     if (modeUsesModel(requestedMode) && modelCapability !== "ready") {
       setJobError(
         modelCapability === "not_configured"
-          ? "AI 分析不可用：后端尚未配置云端模型。标准分析仍可单独运行。"
+          ? "云端 AI 不可用：尚未配置云端模型。可取消“启用云端 AI”后继续本地基础核验，或打开设置。"
           : modelCapability === "dependency_unavailable"
-            ? "AI 分析不可用：后端缺少所需依赖。标准分析仍可单独运行。"
-            : "暂时无法确认 AI 服务状态。确定性分析仍可使用。",
+            ? "云端 AI 不可用：后端缺少所需依赖。可取消“启用云端 AI”后继续本地基础核验。"
+            : "暂时无法确认云端 AI 服务状态。可取消“启用云端 AI”后继续本地基础核验。",
       );
       return;
     }
     jobSubmitLock.current = true;
+    setStartFormOpen(false);
     const previousJob = job;
     const generation = taskGeneration.current + 1;
     taskGeneration.current = generation;
@@ -654,6 +681,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
       jobSubmitLock.current || jobRefreshLock.current || requestLock.current
     ) return;
     jobSubmitLock.current = true;
+    setStartFormOpen(false);
     const parent = job;
     const generation = taskGeneration.current + 1;
     taskGeneration.current = generation;
@@ -751,7 +779,11 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
   }
 
   async function navigateToSelection(selection: UrlSelection, updateUrl: boolean) {
-    if (updateUrl) writeUrlSelection(selection, true);
+    if (updateUrl) {
+      writeUrlSelection(selection, true);
+      const historyDetails = document.querySelector<HTMLDetailsElement>(".annual-history-fold");
+      if (historyDetails !== null) historyDetails.open = false;
+    }
     const generation = taskGeneration.current + 1;
     taskGeneration.current = generation;
     pendingReportRead.current = null;
@@ -1002,6 +1034,10 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
     const currentlyFocused = preview?.mode === "focus" || preview === null;
     void loadEvidencePreview(previewTarget, !currentlyFocused);
   }
+  const enableCloudAi = modeUsesModel(mode);
+  const enableM3 = mode === "m3_screening" || mode === "integrated_analysis";
+  const cloudAiReady = modelCapability === "ready" && modelDiscoverySupported === true;
+
 
   return (
     <>
@@ -1018,9 +1054,9 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
         </p>
       ) : null}
 
-      <details className="annual-start-another" open={response === null}>
+      <details className="annual-start-another" open={startFormOpen} onToggle={(event) => setStartFormOpen(event.currentTarget.open)}>
         <summary>{response === null ? "选择材料并分析" : "分析另一份年报"}</summary>
-        <section id="annual-job-create" className="panel annual-job-create" aria-labelledby="annual-job-create-title">
+        <section id="annual-job-create" className="panel annual-job-create" aria-labelledby="annual-job-create-title" tabIndex={-1}>
           <div className="annual-section-heading">
             <div>
               <p className="eyebrow">年度分析 · 当前仅支持年报</p>
@@ -1125,67 +1161,37 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
               </div>
             )}
 
-          <fieldset className="annual-job-mode">
-            <legend>分析方式</legend>
-            <p className="annual-ai-consent-note">
-              AI 全文发现与评审会把所选 PDF 的全部可提取文字分批发送给已配置服务；年报越长，等待时间和服务费用可能越高。图像内容不做 OCR。默认使用本地标准分析。
+          <div className="annual-job-ai-consent">
+            <p className="annual-job-default-mode">
+              默认本地基础核验：在本机核对年报数据、计算和引用，不外发文字、不调用模型。未启用云端 AI 时，结果不会声称已发现公司特有问题。
             </p>
-            <div className="annual-job-mode-options">
-              <label className={`annual-job-mode-option${mode === "deterministic" ? " selected" : ""}`}>
-                <input
-                  type="radio"
-                  name="annual-analysis-mode"
-                  value="deterministic"
-                  checked={mode === "deterministic"}
-                  onChange={() => setMode("deterministic")}
-                />
-                <span><strong>标准分析</strong><small>本地统计与核验，不调用模型。</small></span>
-              </label>
-              <label className={`annual-job-mode-option annual-job-mode-experimental${mode === "m3_screening" ? " selected" : ""}`}>
-                <input
-                  type="radio"
-                  name="annual-analysis-mode"
-                  value="m3_screening"
-                  checked={mode === "m3_screening"}
-                  onChange={() => setMode("m3_screening")}
-                />
-                <span><strong>标准分析 + 四规则试行</strong><small>不调用模型；规则阈值未校准，分数不是风险概率。</small></span>
-              </label>
-              <label className={`annual-job-mode-option annual-job-mode-ai${mode === "model_investigation" ? " selected" : ""}${modelCapability !== "ready" || modelDiscoverySupported !== true ? " is-unavailable" : ""}`}>
-                <input
-                  type="radio"
-                  name="annual-analysis-mode"
-                  value="model_investigation"
-                  checked={mode === "model_investigation"}
-                  disabled={modelCapability !== "ready" || modelDiscoverySupported !== true}
-                  onChange={() => setMode("model_investigation")}
-                />
-                <span><strong>AI 全文发现与评审</strong><small>扫描所选 PDF 全部可提取文字并分批调用配置服务；AI 观点未经独立语义核验。</small></span>
-              </label>
-              <label className={`annual-job-mode-option annual-job-mode-ai${mode === "integrated_analysis" ? " selected" : ""}${modelCapability !== "ready" || modelDiscoverySupported !== true ? " is-unavailable" : ""}`}>
-                <input
-                  type="radio"
-                  name="annual-analysis-mode"
-                  value="integrated_analysis"
-                  checked={mode === "integrated_analysis"}
-                  disabled={modelCapability !== "ready" || modelDiscoverySupported !== true}
-                  onChange={() => setMode("integrated_analysis")}
-                />
-                <span><strong>四规则试行 + AI 全文发现与评审</strong><small>M3 与全文模型发现分别归档；模型发现不参与基础事实核验。</small></span>
-              </label>
-            </div>
-            <p className={`annual-job-capability${modelCapability === "ready" ? " is-ready" : ""}`} role="status">
+            <label className={`annual-cloud-ai-option${enableCloudAi ? " selected" : ""}`}>
+              <input
+                type="checkbox"
+                name="annual-enable-cloud-ai"
+                checked={enableCloudAi}
+                onChange={(event) => setMode(analysisModeFromOptions(event.target.checked, enableM3))}
+              />
+              <span>
+                <strong>启用云端 AI</strong>
+                <small>会把所选年报的全部可提取文字分批发送给已配置服务；年报越长，等待时间和服务费用可能越高。图像内容不做 OCR。AI 观点未经独立语义核验。</small>
+              </span>
+            </label>
+            <p
+              className={`annual-job-capability${cloudAiReady ? " is-ready" : ""}`}
+              role={enableCloudAi && !cloudAiReady && !modelCapabilityLoading ? "alert" : "status"}
+            >
               {modelCapabilityLoading
-                ? "正在检查 AI 服务状态…"
+                ? "正在检查云端 AI 服务状态…"
                 : modelDiscoverySupported === false
-                  ? "当前后端尚未加载全文分析版本，请重启后端；本地标准分析和四规则试行仍可使用。"
-                : modelCapability === "ready" && modelDiscoverySupported === true
-                  ? "全文分析版本已加载。选择 AI 模式后会把全部可提取文字分批发送给已配置服务。"
+                  ? "当前后端尚未加载全文分析版本，请重启后端。本地基础核验仍可使用。"
+                : cloudAiReady
+                  ? "云端 AI 已就绪。启用后会把全部可提取文字分批发送给已配置服务。"
                   : modelCapability === "not_configured"
-                    ? "当前不可用：后端尚未配置云端模型。标准分析和试行筛查仍可使用。"
+                    ? "云端模型尚未配置。可继续本地基础核验，或打开设置后再启用云端 AI。"
                     : modelCapability === "dependency_unavailable"
-                      ? "当前不可用：后端缺少 AI 分析所需依赖。标准分析和试行筛查仍可使用。"
-                    : modelCapabilityError ?? "正在确认 AI 服务与全文分析版本；确认前不能启动 AI 全文分析。"}
+                      ? "后端缺少 AI 分析所需依赖。本地基础核验仍可使用。"
+                      : modelCapabilityError ?? "正在确认云端 AI 服务；未启用前可继续本地基础核验。"}
               {modelCapabilityError !== null ? (
                 <button type="button" className="text-button annual-capability-retry" onClick={() => void refreshModelCapability()} disabled={modelCapabilityLoading}>
                   {modelCapabilityLoading ? "检测中…" : "重新检测"}
@@ -1197,7 +1203,32 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
                 </button>
               ) : null}
             </p>
-          </fieldset>
+            <details className="annual-job-advanced-mode">
+              <summary>高级选项</summary>
+              <label className={`annual-job-mode-option annual-job-mode-experimental${enableM3 ? " selected" : ""}`}>
+                <input
+                  type="checkbox"
+                  name="annual-enable-m3"
+                  checked={enableM3}
+                  onChange={(event) => setMode(analysisModeFromOptions(enableCloudAi, event.target.checked))}
+                />
+                <span>
+                  <strong>附加四规则试行筛查</strong>
+                  <small>本地规则，不调用模型；阈值未校准，分数不是风险概率。</small>
+                </span>
+              </label>
+              <p className="help">
+                {enableCloudAi
+                  ? enableM3
+                    ? "将同时运行本地四规则试行与云端 AI；两层分别归档，互不替代核验。"
+                    : "将运行云端 AI 调查与评审，不附加四规则试行。"
+                  : enableM3
+                    ? "将运行本地基础核验和四规则试行，不调用模型。"
+                    : "将只运行本地基础核验，不调用模型。"}
+                历史任务、补跑失败部分和重新全量分析仍使用当时保存的模式。
+              </p>
+            </details>
+          </div>
 
             <div className="annual-job-actions">
               <button type="submit" className="primary" disabled={jobAction !== null || loading}>
@@ -1221,6 +1252,11 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
         </section>
       </details>
 
+      <details className="annual-history-fold">
+        <summary>
+          已有分析
+          {history === null || history.total === 0 ? "" : ` · 共 ${history.total} 条`}
+        </summary>
       <section id="annual-history-list" className="panel annual-history-list" aria-labelledby="annual-history-heading" tabIndex={-1}>
         <div className="annual-section-heading">
           <div>
@@ -1295,6 +1331,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
           </nav>
         ) : null}
       </section>
+      </details>
 
       <details className="annual-archive-lookup">
         <summary>高级：回看已有分析报告</summary>
@@ -1336,6 +1373,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
           onRefresh={onRefreshJob}
           onCancel={onCancelJob}
           onResume={onResumeJob}
+          reviewIncomplete={isJobReviewIncomplete(job, response)}
           canResume={canResumeJob(job, response)}
           onOpenParent={() => {
             const parentRunId = job.recovery_progress?.parent_run_id ?? job.recovery?.parent_run_id;
@@ -1922,6 +1960,7 @@ function JobStatusPanel({
   onRefresh,
   onCancel,
   onResume,
+  reviewIncomplete,
   canResume,
   onOpenParent,
   onDismissError,
@@ -1933,6 +1972,7 @@ function JobStatusPanel({
   onRefresh: () => void;
   onCancel: () => void;
   onResume: () => void;
+  reviewIncomplete: boolean;
   canResume: boolean;
   onOpenParent: () => void;
   onDismissError: () => void;
@@ -1951,6 +1991,16 @@ function JobStatusPanel({
         : "原任务失败，已保存报告可只读查看";
   const historicalErrorPrefix = job.status === "interrupted" ? "原任务中断记录："
     : job.status === "cancelled" ? "原任务取消记录：" : "原任务失败记录：";
+  const userFacingStates = jobUserFacingStates(job, canResume, reviewIncomplete);
+  const jobUsedCloudAi = modeUsesModel(job.request.mode);
+  const jobUsedM3 = job.request.mode === "m3_screening" || job.request.mode === "integrated_analysis";
+  const jobModeNote = jobUsedCloudAi && jobUsedM3
+    ? "本次同时启用了云端 AI 与本地四规则试行；两层分别归档，互不替代核验。实际覆盖、调用和缺口以下方进度与已保存报告为准。模型观点未经独立语义核验；规则分数不是风险概率，也不等同模型结论。"
+    : jobUsedCloudAi
+      ? "本次启用了云端 AI；实际覆盖、调用和缺口以下方进度与已保存报告为准。模型观点未经独立语义核验。"
+      : jobUsedM3
+        ? "本次为本地基础核验并附加四规则试行；规则分数不是风险概率。"
+        : "本次为本地基础核验，未调用模型。";
   const statusClass = "annual-job-status annual-job-status-" + job.status;
   const recoveryProgress = job.recovery_progress;
   const parentRunId = recoveryProgress?.parent_run_id ?? job.recovery?.parent_run_id ?? null;
@@ -1961,38 +2011,42 @@ function JobStatusPanel({
           <p className="eyebrow">年报处理进度</p>
           <h2 id="annual-job-status-title">本次分析</h2>
         </div>
-        <span className={statusClass}>{jobStatusText(job.status, readableResult)}</span>
+        <span className={statusClass}>{userFacingStates[0] ?? jobStatusText(job.status, readableResult)}</span>
       </div>
+      {userFacingStates.length > 0 ? (
+        <ul className="annual-job-user-states" aria-label="任务状态">
+          {userFacingStates.map((label) => <li key={label}>{label}</li>)}
+        </ul>
+      ) : null}
       <p className="annual-job-stage">
         {partialResult ? historicalResultTitle : readableHistoricalResult ? historicalResultTitle : jobStageText(job.stage, job.status, readableResult)}
       </p>
       <p className="annual-job-status-note">
-        {job.request.mode === "m3_screening"
-          ? "本次运行标准分析和四项试行筛查；规则只提示可继续核对的数据组合。"
-          : job.request.mode === "integrated_analysis"
-            ? "本次选择四项基础筛查与 AI 分析模式；实际执行的是候选调查还是全文发现，以及调用和可提取文字覆盖情况，以对应报告归档为准。开放式发现不参与基础事实核验，M3 分数也不是模型结论或风险概率。"
-          : job.request.mode === "model_investigation"
-            ? "本次选择 AI 分析模式；实际执行的是候选调查还是全文发现，以及调用和可提取文字覆盖情况，以对应报告归档为准。模型观点未经独立语义核验。"
-            : "本次使用标准分析，在本机核对年报数据、计算和引用。"}
+        {jobModeNote}
         {` 公司代码 ${job.request.company_id}，报告年份 ${job.request.report_year}。`}
         {terminal ? " 处理状态已稳定。" : " 页面会自动更新处理状态。"}
       </p>
       {partialResult ? (
         <p className="annual-job-reanalysis-note" role="note">
-          已保存报告中的基础分析可读取；AI 发现仍可能未完成。取消或读取不会覆盖原运行，续跑会保留父运行并只尝试尚未完成的批次。
+          部分结果可读取。读取保存结果不创建任务、不调用模型。补跑失败部分会创建新任务、保留父运行并只尝试未完成批次。重新全量分析会按原模式重新处理整份年报，可能再次外发。
         </p>
       ) : readableHistoricalResult ? (
         <p className="annual-job-reanalysis-note" role="note">
-          {job.status === "interrupted" ? "原任务状态仍为中断" : job.status === "cancelled" ? "原任务状态仍为取消" : "原任务状态仍为失败"}；关联报告已通过当前严格校验，可只读查看。读取保存报告不会创建新任务或调用模型。重新提交会创建新的分析任务。
+          {job.status === "interrupted" ? "原任务状态仍为中断" : job.status === "cancelled" ? "原任务状态仍为取消" : "原任务状态仍为失败"}；关联报告已通过当前严格校验，可只读查看。读取保存结果不会创建新任务或调用模型。重新全量分析会创建新任务。
         </p>
       ) : null}
       {job.status === "completed_with_issues" && canResume ? (
         <p className="annual-job-reanalysis-note" role="note">
-          服务端严格校验确认仍有可续跑的 AI 批次或阶段。续跑会创建新任务、保留此报告与父运行，并复用已成功批次。
+          仍有可补跑的失败或未完成部分。补跑失败部分会创建新任务、保留此报告与父运行，并复用已成功批次。
         </p>
       ) : job.status === "completed_with_issues" ? (
         <p className="annual-job-reanalysis-note" role="note">
-          点击“重新分析这份报告”会用同一来源创建新任务并保留当前报告；没有通过服务端严格续跑资格检查，因此不会复用旧 AI 批次。
+          重新全量分析会用同一来源和原模式创建新任务并保留当前报告；当前没有通过严格补跑资格检查，因此不会复用旧 AI 批次。
+        </p>
+      ) : null}
+      {reviewIncomplete ? (
+        <p className="annual-job-reanalysis-note" role="note">
+          最终评审尚未完成；已保存的基础结果和合格发现仍可查看，不把未完成评审写成已完成。
         </p>
       ) : null}
       {job.discovery_progress === undefined ? null : (
@@ -2016,7 +2070,7 @@ function JobStatusPanel({
             父子运行累计模型准入 {formatInteger(recoveryProgress.cumulative_provider_admission_count)} 次；
             复用了 {formatInteger(recoveryProgress.reused_batch_count)} 个批次。
           </p>
-          {parentRunId === null ? null : <button type="button" className="text-button" disabled={action !== null} onClick={onOpenParent}>查看父运行 {parentRunId}</button>}
+          {parentRunId === null ? null : <button type="button" className="text-button" disabled={action !== null} onClick={onOpenParent}>查看父运行</button>}
         </div>
       )}
       {job.error !== null ? (
@@ -2041,16 +2095,16 @@ function JobStatusPanel({
         {readableResult ? (
           <>
             <button type="button" className="primary" disabled={action !== null} onClick={onRefresh}>
-              {action === "refreshing" ? "正在读取…" : partialResult ? "查看已保存部分报告" : "查看已保存报告"}
+              {action === "refreshing" ? "正在读取…" : "读取保存结果"}
             </button>
             {resumablePartial ? (
               <button type="button" className="primary" disabled={action !== null} onClick={onResume}>
-                {action === "resuming" ? "正在创建续跑任务…" : "续跑未完成批次"}
+                {action === "resuming" ? "正在创建补跑任务…" : "补跑失败部分"}
               </button>
             ) : null}
             {canReanalyzeJob(job) ? (
               <button type="button" className="secondary" disabled={action !== null} onClick={onRetry}>
-                {action === "retrying" ? "正在重新提交…" : job.status === "completed_with_issues" ? "重新分析全部内容" : "重新提交同一来源"}
+                {action === "retrying" ? "正在重新全量分析…" : "重新全量分析"}
               </button>
             ) : null}
           </>
@@ -2059,9 +2113,7 @@ function JobStatusPanel({
           <>
             {canReanalyzeJob(job) ? (
               <button type="button" className="primary" disabled={action !== null} onClick={onRetry}>
-                {action === "retrying"
-                  ? job.status === "completed_with_issues" ? "正在创建新分析任务…" : "正在重新提交…"
-                  : job.status === "completed_with_issues" ? "重新分析这份报告" : "重新提交同一来源"}
+                {action === "retrying" ? "正在重新全量分析…" : "重新全量分析"}
               </button>
             ) : null}
             <button type="button" className="secondary" disabled={action !== null} onClick={onRefresh}>
@@ -2076,10 +2128,12 @@ function JobStatusPanel({
         ) : null}
       </div>
       <details className="annual-job-source-details">
-        <summary>技术记录：来源文件与任务编号</summary>
+        <summary>技术记录：来源文件、任务编号与模式</summary>
         <dl>
           <dt>任务编号</dt><dd><code>{job.job_id}</code></dd>
           {job.run_id === null ? null : <><dt>分析编号</dt><dd><code>{job.run_id}</code></dd></>}
+          {parentRunId === null ? null : <><dt>父运行编号</dt><dd><code>{parentRunId}</code></dd></>}
+          <dt>任务模式</dt><dd><code>{job.request.mode}</code></dd>
           <dt>公司 / 报告年度</dt><dd>{job.request.company_id} · {job.request.report_year}</dd>
           <dt>文档标识</dt><dd><code>{job.request.document_id}</code></dd>
           <dt>来源路径</dt><dd><code>{job.request.source_pdf_path}</code></dd>
@@ -2101,40 +2155,48 @@ function AnnualAnalysisBudgetDetails({ budget }: { budget: AnnualAnalysisBudget 
     ["公司问题归并与补证", budget.stages.annual_issue_grouping],
     ["最终评审", budget.stages.annual_review],
   ] as const;
+  const incompleteStages = stages.filter(([, stage]) => stage.status === "partial" || stage.status === "budget_exhausted");
   return (
-    <details className="annual-discovery-progress annual-analysis-budget">
-      <summary>本次预算与用时</summary>
+    <div className="annual-discovery-progress annual-analysis-budget" role="status">
+      <strong>本次预算与用时</strong>
       <p>
-        {scopeText}。主报告处理上限 {budget.main_report_limit_seconds} 秒，从任务开始运行计；工作阶段最多 {budget.work_deadline_seconds} 秒，最终保存与有界退出预留 {budget.finalization_reserve_seconds} 秒。
+        {scopeText}。主报告上限 {budget.main_report_limit_seconds} 秒，从任务开始运行计；工作阶段最多 {budget.work_deadline_seconds} 秒，最终保存与有界退出预留 {budget.finalization_reserve_seconds} 秒。
+        已运行 {formatDurationSeconds(budget.elapsed_running_seconds)}
+        {budget.queue_seconds > 0 ? `；排队 ${formatDurationSeconds(budget.queue_seconds)}` : ""}。
+        已准入 {formatInteger(budget.provider_admission_count)} 次，单任务上限内剩余 {formatInteger(budget.provider_attempts_remaining)} 次。
       </p>
+      {incompleteStages.length > 0 ? (
+        <p>未完成阶段：{incompleteStages.map(([label]) => label).join("、")}。这些缺口不计入已完成覆盖。</p>
+      ) : null}
       <dl className="annual-analysis-budget-overview">
         <dt>排队等待</dt><dd>{formatDurationSeconds(budget.queue_seconds)}</dd>
         <dt>运行耗时</dt><dd>{formatDurationSeconds(budget.elapsed_running_seconds)}</dd>
-        <dt>单任务上限基准</dt><dd>首次任务 {limits.task_default_new_run} 次 / 续跑 {limits.task_default_resume} 次</dd>
-        <dt>本次单任务准入上限</dt><dd>{formatInteger(limits.task_effective)} 次</dd>
         <dt>已准入 / 单任务上限内剩余</dt><dd>{formatInteger(budget.provider_admission_count)} / {formatInteger(budget.provider_attempts_remaining)} 次</dd>
         <dt>共同调用额度</dt>
         <dd>{limits.shared_goal_limit === null
           ? "未配置或未提供"
           : `后端共同上限 ${formatInteger(limits.shared_goal_limit)} 次；本次启动时剩余 ${limits.shared_goal_remaining_at_start === null ? "未提供" : `${formatInteger(limits.shared_goal_remaining_at_start)} 次`}`}</dd>
       </dl>
-      <ul className="annual-analysis-budget-stages" aria-label="分阶段时间与准入范围">
-        {stages.map(([label, stage]) => (
-          <li key={label}>
-            <strong>{label}</strong>
-            <span>{stage.status === "reserved"
-              ? "本份归档没有新问题归并层"
-              : budgetStageStatusText(stage.status)}</span>
-            <small>
-              阶段时限 {stage.time_limit_seconds} 秒；阶段准入上限 {stage.attempt_limit} 次；已准入 {stage.admitted_attempts} 次
-              {stage.planned_attempts === null ? "" : `；计划 ${stage.planned_attempts} 次`}
-              {stage.elapsed_seconds === undefined ? "" : `；本轮用时 ${formatDurationSeconds(stage.elapsed_seconds)}`}
-            </small>
-          </li>
-        ))}
-      </ul>
-      <small>已准入次数包含失败尝试；剩余次数按单任务上限计算。共同额度未知时不代表实际共同额度剩余；不据请求次数推算 token 或费用。</small>
-    </details>
+      <details>
+        <summary>分阶段时限与准入明细</summary>
+        <ul className="annual-analysis-budget-stages" aria-label="分阶段时间与准入范围">
+          {stages.map(([label, stage]) => (
+            <li key={label}>
+              <strong>{label}</strong>
+              <span>{stage.status === "reserved"
+                ? "本份归档没有新问题归并层"
+                : budgetStageStatusText(stage.status)}</span>
+              <small>
+                阶段时限 {stage.time_limit_seconds} 秒；阶段准入上限 {stage.attempt_limit} 次；已准入 {stage.admitted_attempts} 次
+                {stage.planned_attempts === null ? "" : `；计划 ${stage.planned_attempts} 次`}
+                {stage.elapsed_seconds === undefined ? "" : `；本轮用时 ${formatDurationSeconds(stage.elapsed_seconds)}`}
+              </small>
+            </li>
+          ))}
+        </ul>
+        <small>已准入次数包含失败尝试；剩余次数按单任务上限计算。共同额度未知时不代表实际共同额度剩余；不据请求次数推算 token 或费用。</small>
+      </details>
+    </div>
   );
 }
 
@@ -2770,13 +2832,17 @@ function AnnualReportView({
     ? response.source_provenance.company_name
     : null;
   const companyName = registeredSyntheticCompanyName ?? trustedCompanyName(report.company_id, report.source_document_id, report.source_sha256);
-  const mode = activeMode ?? selectedHistoryItem?.run_mode ?? selectedHistoryItem?.mode ??
-    response.manifest.mode ?? (report.m3_screening !== null && report.m3_screening !== undefined ? "m3_screening" : null);
+  const mode = resolvedReportMode(
+    activeMode,
+    selectedHistoryItem,
+    response.manifest.mode,
+    report.m3_screening !== null && report.m3_screening !== undefined,
+  );
   const legacyAiLabel = historicModelCalled || historicInvestigationRecorded ? "旧版候选 AI 调查与评审" : "旧版 AI 模式归档（全文发现未记录）";
   const modeText = mode === "deterministic" ? "标准分析" : mode === "m3_screening" ? "四规则试行" :
     mode === "model_investigation" ? discovery === null ? legacyAiLabel : "AI 全文发现与评审" :
       mode === "integrated_analysis" ? discovery === null ? "四规则试行 + " + legacyAiLabel : "四规则试行 + AI 全文发现与评审" :
-      mode === "unknown" ? "模式未记录" : report.model_called ? "模型调用记录" : "模式未记录";
+      report.model_called ? "模型调用记录" : "模式未记录";
   const headlineRates = coreMetrics
     .filter((item) => item.yoy !== null)
     .map((item) => `${item.label}同比 ${formatSignedPercent(item.yoy!.output_value)}`);
@@ -2818,6 +2884,12 @@ function AnnualReportView({
     setExpandedDiscoveryFindings((current) => new Set(current).add(findingId));
     setPendingDiscoveryTarget(findingId);
   };
+  const locateFindingFromOverview = (findingId: string) => {
+    const ledger = document.getElementById("annual-discovery-ledger");
+    if (ledger instanceof HTMLDetailsElement) ledger.open = true;
+    locateDiscoveryFinding(findingId);
+  };
+
 
   const toggleDiscoveryFinding = (findingId: string, isOpen: boolean) => {
     setExpandedDiscoveryFindings((current) => {
@@ -2865,8 +2937,7 @@ function AnnualReportView({
     <div className="annual-report" aria-label="年度分析报告">
       <header id="annual-report-heading" className="annual-report-heading" tabIndex={-1}>
         <div>
-          <p className="eyebrow">{companyName} · {report.company_id} · {report.report_year} 年报</p>
-          <h2>{companyName} {report.company_id} · {report.report_year} 年报</h2>
+          <h2>{companyName}{companyName !== report.company_id ? " " + report.company_id : ""} · {report.report_year} 年报</h2>
           <p className="annual-report-title-caption">{report.title?.trim() || "年度分析归档结果"}</p>
           <p className="annual-run-id">{resultOrigin === "new" ? "本次运行" : "历史归档"} · {modeText} · {report.model_called ? "已调用模型" : "模型未调用"}</p>
         </div>
@@ -2906,49 +2977,14 @@ function AnnualReportView({
         </ul>
       ) : null}
 
-      <nav className="annual-report-nav" aria-label="报告内容">
-        <a href="#annual-model-review" onClick={expandReportDetails}>
-          {reportModelReview?.status === "completed" && reportModelReview.assessment !== null
-            ? "AI 评审意见"
-            : reportModelReview !== null
-              ? "评审状态与摘要"
-              : "本次筛查摘要"}
-        </a>
-        <a href="#annual-discovery" onClick={expandReportDetails}>AI 待核查线索</a>
-        {issuePipeline === null ? null : <a href="#annual-issue-pipeline" onClick={expandReportDetails}>问题归并与处理账</a>}
-        <a href="#annual-financial-overview" onClick={expandReportDetails}>财务概览</a>
-        <a href="#annual-candidate-overview" onClick={expandReportDetails}>基础年度比较</a>
-        <a href="#annual-confirmed-metrics" onClick={expandReportDetails}>核实数据</a>
-        <a href="#annual-analysis-details" onClick={expandReportDetails}>计算过程</a>
-        <a href="#annual-verified-claims" onClick={expandReportDetails}>核验主张</a>
-        {report.m3_screening == null ? null : <a href="#annual-m3-screening" onClick={expandReportDetails}>试行筛查</a>}
-        <a href="#annual-scope" onClick={expandReportDetails}>分析范围</a>
-      </nav>
-
-      <AnnualDiscoverySection
-        discovery={discovery}
-        evidenceIndex={response.discovery_evidences?.items ?? []}
+      <AnnualReportOverview
+        response={response}
         activeMode={mode}
-        modelCalled={report.model_called}
-        legacyInvestigationRecorded={historicInvestigationRecorded}
-        modelReview={reportModelReview}
         previewBusyId={previewBusyId}
-        query={discoveryQuery}
-        priority={discoveryPriority}
-        expandedFindings={expandedDiscoveryFindings}
-        onQueryChange={setDiscoveryQuery}
-        onPriorityChange={setDiscoveryPriority}
-        onToggleFinding={toggleDiscoveryFinding}
-        onPreview={onDiscoveryPreview}
+        onDiscoveryPreview={onDiscoveryPreview}
+        onIssueSupplementPreview={onIssueSupplementPreview}
+        onLocateFinding={locateFindingFromOverview}
       />
-      {issuePipeline === null ? null : (
-        <AnnualIssuePipelineSection
-          pipeline={issuePipeline}
-          previewBusyId={previewBusyId}
-          onDiscoveryPreview={onDiscoveryPreview}
-          onIssueSupplementPreview={onIssueSupplementPreview}
-        />
-      )}
 
       <section id="annual-financial-overview" className="annual-financial-overview" aria-labelledby="annual-indicators-title" tabIndex={-1}>
         <div className="annual-overview-heading">
@@ -3010,6 +3046,25 @@ function AnnualReportView({
           {report.comparability?.limitations.length ? ` 可比性限制：${report.comparability.limitations.join("；")}` : ""}
         </p>
       </section>
+      <nav className="annual-report-nav" aria-label="报告内容">
+        <a href="#annual-financial-overview" onClick={expandReportDetails}>财务概览</a>
+        <a href="#annual-discovery" onClick={expandReportDetails}>AI 待核查线索</a>
+        {issuePipeline === null ? null : <a href="#annual-issue-pipeline" onClick={expandReportDetails}>问题归并与处理账</a>}
+        <a href="#annual-model-review" onClick={expandReportDetails}>
+          {reportModelReview?.status === "completed" && reportModelReview.assessment !== null
+            ? "AI 评审意见"
+            : reportModelReview !== null
+              ? "评审状态与摘要"
+              : "本次筛查摘要"}
+        </a>
+        <a href="#annual-candidate-overview" onClick={expandReportDetails}>基础年度比较</a>
+        <a href="#annual-confirmed-metrics" onClick={expandReportDetails}>核实数据</a>
+        <a href="#annual-analysis-details" onClick={expandReportDetails}>计算过程</a>
+        <a href="#annual-verified-claims" onClick={expandReportDetails}>核验主张</a>
+        {report.m3_screening == null ? null : <a href="#annual-m3-screening" onClick={expandReportDetails}>试行筛查</a>}
+        <a href="#annual-scope" onClick={expandReportDetails}>分析范围</a>
+      </nav>
+
 
       <section className="annual-export-tools" aria-label="下载报告">
         <div>
@@ -3030,6 +3085,47 @@ function AnnualReportView({
         {exportMessage !== null ? <p className="annual-export-message" role="status">{exportMessage}</p> : null}
         {exportError !== null ? <p className="annual-export-error" role="alert">下载失败：{exportError}</p> : null}
       </section>
+
+      <details id="annual-discovery-ledger" className="annual-audit-ledger">
+        <summary>
+          完整发现账、搜索与核查顺序
+          {discovery === null
+            ? " · 未运行全文发现"
+            : ` · ${discovery.coverage?.complete === true ? "扫描覆盖完整" : "扫描覆盖未完整"} · ${discovery.findings.length} 条线索${discovery.limitations.length > 0 ? ` · ${discovery.limitations.length} 项未完成说明` : ""}`}
+        </summary>
+        <AnnualDiscoverySection
+          discovery={discovery}
+          evidenceIndex={response.discovery_evidences?.items ?? []}
+          activeMode={mode}
+          modelCalled={report.model_called}
+          legacyInvestigationRecorded={historicInvestigationRecorded}
+          modelReview={reportModelReview}
+          previewBusyId={previewBusyId}
+          query={discoveryQuery}
+          priority={discoveryPriority}
+          expandedFindings={expandedDiscoveryFindings}
+          onQueryChange={setDiscoveryQuery}
+          onPriorityChange={setDiscoveryPriority}
+          onToggleFinding={toggleDiscoveryFinding}
+          onPreview={onDiscoveryPreview}
+        />
+      </details>
+      {issuePipeline === null ? null : (
+        <details id="annual-issue-pipeline-ledger" className="annual-audit-ledger">
+          <summary>
+            完整问题归并、成员账与补证
+            {issuePipeline.global_closure.closed === true ? " · 关系已闭合" : " · 关系未闭合"}
+            {Array.isArray(issuePipeline.global_closure.coverage_gaps) && issuePipeline.global_closure.coverage_gaps.length > 0 ? " · 有覆盖缺口" : ""}
+            {Array.isArray(issuePipeline.global_closure.relation_gaps) && issuePipeline.global_closure.relation_gaps.length > 0 ? " · 有关系缺口" : ""}
+          </summary>
+          <AnnualIssuePipelineSection
+            pipeline={issuePipeline}
+            previewBusyId={previewBusyId}
+            onDiscoveryPreview={onDiscoveryPreview}
+            onIssueSupplementPreview={onIssueSupplementPreview}
+          />
+        </details>
+      )}
 
       <NarrativeEvidenceSection
         state={narrativeState}
@@ -5408,6 +5504,47 @@ function isActiveJob(job: AnnualAnalysisJob): boolean {
 
 function modeUsesModel(mode: AnnualAnalysisJobMode): boolean {
   return mode === "model_investigation" || mode === "integrated_analysis";
+}
+
+function analysisModeFromOptions(enableCloudAi: boolean, enableM3: boolean): AnnualAnalysisJobMode {
+  if (enableCloudAi) return enableM3 ? "integrated_analysis" : "model_investigation";
+  return enableM3 ? "m3_screening" : "deterministic";
+}
+
+function resolvedReportMode(
+  activeMode: AnnualAnalysisJobMode | null,
+  historyItem: AnnualAnalysisHistoryItem | null,
+  manifestMode: string | null | undefined,
+  hasM3Archive: boolean,
+): AnnualAnalysisJobMode | null {
+  for (const value of [activeMode, historyItem?.run_mode, historyItem?.mode, manifestMode]) {
+    if (value === "deterministic" || value === "m3_screening" || value === "model_investigation" || value === "integrated_analysis") {
+      return value;
+    }
+  }
+  return hasM3Archive ? "m3_screening" : null;
+}
+
+function jobUserFacingStates(job: AnnualAnalysisJob, canResume: boolean, reviewIncomplete: boolean): string[] {
+  const readable = isReadableResultJob(job);
+  const states: string[] = [];
+  if (isActiveJob(job)) states.push("分析中");
+  if (readable && job.result_availability?.is_partial === true) states.push("部分可用");
+  if (canResume) states.push("待补跑");
+  if (reviewIncomplete) states.push("评审未完成");
+  if (readable && isFailureOrCancellationJob(job)) states.push("归档可恢复");
+  return states;
+}
+
+function isJobReviewIncomplete(job: AnnualAnalysisJob, response: AnnualAnalysisResponse | null): boolean {
+  if (!modeUsesModel(job.request.mode) || isActiveJob(job)) return false;
+  const reviewStage = job.analysis_budget?.stages.annual_review.status;
+  if (reviewStage === "partial" || reviewStage === "budget_exhausted") return true;
+  if (response === null || job.run_id === null || response.report.run_id !== job.run_id) {
+    return reviewStage === "not_started" || reviewStage === "running";
+  }
+  const review = response.report.model_review;
+  return review == null || review.status === "failed" || review.status === "not_called" || review.status === "abstained";
 }
 
 function missingRequestedReportLayers(

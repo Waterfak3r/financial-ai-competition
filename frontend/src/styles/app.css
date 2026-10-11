@@ -2503,8 +2503,13 @@ ul {
     grid-template-columns: 1fr;
   }
 
-  .annual-job-mode-option {
+  .annual-job-mode-option,
+  .annual-cloud-ai-option {
     padding: 0.68rem;
+  }
+
+  .annual-job-user-states {
+    gap: 0.28rem;
   }
 }
 
@@ -2596,10 +2601,12 @@ summary:focus-visible {
   background: #fbfdff;
 }
 
-.legacy-run-lookup > summary,
-.legacy-advanced-fields > summary,
-.annual-job-advanced-mode > summary,
-.annual-start-another > summary {
+  .legacy-run-lookup > summary,
+  .legacy-advanced-fields > summary,
+  .annual-job-advanced-mode > summary,
+  .annual-start-another > summary,
+  .annual-history-fold > summary,
+  .annual-audit-ledger > summary {
   color: #285a87;
   font-weight: 650;
 }
@@ -2686,21 +2693,25 @@ summary:focus-visible {
   overflow-wrap: anywhere;
 }
 
-.legacy-advanced-fields,
-.legacy-technical-details,
-.annual-technical-record,
-.annual-job-advanced-mode,
-.annual-archive-lookup,
-.annual-start-another {
+  .legacy-advanced-fields,
+  .legacy-technical-details,
+  .annual-technical-record,
+  .annual-job-advanced-mode,
+  .annual-archive-lookup,
+  .annual-start-another,
+  .annual-history-fold,
+  .annual-audit-ledger {
   margin-top: 0.85rem;
 }
 
-.legacy-advanced-fields,
-.legacy-technical-details,
-.annual-technical-record,
-.annual-job-advanced-mode,
-.annual-archive-lookup,
-.annual-start-another {
+  .legacy-advanced-fields,
+  .legacy-technical-details,
+  .annual-technical-record,
+  .annual-job-advanced-mode,
+  .annual-archive-lookup,
+  .annual-start-another,
+  .annual-history-fold,
+  .annual-audit-ledger {
   min-width: 0;
 }
 
@@ -2762,6 +2773,115 @@ summary:focus-visible {
 .annual-job-advanced-mode .annual-job-mode-option {
   border: 0;
   padding: 0.35rem 0.15rem;
+}
+
+.annual-job-ai-consent {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.annual-cloud-ai-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  min-width: 0;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid #d6e3ef;
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.annual-cloud-ai-option.selected {
+  border-color: #74a9de;
+  background: #f3f8fd;
+  box-shadow: inset 0 0 0 1px #b4d2ed;
+}
+
+.annual-cloud-ai-option input {
+  flex: 0 0 auto;
+  width: 1rem;
+  height: 1rem;
+  margin: 0.22rem 0 0;
+  accent-color: var(--blue);
+}
+
+.annual-cloud-ai-option span {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+}
+
+.annual-cloud-ai-option small {
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+.annual-cloud-ai-option:has(input:focus-visible) {
+  outline: 3px solid var(--blue);
+  outline-offset: 2px;
+}
+
+.annual-job-user-states {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.annual-job-user-states li {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.7rem;
+  padding: 0.12rem 0.55rem;
+  border-radius: 999px;
+  background: #edf4fa;
+  color: #31536f;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.annual-history-fold,
+.annual-audit-ledger {
+  padding: 0.55rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.annual-history-fold > summary,
+.annual-audit-ledger > summary {
+  cursor: pointer;
+  color: #285a87;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.annual-history-fold[open],
+.annual-audit-ledger[open] {
+  padding: 0.75rem 0.85rem;
+  background: #fbfdff;
+}
+
+.annual-history-fold[open] > summary,
+.annual-audit-ledger[open] > summary {
+  margin-bottom: 0.65rem;
+}
+
+.annual-audit-ledger > .annual-section,
+.annual-audit-ledger > .annual-discovery,
+.annual-audit-ledger > .annual-discovery-section {
+  margin-top: 0;
+  box-shadow: none;
+}
+
+.annual-analysis-budget details > summary {
+  cursor: pointer;
+  font-weight: 700;
 }
 
 .annual-report-summary {
@@ -3888,9 +4008,6 @@ summary:focus-visible {
   font-weight: 650;
 }
 
-.annual-start-another[open] > summary {
-  display: none;
-}
 
 .annual-job-create.panel,
 .annual-history-list.panel {

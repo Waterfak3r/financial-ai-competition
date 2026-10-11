@@ -1,0 +1,50 @@
+modelRoleStorage: project
+modelRoles:
+  implement: "@default"
+  draft: "@default"
+  polish: "@default"
+  review: "@default"
+  scout: "@default"
+  default: null
+retry:
+  modelFallback: true
+  fallbackChains:
+    default:
+      - naapi/gpt-6.1-sol
+    implement:
+      - naapi/gpt-6.1-sol
+    draft:
+      - naapi/gpt-6.1-sol
+    polish:
+      - naapi/gpt-6.1-sol
+    review:
+      - naapi/gpt-6.1-sol
+    scout:
+      - naapi/gpt-6.1-sol
+async:
+  enabled: true
+task:
+  batch: true
+  eager: preferred
+  maxConcurrency: 3
+  maxRecursionDepth: 1
+  disabledAgents:
+    - security-reviewer
+  isolation:
+    enabled: true
+    apply: false
+    merge: patch
+  prewalk: false
+  agentPrewalk:
+    implementer: "off"
+    writer: "off"
+    editor: "off"
+    reviewer: "off"
+    scout: "off"
+  showResolvedModelBadge: true
+prewalk:
+  enabled: false
+worktree:
+  cleanSource: false
+  onStart: "off"
+  onExit: keep
