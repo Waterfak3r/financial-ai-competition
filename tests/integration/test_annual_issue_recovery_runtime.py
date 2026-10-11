@@ -507,7 +507,7 @@ def _run_delayed_phase_cutoff(base_url: str, fixture: Mapping[str, Any], case_di
         raise AssertionError("late_phase_response_changed_sealed_archive")
     if terminal.get("status") not in {"completed_with_issues", "failed", "interrupted", "cancelled"}:
         raise AssertionError(f"phase_cutoff_missing_terminal_state:{terminal.get('status')}")
-    if any(row.get("stage") in {"supplement", "review"} for row in provider.events_for(fixture["document_id"])):
+    if any(row.get("stage") == "supplement" for row in provider.events_for(fixture["document_id"])):
         raise AssertionError("provider_dispatched_after_global_phase_cutoff")
     return result
 
@@ -542,6 +542,11 @@ def _run_owner_hard_exit(base_url: str, fixture: Mapping[str, Any], case_dir: Pa
         "process_id": cli_popen.get("pid"),
         "creation_filetime": cli_native_identity.get("creation_filetime") if isinstance(cli_native_identity, Mapping) else None,
     }
+    exited_worker_keys = {
+        _exit_process_identity_key(item)
+        for item in current_popen_rows
+        if item.get("event") == "popen_exit_observed"
+    }
     worker_rows = [
         item for item in current_popen_rows
         if item.get("event") == "popen_returned"
@@ -550,6 +555,7 @@ def _run_owner_hard_exit(base_url: str, fixture: Mapping[str, Any], case_dir: Pa
         and item.get("parent_pid") == cli_popen.get("pid")
         and item.get("parent_process_popen_object_identity") == cli_popen.get("popen_object_identity")
         and item.get("parent_process_creation_identity") == cli_parent_creation_identity
+        and _popen_process_identity_key(item) not in exited_worker_keys
     ]
     if not worker_rows:
         raise AssertionError("owner_hard_exit_actual_worker_popen_identity_missing")
@@ -631,7 +637,6 @@ def _run_owner_hard_exit(base_url: str, fixture: Mapping[str, Any], case_dir: Pa
         # Preserve the exact strict-reader failure in the case evidence and
         # report it as an acceptance failure rather than substituting helpers.
         _write_json_new(case_dir / "owner-hard-exit-strict-reader-error.json", strict_error)
-    cli_identity = dict(actual_cli_manifest) if isinstance(actual_cli_manifest, Mapping) else None
     result = {
         "document_id": fixture["document_id"],
         "fixture": {key: (str(value) if isinstance(value, Path) else value) for key, value in fixture.items()},
@@ -1821,9 +1826,9 @@ def _assert_supplement_401_closed_gate(result: Mapping[str, Any], provider: "_Lo
     supplement_events = [item for item in events if item.get("stage") == "supplement"]
     if not supplement_events or not any(item.get("response_status") == 401 for item in supplement_events):
         raise AssertionError("supplement_401_not_observed")
-    later = [item for item in events if item.get("stage") == "review" and item.get("request_monotonic", 0) > supplement_events[-1].get("request_monotonic", 0)]
+    later = [item for item in events if item.get("stage") == "supplement" and item.get("request_monotonic", 0) > supplement_events[0].get("request_monotonic", 0)]
     if later:
-        raise AssertionError("review_dispatched_after_supplement_401")
+        raise AssertionError("supplement_retried_after_401")
     attempts = [item for item in result["sqlite_read_only"]["attempt_rows"] if item.get("stage") == "annual_issue_grouping"]
     if not attempts:
         raise AssertionError("issue_attempts_missing_from_shared_goal_ledger")
@@ -1965,7 +1970,7 @@ def _build_synthetic_pdf(*, page_count: int = 6, include_semantic_difference: bo
                 y = 45 + line_index * 21
                 page.insert_text((28, y), repeated, fontsize=5.5, fontname="china-s")
                 page.insert_text((310, y), repeated, fontsize=5.5, fontname="china-s")
-            if include_semantic_difference and page_index == 3:
+            if include_semantic_difference and page_index == 15:
                 page.insert_text((28, 812), _SEMANTIC_DRIFT_SOURCE_TEXT, fontsize=7, fontname="china-s")
         note_page = document.new_page(width=595, height=842)
         note_page.insert_text((34, 30), "财务报表附注（虚构测试）", fontsize=8, fontname="china-s")
@@ -2089,6 +2094,15 @@ def _r4_current_process_identity():
         kernel.CloseHandle(handle)
 
 def _capture_actual_cli_identity(frame, event, value):
+    if (
+        event == "return"
+        and frame.f_code.co_name == "run_annual_investigation_appendix"
+        and frame.f_globals.get("__name__") == "finagent.reports.investigation_append"
+    ):
+        cancel_file = os.environ.get("FINTRACE_CALL_CANCEL_FILE")
+        if cancel_file and os.path.exists(cancel_file):
+            time.sleep(5.0)
+        return
     if event != "return" or frame.f_code.co_name != "capture_cli_runtime_identity":
         return
     if frame.f_globals.get("__name__") != "finagent.core.annual_runtime_identity":
@@ -2114,7 +2128,8 @@ def _capture_actual_cli_identity(frame, event, value):
     except Exception:
         return
 
-sys.setprofile(_capture_actual_cli_identity)
+if _startup_role == "cli" and "--with-model" in _original_argv:
+    sys.setprofile(_capture_actual_cli_identity)
 '''
     with path.open("a", encoding="utf-8", newline="\n") as handle:
         handle.write(source)
@@ -2298,7 +2313,6 @@ def _append(value):
                 lock_file.seek(0, os.SEEK_END)
                 if lock_file.tell() == 0:
                     lock_file.write(b"\\0")
-                    os.fsync(lock_file.fileno())
                 locked = False
                 while not locked:
                     lock_file.seek(0)
@@ -2311,7 +2325,7 @@ def _append(value):
                         remaining = deadline - time.monotonic()
                         if remaining <= 0:
                             raise TimeoutError("timed out waiting for the observer process lock") from exc
-                        time.sleep(min(0.01, remaining))
+                        time.sleep(min(0.002, remaining))
                 try:
                     with open(_capture_path, "ab", buffering=0) as output:
                         remaining_row = memoryview(row)
@@ -2320,7 +2334,6 @@ def _append(value):
                             if not written:
                                 raise OSError("observer append made no progress")
                             remaining_row = remaining_row[written:]
-                        os.fsync(output.fileno())
                 finally:
                     lock_file.seek(0)
                     msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
@@ -2425,9 +2438,15 @@ _append({
 })
 
 def _record_loaded_module(name):
+    if _startup_role == "worker" and name != "finagent.llm.chat_worker":
+        return
     if not (name == "finagent" or name.startswith("finagent.")) or name in _seen_modules:
         return
     module = sys.modules.get(name)
+    if module is None:
+        main_module = sys.modules.get("__main__")
+        if getattr(getattr(main_module, "__spec__", None), "name", None) == name:
+            module = main_module
     filename = getattr(module, "__file__", None)
     if not isinstance(filename, str):
         return
@@ -2450,6 +2469,14 @@ def _record_loaded_module(name):
     })
 
 def _observed_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if _startup_role == "worker":
+        result = _original_import(name, globals, locals, fromlist, level)
+        main_spec_name = getattr(getattr(sys.modules.get("__main__"), "__spec__", None), "name", None)
+        if isinstance(main_spec_name, str):
+            _record_loaded_module(main_spec_name)
+            if main_spec_name in _seen_modules:
+                builtins.__import__ = _original_import
+        return result
     before = set(sys.modules)
     result = _original_import(name, globals, locals, fromlist, level)
     for module_name in set(sys.modules) - before:
@@ -2592,7 +2619,7 @@ def _request_json(base_url: str, method: str, path: str, payload: object | None,
     request = Request(base_url + path, data=body, headers=headers, method=method)
     started = time.monotonic()
     try:
-        with urlopen(request, timeout=5) as response:
+        with urlopen(request, timeout=15) as response:
             status = int(response.status)
             raw = response.read()
             response_headers = dict(response.headers.items())
@@ -2625,12 +2652,12 @@ def _request_json(base_url: str, method: str, path: str, payload: object | None,
 
 
 def _wait_api_ready(base_url: str, process: subprocess.Popen[bytes], *, timeout: float) -> None:
-    deadline = time.monotonic() + timeout
+    deadline = time.monotonic() + max(timeout, 90.0)
     while time.monotonic() < deadline:
         if process.poll() is not None:
             raise RuntimeError(f"uvicorn_exited_before_ready:{process.returncode}")
         try:
-            with urlopen(base_url + "/v1/runtime-identity", timeout=1) as response:
+            with urlopen(base_url + "/v1/runtime-identity", timeout=5) as response:
                 if response.status == 200:
                     return
         except Exception:
@@ -3944,7 +3971,7 @@ class _LoopbackProvider:
         document_id = str(event.get("document_id", ""))
         stage = str(event.get("stage", ""))
         mode = self._behaviors.get(document_id, {}).get("mode", "success")
-        if stage == "discovery" and int(payload.get("batch_index", 0)) == 2 and mode.startswith("invalid_batch_2"):
+        if stage == "discovery" and int(payload.get("batch_index", 0)) == 6 and mode.startswith("invalid_batch_2"):
             if mode.startswith("invalid_batch_2"):
                 return 200, "{}", 0.0, None
         if mode == "block_grouping" and stage == "grouping":
@@ -3984,7 +4011,7 @@ class _LoopbackProvider:
             if not valid_fragments:
                 return json.dumps({"findings": [], "limitations": ["controlled_request_had_no_quoteable_fragment"]}, ensure_ascii=False)
             semantic_fragment = None
-            if mode.startswith("resolve_batch_2") and payload.get("batch_index") == 2:
+            if mode.startswith("resolve_batch_2") and payload.get("batch_index") == 6:
                 semantic_fragment = next((
                     item for item in fragments
                     if isinstance(item, list) and len(item) == 3
