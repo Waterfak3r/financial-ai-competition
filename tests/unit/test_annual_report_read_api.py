@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -970,7 +971,8 @@ def test_legacy_report_api_does_not_invent_snapshot_metadata(tmp_path: Path) -> 
     assert "snapshot" not in response.json()
 
 
-def test_v5_failed_audit_reader_rebuilds_attempt_ledger_and_request_binding(tmp_path: Path) -> None:
+@pytest.mark.parametrize("timeout,category", [(2.0, "call_deadline_exhausted"), (0.0, "timeout")])
+def test_v5_failed_audit_reader_rebuilds_attempt_ledger_and_request_binding(tmp_path: Path, timeout: float, category: str) -> None:
     run_id = "annual-analysis-failure-ledger-test"
     audit_id = "40000000-0000-4000-8000-000000000001"
     attempt_id = "40000000-0000-4000-8000-000000000002"
@@ -984,7 +986,7 @@ def test_v5_failed_audit_reader_rebuilds_attempt_ledger_and_request_binding(tmp_
     (attempt_dir / "request.json").write_text(json.dumps({
         "status": "started", "attempt_index": 1, "audit_id": attempt_id,
         "started_at": "2026-10-08T08:00:00Z", "prompt_version": "annual_review_v3",
-        "evidence_refs": [], "model": "local-model", "timeout_seconds": 2.0,
+        "evidence_refs": [], "model": "local-model", "timeout_seconds": timeout,
         "messages": expected_messages, "stream": False,
     }), encoding="utf-8")
     (attempt_dir / "failure.json").write_text(json.dumps({
@@ -994,7 +996,7 @@ def test_v5_failed_audit_reader_rebuilds_attempt_ledger_and_request_binding(tmp_
     failure = {
         "status": "failed", "started_at": "2026-10-08T08:00:00Z",
         "finished_at": "2026-10-08T08:00:00Z", "duration_seconds": 0.0,
-        "category": "call_deadline_exhausted", "provider_admission_count": 0,
+        "category": category, "provider_admission_count": 0,
         "response_count": 0, "attempt_records": [{
             "attempt_index": 1, "audit_id": attempt_id, "admission_id": None,
             "provider_admitted": False, "response_accepted": False,
@@ -1016,10 +1018,39 @@ def test_v5_failed_audit_reader_rebuilds_attempt_ledger_and_request_binding(tmp_
             expected_evidence_refs=[], expected_admissions=0, expected_responses=0,
             code="annual_review_audit_invalid",
         )
+    request_path = attempt_dir / "request.json"
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+    for invalid_timeout in (-1.0, True, float("inf")):
+        request["timeout_seconds"] = invalid_timeout
+        request_path.write_text(json.dumps(request), encoding="utf-8")
+        with pytest.raises(annual_report_read.AnnualReportReadError):
+            annual_report_read._validate_audited_failure_record(
+                tmp_path, audit_parts, failure, expected_messages=expected_messages,
+                expected_model="local-model", expected_prompt_version="annual_review_v3",
+                expected_evidence_refs=[], expected_admissions=0, expected_responses=0,
+                code="annual_review_audit_invalid",
+            )
+    request["timeout_seconds"] = 0.0
+    request_path.write_text(json.dumps(request), encoding="utf-8")
+    admitted = copy.deepcopy(failure)
+    admitted["provider_admission_count"] = 1
+    admitted["category"] = "timeout"
+    admitted["attempt_records"][0].update(
+        provider_admitted=True, admission_id="40000000-0000-4000-8000-000000000003",
+        status="failed", reason="timeout",
+    )
+    with pytest.raises(annual_report_read.AnnualReportReadError):
+        annual_report_read._validate_audited_failure_record(
+            tmp_path, audit_parts, admitted, expected_messages=expected_messages,
+            expected_model="local-model", expected_prompt_version="annual_review_v3",
+            expected_evidence_refs=[], expected_admissions=1, expected_responses=0,
+            code="annual_review_audit_invalid",
+        )
 
 
 def _v5_source_binding_reader_fixture(tmp_path: Path) -> tuple[dict[str, object], dict[str, object], dict[str, object], dict[str, object]]:
     from finagent.agents.annual_issue_pipeline import checkpoint_issue_pipeline
+    from finagent.core.annual_recovery import _ISSUE_PIPELINE_PROMPTS, _prompts_sha256
 
     run_id = "annual-analysis-v5-source-binding-test"
     source_pdf = tmp_path / "original.pdf"
@@ -1057,6 +1088,7 @@ def _v5_source_binding_reader_fixture(tmp_path: Path) -> tuple[dict[str, object]
         "provider_model_fingerprint": "offline-fake-provider-model", "model": "local-fake-model",
         "plan_version": "annual-discovery-plan-v3", "plan_sha256": "b" * 64,
         "m3_binding_sha256": None,
+        "prompts_sha256": _prompts_sha256(prompt_version="annual_discovery_v3"),
     }
     execution_binding = {
         "kind": "fintrace_annual_execution_binding_v5", "execution_version": "execution_v5",
@@ -1076,6 +1108,11 @@ def _v5_source_binding_reader_fixture(tmp_path: Path) -> tuple[dict[str, object]
         "plan_sha256": discovery_binding["plan_sha256"],
         "m3_binding_sha256": None,
     }
+    prompt_root = Path(__file__).resolve().parents[2] / "config" / "prompts"
+    execution_binding["prompts_sha256"] = hashlib.sha256(json.dumps({
+        "unchanged_execution_v4_prompt_set_sha256": discovery_binding["prompts_sha256"],
+        "issue_pipeline_prompt_sha256": {name: hashlib.sha256((prompt_root / name).read_bytes()).hexdigest() for name in _ISSUE_PIPELINE_PROMPTS},
+    }, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")).hexdigest()
     discovery: dict[str, object] = {
         "kind": "fintrace_annual_discovery", "run_id": run_id,
         "company_id": "600000", "report_year": 2025,
@@ -1095,6 +1132,17 @@ def _v5_source_binding_reader_fixture(tmp_path: Path) -> tuple[dict[str, object]
     return report, discovery, pipeline, source_binding
 
 
+def _issue_source_read_args(root: Path) -> dict[str, object]:
+    source_path = root / "source.pdf"
+    data = source_path.read_bytes()
+    return {
+        "source_pdf_bytes": data,
+        "actual_source_sha256": hashlib.sha256(data).hexdigest(),
+        "source_filename": source_path.name,
+        "source_context": annual_report_read.SourceReadContext(),
+    }
+
+
 def test_v5_issue_pipeline_reader_accepts_source_binding_producer_shape(tmp_path: Path) -> None:
     report, discovery, pipeline, source_binding = _v5_source_binding_reader_fixture(tmp_path)
 
@@ -1106,7 +1154,42 @@ def test_v5_issue_pipeline_reader_accepts_source_binding_producer_shape(tmp_path
         tmp_path, run_id=str(report["run_id"]), report=report,
         discovery=discovery, issue_pipeline=pipeline,
         discovery_evidences=(), parent_archive=None,
+        **_issue_source_read_args(tmp_path),
     )
+
+
+@pytest.mark.parametrize("version", [5, 6, 7])
+@pytest.mark.parametrize("hash_field", ["discovery", "outer"])
+def test_historical_reader_rebuilds_full_prompt_hashes_without_upgrading_old_binding(
+    tmp_path: Path, version: int, hash_field: str,
+) -> None:
+    from finagent.core.annual_work_budget import archived_budget_contract_v2, archived_budget_contract_v3
+
+    report, discovery, pipeline, _source = _v5_source_binding_reader_fixture(tmp_path)
+    binding = pipeline["execution_binding"]
+    if version != 5:
+        frozen = (archived_budget_contract_v3 if version == 7 else archived_budget_contract_v2)(scope="new_run")
+        binding.update(
+            kind=f"fintrace_annual_execution_binding_v{version}", execution_version=f"execution_v{version}",
+            budget_contract_version=frozen["schema_version"],
+            review_request_limit_chars=frozen["review_request_limit_chars"],
+            model_call_timeout_seconds=frozen["model_call_timeout_seconds"],
+        )
+        discovery["execution_contract"]["kind"] = f"fintrace_annual_discovery_execution_v{version}"
+    annual_report_read._validate_v5_issue_pipeline(
+        tmp_path, run_id=str(report["run_id"]), report=report, discovery=discovery,
+        issue_pipeline=pipeline, discovery_evidences=(), parent_archive=None,
+        **_issue_source_read_args(tmp_path),
+    )
+    target = binding["discovery_binding"] if hash_field == "discovery" else binding
+    target["prompts_sha256"] = "f" * 64
+    with pytest.raises(annual_report_read.AnnualReportReadError) as error:
+        annual_report_read._validate_v5_issue_pipeline(
+            tmp_path, run_id=str(report["run_id"]), report=report, discovery=discovery,
+            issue_pipeline=pipeline, discovery_evidences=(), parent_archive=None,
+            **_issue_source_read_args(tmp_path),
+        )
+    assert error.value.code == "annual_issue_pipeline_binding_invalid"
 
 
 @pytest.mark.parametrize(
@@ -1129,12 +1212,61 @@ def test_v5_issue_pipeline_reader_rejects_source_binding_mismatch(
             tmp_path, run_id=str(report["run_id"]), report=report,
             discovery=discovery, issue_pipeline=pipeline,
             discovery_evidences=(), parent_archive=None,
+            **_issue_source_read_args(tmp_path),
         )
     assert exc_info.value.code == "annual_issue_pipeline_binding_invalid"
 
 
+@pytest.mark.parametrize("version", [6, 7])
+def test_issue_pipeline_reader_rejects_cross_version_envelope_and_policy_tamper(tmp_path: Path, version: int) -> None:
+    from finagent.core.annual_work_budget import archived_budget_contract_v2, archived_budget_contract_v3
+
+    frozen = (archived_budget_contract_v3 if version == 7 else archived_budget_contract_v2)(scope="new_run")
+    report, discovery, pipeline, _source = _v5_source_binding_reader_fixture(tmp_path)
+    binding = pipeline["execution_binding"]
+    binding["kind"] = f"fintrace_annual_execution_binding_v{version}"
+    binding["execution_version"] = f"execution_v{version}"
+    binding["budget_contract_version"] = frozen["schema_version"]
+    binding["review_request_limit_chars"] = frozen["review_request_limit_chars"]
+    binding["model_call_timeout_seconds"] = frozen["model_call_timeout_seconds"]
+
+    with pytest.raises(annual_report_read.AnnualReportReadError):
+        annual_report_read._validate_v5_issue_pipeline(
+            tmp_path, run_id=str(report["run_id"]), report=report,
+            discovery=discovery, issue_pipeline=pipeline,
+            discovery_evidences=(), parent_archive=None,
+            **_issue_source_read_args(tmp_path),
+        )
+
+    discovery["execution_contract"]["kind"] = f"fintrace_annual_discovery_execution_v{version}"
+    annual_report_read._validate_v5_issue_pipeline(
+        tmp_path, run_id=str(report["run_id"]), report=report,
+        discovery=discovery, issue_pipeline=pipeline,
+        discovery_evidences=(), parent_archive=None,
+        **_issue_source_read_args(tmp_path),
+    )
+
+    for field, value in (
+        ("review_request_limit_chars", 24_000),
+        ("model_call_timeout_seconds", 60.0 if version == 7 else 90.0),
+        ("budget_contract_version", "annual_analysis_budget_v2" if version == 7 else "annual_analysis_budget_v3"),
+        ("kind", "fintrace_annual_execution_binding_v8"),
+    ):
+        original = binding[field]
+        binding[field] = value
+        with pytest.raises(annual_report_read.AnnualReportReadError):
+            annual_report_read._validate_v5_issue_pipeline(
+                tmp_path, run_id=str(report["run_id"]), report=report,
+                discovery=discovery, issue_pipeline=pipeline,
+                discovery_evidences=(), parent_archive=None,
+                **_issue_source_read_args(tmp_path),
+            )
+        binding[field] = original
+
+
+@pytest.mark.parametrize("section", ["management_discussion", "unknown"])
 def test_issue_supplement_index_and_preview_are_source_bound_and_keep_raw_text_out_of_report(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, section: str,
 ) -> None:
     run_id = "issue-preview-controlled"
     pdf = pymupdf.open()
@@ -1155,7 +1287,7 @@ def test_issue_supplement_index_and_preview_are_source_bound_and_keep_raw_text_o
             "evidence_id": evidence_id, "source_document_id": "document-test", "source_sha256": source_sha,
             "pdf_page": 1, "block_index": 0, "start_char": 0, "end_char": len(raw_text),
             "bbox": {"x0": 38.0, "y0": 68.0, "x1": 240.0, "y1": 86.0}, "raw_text": raw_text,
-            "section": "management_discussion", "role_status": "accepted",
+            "section": section, "role_status": "accepted",
             "issue_roles": [{"issue_id": "issue:test", "role": "possible_explanation", "reason_code": "states_timing"}],
         }],
     }
@@ -1182,6 +1314,7 @@ def test_issue_supplement_index_and_preview_are_source_bound_and_keep_raw_text_o
     assert index["source_sha256"] == source_sha
     assert index["report_sha256"] == "b" * 64
     assert index["items"][0]["raw_text"] == raw_text
+    assert index["items"][0]["section"] == section
     assert index["items"][0]["issue_roles"] == pipeline["supplements"][0]["issue_roles"]
     assert index["items"][0]["preview_url"] == f"/v1/annual-analyses/{run_id}/issue-evidences/{evidence_id}/preview.png"
     preview = client.get(f"/v1/annual-analyses/{run_id}/issue-evidences/{evidence_id}/preview.png?focus=true")
@@ -1205,3 +1338,312 @@ def test_issue_supplement_index_and_preview_are_source_bound_and_keep_raw_text_o
     pipeline["supplements"][0]["role_status"] = "accepted"
     accepted_empty_index = client.get(f"/v1/annual-analyses/{run_id}/issue-evidences")
     assert accepted_empty_index.status_code == 422
+
+
+@pytest.mark.parametrize("version", [5, 6, 7, 8, 9, 10])
+def test_report_api_and_three_exports_project_binding_without_mutating_archive(tmp_path: Path, version: int) -> None:
+    from finagent.api.annual_report_export import export_annual_report
+    from tests.integration.test_annual_analysis_jobs_api import _write_strict_v3_recovery_fixture
+
+    run, _request, _settings = _write_strict_v3_recovery_fixture(
+        tmp_path, suffix=400 + version, state="completed_with_issues", is_partial=False,
+        include_issue_pipeline=True, historical_version=None if version == 10 else version,
+    )
+    paths = (run["report_dir"] / "report.json", run["run_dir"] / "manifest.json", run["run_dir"] / "checkpoint-current.json")
+    original_bytes = tuple(path.read_bytes() for path in paths)
+    archive = annual_report_read.load_annual_report(tmp_path, run["run_id"])
+    full_binding = copy.deepcopy(archive.report["model_issue_pipeline"]["execution_binding"])
+    expected_fields = {"kind", "execution_version"}
+    if version != 5:
+        expected_fields |= {"budget_contract_version", "review_request_limit_chars", "model_call_timeout_seconds"}
+    if version in {8, 9, 10}:
+        expected_fields.add("supplement_retrieval_version")
+    if version in {9, 10}:
+        expected_fields.add("global_request_limit_chars")
+    if version == 10:
+        expected_fields |= {"grouping_shard_plan_version", "grouping_shard_max_members"}
+    expected = {key: full_binding[key] for key in expected_fields}
+    response = TestClient(create_app(tmp_path)).get(f"/v1/annual-analyses/{run['run_id']}")
+    assert response.status_code == 200, response.text
+    report = response.json()["report"]
+    for pipeline in (report["model_issue_pipeline"], report["model_investigation"]["model_issue_pipeline"]):
+        assert pipeline["execution_binding"] == expected
+        assert pipeline["source_identity"] == archive.report["model_issue_pipeline"]["source_identity"]
+        assert pipeline["status"] == archive.report["model_issue_pipeline"]["status"]
+        assert pipeline["retrieval_coverage"] == archive.report["model_issue_pipeline"]["retrieval_coverage"]
+    exports = {format_name: export_annual_report(tmp_path, run["run_id"], format_name).content.decode("utf-8") for format_name in ("json", "markdown", "html")}
+    exported_report = json.loads(exports["json"])["report"]
+    assert exported_report["model_issue_pipeline"]["execution_binding"] == expected
+    assert exported_report["model_issue_pipeline"]["source_identity"] == archive.report["model_issue_pipeline"]["source_identity"]
+    assert exported_report["model_issue_pipeline"]["status"] == archive.report["model_issue_pipeline"]["status"]
+    for exported in exports.values():
+        assert "provider_model_fingerprint" not in exported
+        assert "discovery_binding" not in exported
+    if version == 10:
+        for format_name in ("markdown", "html"):
+            assert "grouping_shard_plan_version" in exports[format_name]
+            assert "member_bounded_v2" in exports[format_name]
+            assert "grouping_shard_max_members=3" in exports[format_name]
+    assert archive.report["model_issue_pipeline"]["execution_binding"] == full_binding
+    assert annual_report_read.load_annual_report(tmp_path, run["run_id"]).report["model_issue_pipeline"]["execution_binding"] == full_binding
+    assert tuple(path.read_bytes() for path in paths) == original_bytes
+
+
+@pytest.mark.parametrize("missing", ["top", "nested", "both", "inconsistent", "unknown"])
+def test_current_pending_checkpoint_requires_identical_top_and_nested_issue_pipeline(tmp_path: Path, missing: str) -> None:
+    from finagent.core.annual_checkpoints import save_annual_checkpoint
+    from tests.integration.test_annual_analysis_jobs_api import _write_strict_v3_recovery_fixture
+
+    run, _request, _settings = _write_strict_v3_recovery_fixture(
+        tmp_path, suffix=421, state="running", is_partial=True, include_issue_pipeline=True,
+    )
+    archive = annual_report_read.load_annual_report(tmp_path, run["run_id"])
+    report = copy.deepcopy(archive.report)
+    assert report["model_issue_pipeline"]["status"] == "pending"
+    assert report["model_issue_pipeline"] == report["model_investigation"]["model_issue_pipeline"]
+    if missing in {"top", "both"}:
+        report.pop("model_issue_pipeline")
+    if missing in {"nested", "both"}:
+        report["model_investigation"].pop("model_issue_pipeline")
+    if missing == "inconsistent":
+        report["model_investigation"]["model_issue_pipeline"]["reason"] = "not-the-top-pipeline"
+    if missing == "unknown":
+        report["model_issue_pipeline"]["execution_binding"]["kind"] = "unknown-binding"
+        report["model_investigation"]["model_issue_pipeline"] = copy.deepcopy(report["model_issue_pipeline"])
+    save_annual_checkpoint(tmp_path, run["run_id"], {
+        "state": "running", "is_partial": True, "parent_run_id": None,
+        "source_sha256": run["source_sha"], "report": report,
+    })
+    with pytest.raises(annual_report_read.AnnualReportReadError) as error:
+        annual_report_read.load_annual_report(tmp_path, run["run_id"])
+    assert error.value.code in {"annual_issue_pipeline_binding_invalid", "annual_issue_pipeline_invalid"}
+
+
+@pytest.mark.parametrize("field", ["prompt_sha256", "prompts_sha256"])
+@pytest.mark.parametrize("include_pipeline", [True, False])
+def test_current_reader_rejects_forged_prompt_hash_after_identity_is_recomputed(tmp_path: Path, field: str, include_pipeline: bool) -> None:
+    from finagent.core.annual_checkpoints import save_annual_checkpoint
+    from finagent.core.annual_recovery import recovery_identity_sha256
+    from tests.integration.test_annual_analysis_jobs_api import _write_strict_v3_recovery_fixture
+
+    run, _request, _settings = _write_strict_v3_recovery_fixture(
+        tmp_path, suffix=422, state="running", is_partial=True, include_issue_pipeline=True,
+    )
+    report = copy.deepcopy(annual_report_read.load_annual_report(tmp_path, run["run_id"]).report)
+    execution = report["model_discovery"]["execution_contract"]
+    execution["binding"][field] = "f" * 64
+    execution["identity_sha256"] = recovery_identity_sha256(execution["binding"])
+    if not include_pipeline:
+        report.pop("model_issue_pipeline")
+        report["model_investigation"].pop("model_issue_pipeline")
+    save_annual_checkpoint(tmp_path, run["run_id"], {
+        "state": "running", "is_partial": True, "parent_run_id": None,
+        "source_sha256": run["source_sha"], "report": report,
+    })
+    with pytest.raises(annual_report_read.AnnualReportReadError):
+        annual_report_read.load_annual_report(tmp_path, run["run_id"])
+
+
+def test_shared_source_read_keeps_document_identity_for_supplement_reconstruction(tmp_path: Path) -> None:
+    from finagent.ingestion.parse_text_pdf import parse_text_pdf_bytes
+    from finagent.retrieval.annual_issue_supplements import retrieve_annual_issue_supplements
+    from tests.unit.test_annual_issue_supplements import _issue
+
+    run_id = "source-context-document-identity"
+    created = _make_archive(tmp_path, run_id)
+    _attach_valid_discovery(tmp_path, run_id, created)
+    source_context = annual_report_read.SourceReadContext()
+    first = annual_report_read.load_annual_report(tmp_path, run_id, _source_context=source_context)
+    source_bytes = first.source_pdf_bytes
+    parsed = parse_text_pdf_bytes(source_bytes, "doc-second", "source.pdf")
+    identity = {
+        "run_id": run_id, "company_id": "603288", "report_year": 2024,
+        "report_period": "2024-12-31", "source_document_id": "doc-second",
+        "source_sha256": hashlib.sha256(source_bytes).hexdigest(),
+    }
+    block = parsed.pages[0].blocks[0]
+    issue = _issue(1, block, quote=block.text[:12], source=identity)
+    items, coverage = retrieve_annual_issue_supplements([issue], parsed, identity)
+    assert items and all(item["source_document_id"] == "doc-second" for item in items)
+    pipeline = {
+        "source_identity": identity, "issues": [issue], "supplements": items,
+        "retrieval_coverage": coverage, "execution_binding": {
+            "kind": "fintrace_annual_execution_binding_v9", "execution_version": "execution_v9",
+            "supplement_retrieval_version": coverage["selection_algorithm_version"],
+        },
+    }
+
+    annual_report_read._validate_issue_supplement_locations(
+        pipeline, source_pdf_bytes=source_bytes,
+        actual_source_sha256=identity["source_sha256"], source_filename="source.pdf",
+        source_context=source_context,
+    )
+    assert first.discovery_evidences[0]["source_document_id"] == "doc-1"
+
+
+def test_new_report_request_rejects_changed_source_after_successful_read(tmp_path: Path) -> None:
+    run_id = "source-context-new-request"
+    created = _make_archive(tmp_path, run_id)
+    _attach_valid_discovery(tmp_path, run_id, created)
+    client = TestClient(create_app(tmp_path))
+    before = client.get(f"/v1/annual-analyses/{run_id}/discovery-evidences")
+    assert before.status_code == 200
+    source_path = tmp_path / "artifacts" / "runs" / run_id / "source.pdf"
+    source_path.write_bytes(created["source_pdf_bytes"] + b"\n% changed source snapshot\n")
+
+    after = client.get(f"/v1/annual-analyses/{run_id}/discovery-evidences")
+
+    assert after.status_code == 409
+    assert after.json()["detail"]["code"] == "source_sha256_mismatch"
+
+
+@pytest.mark.parametrize("tamper", ["source", "quote"])
+def test_shared_source_read_rechecks_parent_archive_after_successful_child_read(
+    tmp_path: Path, tamper: str,
+) -> None:
+    from tests.unit.test_annual_recovery_report_read import (
+        _rewrite_checkpoint_report, _save_checkpoint, _share_source, _unattempted_modes, _write_run,
+    )
+
+    parent = _write_run(tmp_path, 801)
+    modes = _unattempted_modes(parent["context"])
+    modes.update({1: "partial_parent", 3: "success_parent"})
+    _save_checkpoint(tmp_path, parent, modes=modes)
+    child = _write_run(tmp_path, 802)
+    _share_source(parent, child)
+    modes.update({1: "new_success", 3: "reuse"})
+    _save_checkpoint(
+        tmp_path, child, modes=modes,
+        parent_run_id=parent["run_id"], parent_admissions=2,
+    )
+    source_context = annual_report_read.SourceReadContext()
+    first = annual_report_read.load_annual_report(tmp_path, child["run_id"], _source_context=source_context)
+    assert first.discovery_evidences
+    if tamper == "source":
+        changed = pymupdf.open()
+        page = changed.new_page()
+        page.insert_text((72, 72), "Different parent original source")
+        (parent["run_dir"] / "source.pdf").write_bytes(changed.tobytes())
+        changed.close()
+    else:
+        def change_quote(report):
+            report["model_discovery"]["findings"][0]["citations"][0]["quote"] = "absent from original PDF"
+        _rewrite_checkpoint_report(tmp_path, parent, change_quote)
+
+    with pytest.raises(annual_report_read.AnnualReportReadError) as error:
+        annual_report_read.load_annual_report(tmp_path, child["run_id"], _source_context=source_context)
+    assert error.value.code == "annual_discovery_parent_invalid"
+
+
+@pytest.mark.parametrize("invalid_lineage", ["cycle", "over_depth"])
+def test_shared_source_read_does_not_bypass_real_parent_lineage_limits(
+    tmp_path: Path, invalid_lineage: str,
+) -> None:
+    from tests.unit.test_annual_recovery_report_read import (
+        _rewrite_checkpoint_report, _save_checkpoint, _share_source, _unattempted_modes, _write_run,
+    )
+
+    first = _write_run(tmp_path, 820)
+    modes = _unattempted_modes(first["context"])
+    modes[1] = "success_parent"
+    saved = _save_checkpoint(tmp_path, first, modes=modes)
+    source_context = annual_report_read.SourceReadContext()
+    first_expected_findings = saved["report"]["model_discovery"]["findings"]
+    primed = annual_report_read.load_annual_report(
+        tmp_path, first["run_id"], _source_context=source_context,
+    )
+    assert primed.run_id == first["run_id"]
+    assert primed.report["model_discovery"]["findings"] == first_expected_findings
+    previous = first
+    for index in range(1, 2 if invalid_lineage == "cycle" else 33):
+        run_id = f"annual-analysis-00000000-0000-0000-0000-{820 + index:012d}"
+        child = {
+            **first, "run_id": run_id,
+            "run_dir": tmp_path / "artifacts" / "runs" / run_id,
+            "report_dir": tmp_path / "artifacts" / "reports" / run_id,
+            "manifest": copy.deepcopy(first["manifest"]),
+            "parent_findings": saved["report"]["model_discovery"]["findings"],
+        }
+        child["run_dir"].mkdir()
+        child["report_dir"].mkdir()
+        child["manifest"]["run_id"] = run_id
+        child["manifest"]["inputs"]["source_pdf_archive_path"] = f"runs/{run_id}/source.pdf"
+        child["manifest"]["outputs"] = {
+            "run_dir": f"runs/{run_id}", "report_dir": f"reports/{run_id}",
+            "report_json": f"reports/{run_id}/report.json",
+        }
+        _share_source(first, child)
+        modes[1] = "reuse"
+        saved = _save_checkpoint(
+            tmp_path, child, modes=modes,
+            parent_run_id=previous["run_id"], parent_admissions=1,
+        )
+        previous = child
+    if invalid_lineage == "cycle":
+        def add_cycle(report):
+            contract = report["model_discovery"]["execution_contract"]
+            contract["parent_run_id"] = previous["run_id"]
+            contract["parent_provider_admission_count"] = 1
+            contract["cumulative_provider_admission_count"] = 2
+        _rewrite_checkpoint_report(tmp_path, first, add_cycle)
+        pointer_path = first["run_dir"] / "checkpoint-current.json"
+        pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+        envelope_path = tmp_path / pointer["snapshot_path"]
+        envelope = json.loads(envelope_path.read_text(encoding="utf-8"))
+        envelope["parent_run_id"] = previous["run_id"]
+        envelope_bytes = json.dumps(envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        envelope_path.write_bytes(envelope_bytes)
+        pointer["snapshot_sha256"] = hashlib.sha256(envelope_bytes).hexdigest()
+        pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
+    else:
+        # Exactly 32 logical archives remain readable with identical originals.
+        penultimate_id = f"annual-analysis-00000000-0000-0000-0000-{851:012d}"
+        at_limit = annual_report_read.load_annual_report(
+            tmp_path, penultimate_id, _source_context=source_context,
+        )
+        assert at_limit.run_id == penultimate_id
+        assert at_limit.snapshot["parent_run_id"] == f"annual-analysis-00000000-0000-0000-0000-{850:012d}"
+        assert at_limit.report["model_discovery"]["findings"] == first_expected_findings
+
+    with pytest.raises(annual_report_read.AnnualReportReadError) as error:
+        annual_report_read.load_annual_report(tmp_path, previous["run_id"], _source_context=source_context)
+    assert error.value.code == "annual_discovery_parent_invalid"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["missing_planner", "missing_max", "unknown_planner", "legacy_max", "bool_max", "float_max", "old_envelope"],
+)
+def test_v10_archive_reader_rejects_missing_or_forged_member_bounded_identity(tmp_path: Path, mutation: str) -> None:
+    from finagent.core.annual_checkpoints import save_annual_checkpoint
+    from tests.integration.test_annual_analysis_jobs_api import _write_strict_v3_recovery_fixture
+
+    run, _request, _settings = _write_strict_v3_recovery_fixture(
+        tmp_path, suffix=451, state="running", is_partial=True, include_issue_pipeline=True,
+    )
+    archive = annual_report_read.load_annual_report(tmp_path, run["run_id"])
+    report = copy.deepcopy(archive.report)
+    binding = report["model_issue_pipeline"]["execution_binding"]
+    if mutation == "missing_planner":
+        binding.pop("grouping_shard_plan_version")
+    elif mutation == "missing_max":
+        binding.pop("grouping_shard_max_members")
+    elif mutation == "unknown_planner":
+        binding["grouping_shard_plan_version"] = "member_bounded_forged"
+    elif mutation == "legacy_max":
+        binding["grouping_shard_max_members"] = 12
+    elif mutation == "bool_max":
+        binding["grouping_shard_max_members"] = True
+    elif mutation == "float_max":
+        binding["grouping_shard_max_members"] = 3.0
+    else:
+        report["model_discovery"]["execution_contract"]["kind"] = "fintrace_annual_discovery_execution_v9"
+        report["model_investigation"]["discovery"] = copy.deepcopy(report["model_discovery"])
+    report["model_investigation"]["model_issue_pipeline"] = copy.deepcopy(report["model_issue_pipeline"])
+    save_annual_checkpoint(tmp_path, run["run_id"], {
+        "state": "running", "is_partial": True, "parent_run_id": None,
+        "source_sha256": run["source_sha"], "report": report,
+    })
+    with pytest.raises(annual_report_read.AnnualReportReadError) as error:
+        annual_report_read.load_annual_report(tmp_path, run["run_id"])
+    assert error.value.code in {"annual_issue_pipeline_binding_invalid", "annual_issue_pipeline_invalid"}

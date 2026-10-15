@@ -28,7 +28,7 @@ import type {
   VerificationEvidence,
   VerifiedClaim,
 } from "../types/annualReport";
-import type { AnnualDiscoveryEvidenceIndexItem, AnnualDiscoveryExecutionContractV4, AnnualModelDiscovery } from "../types/discoveryEvidence";
+import type { AnnualDiscoveryEvidenceIndexItem, AnnualDiscoveryExecutionContractV4, AnnualDiscoveryExecutionContractV6, AnnualDiscoveryExecutionContractV7, AnnualDiscoveryExecutionContractV8, AnnualDiscoveryExecutionContractV9, AnnualDiscoveryExecutionContractV10, AnnualDiscoveryExecutionContractV11, AnnualModelDiscovery } from "../types/discoveryEvidence";
 import type { AnnualAnalysisHistoryItem } from "../types/annualAnalysisHistory";
 import { NARRATIVE_EVIDENCE_INTERPRETATION_LABEL } from "../types/narrativeEvidence";
 import type { NarrativeEvidence, NarrativeEvidenceResponse } from "../types/narrativeEvidence";
@@ -138,6 +138,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
   const [narrativeState, setNarrativeState] = useState<NarrativeLoadState>(null);
   const [issueEvidenceState, setIssueEvidenceState] = useState<IssueEvidenceLoadState>(null);
   const [history, setHistory] = useState<Awaited<ReturnType<typeof loadAnnualAnalysisHistory>> | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyOffset, setHistoryOffset] = useState(0);
@@ -163,6 +164,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
   const taskGeneration = useRef(0);
   const previewRequest = useRef(0);
   const entryIdle = response === null && job === null && jobAction === null;
+  const canResumeCurrentJob = canResumeJob(job, response);
 
   useEffect(() => {
     const entry = document.querySelector(".annual-start-another");
@@ -171,12 +173,17 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
 
 
   useEffect(() => {
+    if (!historyOpen) {
+      setHistoryLoading(false);
+      return;
+    }
+    const controller = new AbortController();
     const requestOffset = historyOffset;
     const requestSequence = historyRequestSequence.current + 1;
     historyRequestSequence.current = requestSequence;
     setHistoryLoading(true);
     setHistoryError(null);
-    loadAnnualAnalysisHistory(20, requestOffset)
+    loadAnnualAnalysisHistory(20, requestOffset, controller.signal)
       .then((loaded) => {
         if (historyRequestSequence.current !== requestSequence) return;
         setHistory(loaded);
@@ -189,8 +196,9 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
       });
     return () => {
       if (historyRequestSequence.current === requestSequence) historyRequestSequence.current += 1;
+      controller.abort();
     };
-  }, [historyOffset, historyRetry]);
+  }, [historyOpen, historyOffset, historyRetry]);
 
   useEffect(() => {
     if (history === null) return;
@@ -489,6 +497,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
           return;
         }
         setJob(current);
+        if (!isActiveJob(current)) setHistoryRetry((value) => value + 1);
         setJobError(null);
         if (isReadableResultJob(current)) {
           void loadReportForJob(current, generation);
@@ -572,6 +581,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
         return;
       }
       setJob(created);
+      setHistoryRetry((value) => value + 1);
       createdJobIds.current.add(created.job_id);
       setResultOrigin("new");
       setSelectedHistoryItem(null);
@@ -739,6 +749,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
         return;
       }
       setJob(refreshed);
+      if (!isActiveJob(refreshed)) setHistoryRetry((value) => value + 1);
       writeStoredJobId(refreshed.job_id);
       if (refreshed.run_id !== null) {
         setRunId(refreshed.run_id);
@@ -781,8 +792,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
   async function navigateToSelection(selection: UrlSelection, updateUrl: boolean) {
     if (updateUrl) {
       writeUrlSelection(selection, true);
-      const historyDetails = document.querySelector<HTMLDetailsElement>(".annual-history-fold");
-      if (historyDetails !== null) historyDetails.open = false;
+      setHistoryOpen(false);
     }
     const generation = taskGeneration.current + 1;
     taskGeneration.current = generation;
@@ -1252,7 +1262,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
         </section>
       </details>
 
-      <details className="annual-history-fold">
+      <details className="annual-history-fold" open={historyOpen} onToggle={(event) => setHistoryOpen(event.currentTarget.open)}>
         <summary>
           已有分析
           {history === null || history.total === 0 ? "" : ` · 共 ${history.total} 条`}
@@ -1264,8 +1274,9 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
             <h2 id="annual-history-heading">已有分析</h2>
           </div>
           {history === null || history.total === 0 ? null : <span className="sub">共 {history.total} 条</span>}
+          <button type="button" className="secondary" disabled={historyLoading} onClick={() => setHistoryRetry((value) => value + 1)}>刷新列表</button>
         </div>
-        {historyLoading ? <p className="status-line" role="status">正在读取本机历史…</p> : null}
+        {historyLoading || (historyOpen && history === null && historyError === null) ? <p className="status-line" role="status">正在读取本机历史…</p> : null}
         {historyError !== null ? (
           <div className="alert annual-history-error" role="alert">
             <span>{historyError}</span>
@@ -1374,7 +1385,8 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
           onCancel={onCancelJob}
           onResume={onResumeJob}
           reviewIncomplete={isJobReviewIncomplete(job, response)}
-          canResume={canResumeJob(job, response)}
+          canResume={canResumeCurrentJob}
+          resumeValidationPending={loading && job.recovery_capability?.can_resume === true && !canResumeCurrentJob}
           onOpenParent={() => {
             const parentRunId = job.recovery_progress?.parent_run_id ?? job.recovery?.parent_run_id;
             if (parentRunId !== null && parentRunId !== undefined) {
@@ -1551,13 +1563,14 @@ function coreComparisonInputReason(
   if (current === undefined || comparative === undefined) return "本期或比较期事实缺少匹配的独立核验证据";
   const comparability = report.comparability;
   if (
-    comparability === null || comparability.status !== "verified" ||
+    comparability === null ||
     comparability.document_id !== report.source_document_id ||
     comparability.source_sha256?.toLowerCase() !== report.source_sha256.toLowerCase() ||
     comparability.report_year !== report.report_year ||
     comparability.current_year !== report.report_year ||
     comparability.comparative_year !== report.report_year - 1
   ) return "报告可比性身份或期间依据不完整，年度比较暂不能确认";
+  if (comparability.status !== "verified") return "比较期口径或追溯调整状态未确认，年度比较暂不能确认";
   if (
     current.scope.trim() === "" || comparative.scope.trim() === "" ||
     current.scope === "unknown" || comparative.scope === "unknown" ||
@@ -1962,6 +1975,7 @@ function JobStatusPanel({
   onResume,
   reviewIncomplete,
   canResume,
+  resumeValidationPending,
   onOpenParent,
   onDismissError,
 }: {
@@ -1974,6 +1988,7 @@ function JobStatusPanel({
   onResume: () => void;
   reviewIncomplete: boolean;
   canResume: boolean;
+  resumeValidationPending: boolean;
   onOpenParent: () => void;
   onDismissError: () => void;
 }) {
@@ -2041,7 +2056,9 @@ function JobStatusPanel({
         </p>
       ) : job.status === "completed_with_issues" ? (
         <p className="annual-job-reanalysis-note" role="note">
-          重新全量分析会用同一来源和原模式创建新任务并保留当前报告；当前没有通过严格补跑资格检查，因此不会复用旧 AI 批次。
+          {resumeValidationPending
+            ? "正在校验已保存报告，完成后再判断补跑资格；校验完成前不会复用旧 AI 批次。"
+            : "重新全量分析会用同一来源和原模式创建新任务并保留当前报告；当前没有通过严格补跑资格检查，因此不会复用旧 AI 批次。"}
         </p>
       ) : null}
       {reviewIncomplete ? (
@@ -2158,9 +2175,19 @@ function AnnualAnalysisBudgetDetails({ budget }: { budget: AnnualAnalysisBudget 
   const incompleteStages = stages.filter(([, stage]) => stage.status === "partial" || stage.status === "budget_exhausted");
   return (
     <div className="annual-discovery-progress annual-analysis-budget" role="status">
-      <strong>本次预算与用时</strong>
+      <strong>{budget.schema_version === "annual_analysis_budget_v4" ? "本次任务实际预算与用时" : "历史任务实际预算与用时"}</strong>
       <p>
-        {scopeText}。主报告上限 {budget.main_report_limit_seconds} 秒，从任务开始运行计；工作阶段最多 {budget.work_deadline_seconds} 秒，最终保存与有界退出预留 {budget.finalization_reserve_seconds} 秒。
+        {scopeText}。
+        {budget.schema_version === "annual_analysis_budget_v4"
+          ? "以下是本任务 owner 实际有效时限，不是归档版本默认值。"
+          : "以下是当时任务的实际 owner 时限，不是当前活动预算版本默认值，也不是归档执行封装的版本默认配置。"}
+        主报告上限 {budget.main_report_limit_seconds} 秒，从任务开始运行计；工作阶段最多 {budget.work_deadline_seconds} 秒，最终保存与有界退出预留 {budget.finalization_reserve_seconds} 秒。
+        {budget.schema_version === "annual_analysis_budget_v1"
+          ? ""
+          : `评审完整请求上限 ${formatInteger(budget.review_request_limit_chars)} 字符；单次模型调用上限 ${budget.model_call_timeout_seconds} 秒。`}
+        {budget.schema_version === "annual_analysis_budget_v4"
+          ? `全局归并与补证完整请求上限 ${formatInteger(budget.global_request_limit_chars)} 字符。`
+          : ""}
         已运行 {formatDurationSeconds(budget.elapsed_running_seconds)}
         {budget.queue_seconds > 0 ? `；排队 ${formatDurationSeconds(budget.queue_seconds)}` : ""}。
         已准入 {formatInteger(budget.provider_admission_count)} 次，单任务上限内剩余 {formatInteger(budget.provider_attempts_remaining)} 次。
@@ -2174,7 +2201,9 @@ function AnnualAnalysisBudgetDetails({ budget }: { budget: AnnualAnalysisBudget 
         <dt>已准入 / 单任务上限内剩余</dt><dd>{formatInteger(budget.provider_admission_count)} / {formatInteger(budget.provider_attempts_remaining)} 次</dd>
         <dt>共同调用额度</dt>
         <dd>{limits.shared_goal_limit === null
-          ? "未配置或未提供"
+          ? budget.schema_version === "annual_analysis_budget_v4"
+            ? "未设共享累计上限；仍按任务、阶段及有限截止约束"
+            : "当时预算未记录共同上限"
           : `后端共同上限 ${formatInteger(limits.shared_goal_limit)} 次；本次启动时剩余 ${limits.shared_goal_remaining_at_start === null ? "未提供" : `${formatInteger(limits.shared_goal_remaining_at_start)} 次`}`}</dd>
       </dl>
       <details>
@@ -2194,13 +2223,13 @@ function AnnualAnalysisBudgetDetails({ budget }: { budget: AnnualAnalysisBudget 
             </li>
           ))}
         </ul>
-        <small>已准入次数包含失败尝试；剩余次数按单任务上限计算。共同额度未知时不代表实际共同额度剩余；不据请求次数推算 token 或费用。</small>
+        <small>已准入次数包含失败尝试；剩余次数按单任务上限计算。未设共享累计上限不取消单任务、阶段和有限截止约束；不据请求次数推算 token 或费用。</small>
       </details>
     </div>
   );
 }
 
-function AnnualDiscoveryPhaseBudgetDetails({ execution }: { execution: AnnualDiscoveryExecutionContractV4 }) {
+function AnnualDiscoveryPhaseBudgetDetails({ execution }: { execution: AnnualDiscoveryExecutionContractV4 | AnnualDiscoveryExecutionContractV6 | AnnualDiscoveryExecutionContractV7 | AnnualDiscoveryExecutionContractV8 | AnnualDiscoveryExecutionContractV9 | AnnualDiscoveryExecutionContractV10 | AnnualDiscoveryExecutionContractV11 }) {
   const budget = execution.phase_budget;
   const timing = execution.timing;
   const stageRows = [
@@ -2211,16 +2240,25 @@ function AnnualDiscoveryPhaseBudgetDetails({ execution }: { execution: AnnualDis
   ] as const;
   return (
     <details className="annual-discovery-scan-details">
-      <summary>执行版本预算与阶段计时</summary>
+      <summary>归档执行版本预算与阶段计时</summary>
       <p className="annual-discovery-technical-note">
-        此处是归档执行版本的阶段配置；它不等同于任务实际可准入额度，也不代表预留阶段已经执行。任务实时额度与排队时间仅在本机任务预算记录存在时显示。
+        此处是归档执行封装 `{execution.kind}` 的版本默认阶段配置（{budget.schema_version}），不是本机任务的实际 owner 时限。任务实时额度与排队时间仅在上方任务实际预算与用时中显示。
       </p>
       <dl className="annual-discovery-coverage-metrics">
         <dt>执行范围</dt><dd>{budget.scope === "resume" ? "有限续跑" : "首次任务"}</dd>
         <dt>任务配置上限</dt><dd>{formatInteger(budget.task_provider_attempt_limit)} 次</dd>
-        <dt>版本默认时间上限</dt><dd>300 秒；工作阶段默认 285 秒，最终发布与有界退出默认预留 15 秒</dd>
+        <dt>版本默认时间上限</dt><dd>{budget.main_report_limit_seconds} 秒；工作阶段默认 {budget.work_deadline_seconds} 秒，最终发布与有界退出默认预留 {budget.finalization_reserve_seconds} 秒</dd>
+        {budget.schema_version === "annual_analysis_budget_v1" ? null : (
+          <>
+            <dt>归档评审请求上限</dt><dd>{formatInteger(budget.review_request_limit_chars)} 字符</dd>
+            <dt>归档单次模型调用上限</dt><dd>{budget.model_call_timeout_seconds} 秒</dd>
+          </>
+        )}
+        {budget.schema_version === "annual_analysis_budget_v4" ? (
+          <><dt>归档全局归并与补证请求上限</dt><dd>{formatInteger(budget.global_request_limit_chars)} 字符</dd></>
+        ) : null}
         <dt>共同调用额度</dt><dd>{budget.shared_goal_limit === null
-          ? "未配置或未提供"
+          ? "归档未记录共享累计上限；以任务实际预算为准"
           : `共同上限 ${formatInteger(budget.shared_goal_limit)} 次；本次开始时剩余 ${budget.shared_goal_remaining_at_start === null ? "未提供" : `${formatInteger(budget.shared_goal_remaining_at_start)} 次`}`}</dd>
         <dt>本次全文扫描准入</dt><dd>{formatInteger(execution.provider_admission_count)} 次；收到模型响应 {formatInteger(execution.response_count)} 次</dd>
         <dt>上下文新增解析</dt><dd>{formatDurationSeconds(timing.source_parse_seconds)}{timing.source_parse_reused ? "（复用既有解析，本次无新增解析）" : ""}</dd>
@@ -2416,7 +2454,7 @@ function AnnualDiscoverySection({
               </div>
             ) : null}
           </details>
-          {execution?.kind === "fintrace_annual_discovery_execution_v4"
+          {execution?.kind === "fintrace_annual_discovery_execution_v4" || execution?.kind === "fintrace_annual_discovery_execution_v6" || execution?.kind === "fintrace_annual_discovery_execution_v7" || execution?.kind === "fintrace_annual_discovery_execution_v8" || execution?.kind === "fintrace_annual_discovery_execution_v9" || execution?.kind === "fintrace_annual_discovery_execution_v10" || execution?.kind === "fintrace_annual_discovery_execution_v11"
             ? <AnnualDiscoveryPhaseBudgetDetails execution={execution} />
             : null}
           {hasDiscoveryFindings && pendingReviewFailed ? (
@@ -2675,6 +2713,11 @@ function AnnualIssuePipelineSection({
       <p className="annual-discovery-technical-note" role="note">
         所有合格发现均保留在候选账中。展示次序综合最终评审引用、原文定位完整性与后续核查动作；模型给出的优先级仍是未核验意见。问题关系闭合只覆盖当前已知发现；补证角色与模型归并都不是独立核验。
       </p>
+      {pipeline.execution_binding?.execution_version === "execution_v10" || pipeline.execution_binding?.execution_version === "execution_v11" ? (
+        <p className="annual-discovery-technical-note" role="note">
+          本次归档采用小分片规划（{pipeline.execution_binding.grouping_shard_plan_version}）：每个局部分片最多 {pipeline.execution_binding.grouping_shard_max_members} 个原始发现成员，保留全部候选与引用；局部请求上限仍为 22000 字符。分片调用数可能增加，阶段时间与尝试额度不增加；剩余未处理分片明确保留为 pending，不计作完成。局部成功不等于全局关系闭合，也不代表提速或质量已通过。
+        </p>
+      ) : null}
       <div className="annual-discovery-coverage">
         <dl>
           <div><dt>当前状态</dt><dd>{pipelineStatus} · {readText(pipeline.reason, "无待处理原因")}</dd></div>

@@ -639,14 +639,16 @@ def _checkpoint_writer_lock(run_dir: Path) -> Iterator[None]:
         if _is_reparse_point(opened) or not stat.S_ISREG(opened.st_mode):
             os.close(descriptor)
             raise AnnualCheckpointError("checkpoint_writer_lock_failed", "年度检查点写入锁类型无效。")
-        if before is not None and _file_identity(before) != _file_identity(opened):
+        if before is not None and (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino):
             os.close(descriptor)
             raise AnnualCheckpointError("checkpoint_writer_lock_failed", "年度检查点写入锁在打开期间发生变化。")
-        # Windows byte-range locks require an existing byte. Concurrent
-        # truncation is harmless because this permanent lock file stores no data.
-        if opened.st_size == 0:
-            os.ftruncate(descriptor, 1)
-        if _file_identity(os.fstat(descriptor)) != _file_identity(lock_path.lstat()):
+        # Lock-file contents are not data. Windows and POSIX both permit locking
+        # beyond EOF, so initialization must not truncate another writer's file.
+        linked = lock_path.lstat()
+        if (
+            _is_reparse_point(linked) or not stat.S_ISREG(linked.st_mode)
+            or (opened.st_dev, opened.st_ino) != (linked.st_dev, linked.st_ino)
+        ):
             os.close(descriptor)
             raise AnnualCheckpointError("checkpoint_writer_lock_failed", "年度检查点写入锁在打开期间发生变化。")
     except AnnualCheckpointError:

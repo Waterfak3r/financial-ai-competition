@@ -31,6 +31,14 @@ from finagent.agents.annual_issue_pipeline import (
     ISSUE_WIRE_VERSION,
     MAX_SHARD_REQUEST_CHARS,
 )
+from finagent.core.annual_work_budget import (
+    BUDGET_CONTRACT_VERSION,
+    GLOBAL_REQUEST_LIMIT_CHARS,
+    MODEL_CALL_TIMEOUT_SECONDS,
+    REVIEW_REQUEST_LIMIT_CHARS,
+    archived_budget_contract_v2,
+    archived_budget_contract_v3,
+)
 from finagent.agents.annual_review_wire import (
     decode_annual_issue_input_wire,
     encode_annual_issue_input_wire,
@@ -62,6 +70,7 @@ def _finding(index: int, *, observation: str, quote: str = "年报原文") -> di
     return {
         "finding_id": finding_id,
         "title": f"候选 {index}",
+        "_prompt_version": "annual_discovery_v3",
         "observation": observation,
         "why_it_matters": "需要核对口径与期间。",
         "follow_up": "检查附注解释和现金流。",
@@ -119,6 +128,59 @@ def _binding() -> dict:
     }
 
 
+def _binding_v6() -> dict:
+    archived = archived_budget_contract_v2(scope="new_run")
+    return {
+        **_binding(),
+        "kind": "fintrace_annual_execution_binding_v6",
+        "execution_version": "execution_v6",
+        "budget_contract_version": archived["schema_version"],
+        "review_request_limit_chars": archived["review_request_limit_chars"],
+        "model_call_timeout_seconds": archived["model_call_timeout_seconds"],
+    }
+
+
+def _binding_v7() -> dict:
+    archived = archived_budget_contract_v3(scope="new_run")
+    return {
+        **_binding(),
+        "kind": "fintrace_annual_execution_binding_v7",
+        "execution_version": "execution_v7",
+        "budget_contract_version": archived["schema_version"],
+        "review_request_limit_chars": archived["review_request_limit_chars"],
+        "model_call_timeout_seconds": archived["model_call_timeout_seconds"],
+    }
+
+
+def _binding_v8() -> dict:
+    binding = _binding_v7()
+    binding.update(kind="fintrace_annual_execution_binding_v8", execution_version="execution_v8", supplement_retrieval_version="source_anchor_then_ngram_v2")
+    binding["discovery_binding"].update(prompt_version="annual_discovery_v4", prompt_sha256="d" * 64)
+    return binding
+
+
+def _binding_v9() -> dict:
+    binding = _binding_v8()
+    binding.update(
+        kind="fintrace_annual_execution_binding_v9", execution_version="execution_v9",
+        budget_contract_version=BUDGET_CONTRACT_VERSION,
+        global_request_limit_chars=GLOBAL_REQUEST_LIMIT_CHARS,
+        review_request_limit_chars=REVIEW_REQUEST_LIMIT_CHARS,
+        model_call_timeout_seconds=MODEL_CALL_TIMEOUT_SECONDS,
+    )
+    return binding
+
+
+def _binding_v10() -> dict:
+    binding = _binding_v9()
+    binding.update(
+        kind="fintrace_annual_execution_binding_v10", execution_version="execution_v10",
+        grouping_shard_plan_version="member_bounded_v2", grouping_shard_max_members=3,
+    )
+    return binding
+
+
+
 def _pending_pipeline() -> dict:
     finding, evidence = _finding(1, observation="经营性现金流明显低于收入增长。")
     discovery = {
@@ -154,6 +216,139 @@ def test_execution_v5_binding_requires_the_exact_review_protocol_versions(mutati
 
     with pytest.raises(ValueError, match="annual_issue_pipeline_binding_invalid"):
         validate_pipeline(pipeline, identity=SOURCE_IDENTITY)
+
+
+def test_execution_v6_binding_requires_exact_budget_fields_and_keeps_v5_readable() -> None:
+    v5_pipeline = _pending_pipeline()
+    validate_pipeline(v5_pipeline, identity=SOURCE_IDENTITY)
+
+    finding, evidence = _finding(1, observation="经营性现金流明显低于收入增长。")
+    discovery = {
+        "kind": "fintrace_annual_discovery",
+        **{key: SOURCE_IDENTITY[key] for key in (
+            "run_id", "company_id", "report_year", "source_document_id", "source_sha256",
+        )},
+        "status": "running",
+        "prompt_version": "annual_discovery_v3",
+        "coverage": {"complete": False},
+        "findings": [finding],
+        "evidences": [evidence],
+    }
+    v6_pipeline = checkpoint_issue_pipeline(SOURCE_IDENTITY, discovery, execution_binding=_binding_v6())
+    validate_pipeline(v6_pipeline, identity=SOURCE_IDENTITY)
+
+    missing = copy.deepcopy(v6_pipeline)
+    missing["execution_binding"].pop("review_request_limit_chars")
+    with pytest.raises(ValueError, match="annual_issue_pipeline_binding_invalid"):
+        validate_pipeline(missing, identity=SOURCE_IDENTITY)
+
+    int_timeout = copy.deepcopy(v6_pipeline)
+    timeout_value = int_timeout["execution_binding"]["model_call_timeout_seconds"]
+    int_timeout["execution_binding"]["model_call_timeout_seconds"] = int(timeout_value)
+    with pytest.raises(ValueError, match="annual_issue_pipeline_binding_invalid"):
+        validate_pipeline(int_timeout, identity=SOURCE_IDENTITY)
+
+    extra_v5 = copy.deepcopy(v5_pipeline)
+    extra_v5["execution_binding"]["budget_contract_version"] = "annual_analysis_budget_v2"
+    with pytest.raises(ValueError, match="annual_issue_pipeline_binding_invalid"):
+        validate_pipeline(extra_v5, identity=SOURCE_IDENTITY)
+
+def test_activity_issue_pipeline_rejects_historical_execution_binding(tmp_path: Path) -> None:
+    finding, evidence = _finding(1, observation="经营性现金流明显低于收入增长。")
+    discovery = {
+        "kind": "fintrace_annual_discovery",
+        **{key: SOURCE_IDENTITY[key] for key in (
+            "run_id", "company_id", "report_year", "source_document_id", "source_sha256",
+        )},
+        "status": "running",
+        "prompt_version": "annual_discovery_v3",
+        "coverage": {"complete": False},
+        "findings": [finding],
+        "evidences": [evidence],
+    }
+    parsed = ParsedTextPdf(
+        document_id=SOURCE_IDENTITY["source_document_id"], source_sha256=SOURCE_SHA,
+        source_filename="constructed-empty.pdf", page_count=1, coordinate_system="pymupdf_page_top_left",
+        coordinate_unit="pdf_point", coordinate_note="constructed fixture", ocr_applied=False,
+        extractor="fixture", extractor_version="1", pages=(PdfPageText(
+            page_number=1, width=595.0, height=842.0, rotation=0, status="extracted",
+            image_block_count=0, limitation=None, blocks=(),
+        ),),
+    )
+    (tmp_path / "runs" / SOURCE_IDENTITY["run_id"]).mkdir(parents=True)
+    settings = ModelSettings("http://127.0.0.1", "offline-test-token", "offline-mock-model")
+    for binding in (_binding(), _binding_v6(), _binding_v7(), _binding_v8(), _binding_v9()):
+        with pytest.raises(ValueError, match="annual_issue_pipeline_binding_invalid"):
+            run_annual_issue_pipeline(
+                discovery,
+                identity=SOURCE_IDENTITY,
+                parsed_pdf=parsed,
+                settings=settings,
+                run_dir=tmp_path / "runs" / SOURCE_IDENTITY["run_id"],
+                artifacts_root=tmp_path / "artifacts",
+                execution_binding=binding,
+            )
+
+
+@pytest.mark.parametrize("tamper", [None, "retrieval", "missing_retrieval", "prompt", "missing_prompt_hash", "input", "origin", "coverage", "budget"])
+def test_v8_consumer_rejects_old_or_missing_semantic_binding(tamper: str | None) -> None:
+    finding, evidence = _finding(1, observation="经营性现金流与收入的期间及口径待核对。")
+    discovery = {
+        "kind": "fintrace_annual_discovery",
+        **{key: SOURCE_IDENTITY[key] for key in ("run_id", "company_id", "report_year", "source_document_id", "source_sha256")},
+        "status": "running", "prompt_version": "annual_discovery_v4",
+        "coverage": {"complete": False}, "findings": [finding], "evidences": [evidence],
+    }
+    pipeline = checkpoint_issue_pipeline(SOURCE_IDENTITY, discovery, execution_binding=_binding_v8())
+    binding = pipeline["execution_binding"]
+    if tamper == "retrieval":
+        binding["supplement_retrieval_version"] = "section_filter_then_ngram_overlap_v1"
+    elif tamper == "missing_retrieval":
+        binding.pop("supplement_retrieval_version")
+    elif tamper == "prompt":
+        binding["discovery_binding"]["prompt_version"] = "annual_discovery_v3"
+    elif tamper == "missing_prompt_hash":
+        binding["discovery_binding"].pop("prompt_sha256")
+    elif tamper == "input":
+        pipeline["input"]["discovery_prompt_version"] = "annual_discovery_v3"
+    elif tamper == "origin":
+        pipeline["candidates"][0]["origin"] = "annual_discovery_v3"
+    elif tamper == "coverage":
+        pipeline["retrieval_coverage"]["selection_algorithm_version"] = "section_filter_then_ngram_overlap_v1"
+    elif tamper == "budget":
+        binding["budget_contract_version"] = "annual_analysis_budget_v2"
+    if tamper is None:
+        validate_pipeline(pipeline, identity=SOURCE_IDENTITY)
+    else:
+        with pytest.raises(ValueError, match="annual_issue_pipeline_"):
+            validate_pipeline(pipeline, identity=SOURCE_IDENTITY)
+
+
+def test_v6_archive_binding_does_not_follow_live_budget_constants(monkeypatch: pytest.MonkeyPatch) -> None:
+    finding, evidence = _finding(1, observation="经营性现金流明显低于收入增长。")
+    discovery = {
+        "kind": "fintrace_annual_discovery",
+        **{key: SOURCE_IDENTITY[key] for key in (
+            "run_id", "company_id", "report_year", "source_document_id", "source_sha256",
+        )},
+        "status": "running",
+        "prompt_version": "annual_discovery_v3",
+        "coverage": {"complete": False},
+        "findings": [finding],
+        "evidences": [evidence],
+    }
+    v6_pipeline = checkpoint_issue_pipeline(SOURCE_IDENTITY, discovery, execution_binding=_binding_v6())
+    v7_pipeline = checkpoint_issue_pipeline(SOURCE_IDENTITY, discovery, execution_binding=_binding_v7())
+    validate_pipeline(v6_pipeline, identity=SOURCE_IDENTITY)
+    validate_pipeline(v7_pipeline, identity=SOURCE_IDENTITY)
+
+    monkeypatch.setattr(issue_pipeline, "BUDGET_CONTRACT_VERSION", "annual_analysis_budget_v9")
+    monkeypatch.setattr(issue_pipeline, "MODEL_CALL_TIMEOUT_SECONDS", 1.0)
+    validate_pipeline(v6_pipeline, identity=SOURCE_IDENTITY)
+    validate_pipeline(v7_pipeline, identity=SOURCE_IDENTITY)
+
+
+
 
 
 def test_local_duplicate_requires_all_observation_fields_and_same_locator() -> None:
@@ -619,7 +814,7 @@ def test_runtime_generated_phase_timings_pass_pipeline_reader(tmp_path) -> None:
             "run_id", "company_id", "report_year", "source_document_id", "source_sha256",
         )},
         "status": "completed",
-        "prompt_version": "annual_discovery_v3",
+        "prompt_version": "annual_discovery_v4",
         "coverage": {"complete": True},
         "findings": [],
         "evidences": [],
@@ -640,7 +835,7 @@ def test_runtime_generated_phase_timings_pass_pipeline_reader(tmp_path) -> None:
         settings=ModelSettings("http://127.0.0.1", "offline-test-token", "offline-mock-model"),
         run_dir=tmp_path / "runs" / SOURCE_IDENTITY["run_id"],
         artifacts_root=tmp_path / "artifacts",
-        execution_binding=_binding(),
+        execution_binding=_binding_v10(),
     )
 
     validated = validate_pipeline(generated, identity=SOURCE_IDENTITY)
@@ -656,7 +851,7 @@ def _multi_shard_reuse_fixture(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     parent_identity = dict(SOURCE_IDENTITY, run_id="annual-analysis-parent-fixture")
     findings = []
     evidences = []
-    for index in range(1, 14):
+    for index in range(1, 5):
         finding, evidence = _finding(index, observation=f"不同的观察事项 {index}", quote=f"原文引文{index}")
         findings.append(finding)
         evidences.append(evidence)
@@ -668,7 +863,7 @@ def _multi_shard_reuse_fixture(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
                 "run_id", "company_id", "report_year", "source_document_id", "source_sha256",
             )},
             "status": "completed",
-            "prompt_version": "annual_discovery_v3",
+            "prompt_version": "annual_discovery_v4",
             "coverage": {"complete": True},
             "findings": findings,
             "evidences": evidences,
@@ -752,7 +947,7 @@ def _multi_shard_reuse_fixture(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     parent = run_annual_issue_pipeline(
         discovery(parent_identity), identity=parent_identity, parsed_pdf=parsed_pdf,
         settings=settings, run_dir=tmp_path / "runs" / parent_identity["run_id"],
-        artifacts_root=tmp_path / "artifacts", execution_binding=_binding(),
+        artifacts_root=tmp_path / "artifacts", execution_binding=_binding_v10(),
     )
     assert [item["kind"] for item in parent["shards"]] == ["grouping", "grouping", "global", "supplement"]
     assert len(call_log) == 4
@@ -767,7 +962,7 @@ def test_all_reused_shards_keep_all_audits_and_reader_rejects_corrupt_summary(mo
     child = run_annual_issue_pipeline(
         discovery(child_identity), identity=child_identity, parsed_pdf=parsed_pdf,
         settings=settings, run_dir=tmp_path / "runs" / child_identity["run_id"],
-        artifacts_root=tmp_path / "artifacts", execution_binding=_binding(),
+        artifacts_root=tmp_path / "artifacts", execution_binding=_binding_v10(),
         parent_pipeline=parent, parent_run_id=parent_identity["run_id"],
     )
 
@@ -805,7 +1000,7 @@ def test_mixed_reuse_checkpoint_audit_summaries_follow_shard_state(monkeypatch, 
     child = run_annual_issue_pipeline(
         discovery(child_identity), identity=child_identity, parsed_pdf=parsed_pdf,
         settings=settings, run_dir=tmp_path / "runs" / child_identity["run_id"],
-        artifacts_root=tmp_path / "artifacts", execution_binding=_binding(),
+        artifacts_root=tmp_path / "artifacts", execution_binding=_binding_v10(),
         parent_pipeline=parent, parent_run_id=parent_identity["run_id"],
         checkpoint_callback=lambda state: checkpoints.append(copy.deepcopy(state)),
     )
@@ -863,7 +1058,7 @@ def test_recovery_capability_denies_fixed_supplement_tail_after_accepted_first_s
             accepted_roles.append({"issue_id": issue_id, "evidence_id": evidence_id, "role": "context", "reason_code": "same_section_context"})
     pipeline = {
         "kind": "annual_issue_pipeline_v1",
-        "execution_binding": {"model": "offline-mock-model"},
+        "execution_binding": _binding_v10(),
         "source_identity": SOURCE_IDENTITY,
         "status": "partial",
         "global_closure": {"closed": True, "pending_issue_ids": [], "relation_gaps": []},
@@ -903,7 +1098,7 @@ def test_recovery_capability_keeps_retryable_in_cap_supplement_work() -> None:
     exact_input = _supplement_input([issue], [supplement], SOURCE_IDENTITY)
     pipeline = {
         "kind": "annual_issue_pipeline_v1",
-        "execution_binding": {"model": "offline-mock-model"},
+        "execution_binding": _binding_v10(),
         "source_identity": SOURCE_IDENTITY,
         "status": "partial",
         "global_closure": {"closed": True, "pending_issue_ids": [], "relation_gaps": []},
@@ -944,6 +1139,7 @@ def test_recovery_capability_uses_typed_wire_when_plain_input_exceeds_limit() ->
     planned = _build_group_shards(
         _local_exact_duplicate_groups(candidates),
         {evidence["evidence_id"]: evidence}, SOURCE_IDENTITY, model, prompt,
+        execution_binding=_binding_v10(),
     )
     assert len(planned) == 1
     input_value = planned[0]["input"]
@@ -960,7 +1156,7 @@ def test_recovery_capability_uses_typed_wire_when_plain_input_exceeds_limit() ->
 
     pipeline = {
         "kind": "annual_issue_pipeline_v1",
-        "execution_binding": {"model": model},
+        "execution_binding": _binding_v10(),
         "source_identity": SOURCE_IDENTITY,
         "global_closure": {"closed": False, "pending_issue_ids": [], "relation_gaps": []},
         "candidates": candidates,
@@ -969,8 +1165,11 @@ def test_recovery_capability_uses_typed_wire_when_plain_input_exceeds_limit() ->
     assert _annual_issue_pipeline_has_executable_work(root, pipeline) is True
 
 
-def test_recovery_capability_denies_permanently_oversized_wire() -> None:
-    finding, evidence = _finding(1, observation="x" * 26_000, quote="可追溯来源引文")
+@pytest.mark.parametrize("observation_chars, executable", [(26_000, True), (96_001, False)])
+def test_recovery_capability_obeys_complete_global_wire_capacity(
+    observation_chars: int, executable: bool,
+) -> None:
+    finding, evidence = _finding(1, observation="x" * observation_chars, quote="可追溯来源引文")
     discovery = {
         "kind": "fintrace_annual_discovery",
         **{key: SOURCE_IDENTITY[key] for key in ("run_id", "company_id", "report_year", "source_document_id", "source_sha256")},
@@ -989,7 +1188,7 @@ def test_recovery_capability_denies_permanently_oversized_wire() -> None:
     oversized_input = _build_global_input(provisional, state["member_decisions"], [candidate], SOURCE_IDENTITY)
     pipeline = {
         "kind": "annual_issue_pipeline_v1",
-        "execution_binding": {"model": "offline-mock-model"},
+        "execution_binding": _binding_v10(),
         "source_identity": SOURCE_IDENTITY,
         "status": "partial",
         "global_closure": {"closed": False, "pending_issue_ids": [provisional[0]["issue_id"]], "relation_gaps": []},
@@ -1007,14 +1206,14 @@ def test_recovery_capability_denies_permanently_oversized_wire() -> None:
         }],
     }
     root = Path(__file__).resolve().parents[2]
-    assert _annual_issue_pipeline_has_executable_work(root, pipeline) is False
+    assert _annual_issue_pipeline_has_executable_work(root, pipeline) is executable
 
 
 def test_recovery_capability_recognizes_published_supplement_plan_without_shard() -> None:
     issue_id = "issue:known"
     pipeline = {
         "kind": "annual_issue_pipeline_v1",
-        "execution_binding": {"model": "offline-mock-model"},
+        "execution_binding": _binding_v10(),
         "source_identity": SOURCE_IDENTITY,
         "global_closure": {"closed": True, "pending_issue_ids": [], "relation_gaps": []},
         "issues": [{
@@ -1055,7 +1254,7 @@ def test_recovery_capability_keeps_unsharded_in_cap_role_rows_resumable() -> Non
     } for index in range(32)]
     pipeline = {
         "kind": "annual_issue_pipeline_v1",
-        "execution_binding": {"model": "offline-mock-model"},
+        "execution_binding": _binding_v10(),
         "source_identity": SOURCE_IDENTITY,
         "status": "partial",
         "global_closure": {"closed": True, "pending_issue_ids": [], "relation_gaps": []},
@@ -1078,7 +1277,7 @@ def test_recovery_capability_recognizes_group_plan_without_shard() -> None:
         },
     }
     pipeline = {
-        "kind": "annual_issue_pipeline_v1", "execution_binding": {"model": "offline-mock-model"},
+        "kind": "annual_issue_pipeline_v1", "execution_binding": _binding_v10(),
         "source_identity": SOURCE_IDENTITY,
         "global_closure": {"closed": False, "pending_issue_ids": [], "relation_gaps": []},
         "candidates": [candidate], "issues": [], "shards": [],
@@ -1110,6 +1309,7 @@ def test_recovery_capability_recognizes_global_plan_without_shard() -> None:
     prompt = (Path(__file__).resolve().parents[2] / "config" / "prompts" / "annual_issue_grouping_v1.md").read_text(encoding="utf-8")
     planned_groups = _build_group_shards(
         _local_exact_duplicate_groups(candidates), {}, SOURCE_IDENTITY, "offline-mock-model", prompt,
+        execution_binding=_binding_v10(),
     )
     assert len(planned_groups) > 1
     group_shards = [
@@ -1117,10 +1317,317 @@ def test_recovery_capability_recognizes_global_plan_without_shard() -> None:
         for index, item in enumerate(planned_groups)
     ]
     pipeline = {
-        "kind": "annual_issue_pipeline_v1", "execution_binding": {"model": "offline-mock-model"},
+        "kind": "annual_issue_pipeline_v1", "execution_binding": _binding_v10(),
         "source_identity": SOURCE_IDENTITY,
         "global_closure": {"closed": False, "pending_issue_ids": [item["issue_id"] for item in issues], "relation_gaps": []},
         "candidates": candidates, "issues": issues, "member_decisions": decisions, "shards": group_shards,
     }
     root = Path(__file__).resolve().parents[2]
     assert _annual_issue_pipeline_has_executable_work(root, pipeline) is True
+
+
+def _member_bounded_runtime_fixture(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, count: int, *, exact_family: bool = False):
+    """Exercise the production planner, typed call, audit reconstruction and closure."""
+    artifacts = tmp_path / "artifacts"
+    findings, evidences = [], []
+    for index in range(1, count + 1):
+        finding, evidence = _finding(
+            index, observation="完整相同观察" if exact_family else f"完整独立观察 {index}",
+            quote="完整同源引文" if exact_family else f"完整同源引文 {index}",
+        )
+        finding["priority"] = "high" if index % 2 else "low"
+        if not exact_family:
+            evidence_id = f"adisc-{SOURCE_SHA[:12]}-p1-b{index - 1}-c0-{index:08x}"
+            evidence["evidence_id"] = evidence_id
+            evidence["block_index"] = index - 1
+            finding["citations"][0]["evidence_id"] = evidence_id
+            finding["evidence_ids"] = [evidence_id]
+        if exact_family:
+            finding["title"] = "完整相同事项"
+            if evidences:
+                finding["citations"] = copy.deepcopy(findings[0]["citations"])
+                finding["evidence_ids"] = list(findings[0]["evidence_ids"])
+                evidences[0]["finding_ids"].append(finding["finding_id"])
+            else:
+                evidences.append(evidence)
+        else:
+            evidences.append(evidence)
+        findings.append(finding)
+    parsed = ParsedTextPdf(
+        document_id=SOURCE_IDENTITY["source_document_id"], source_sha256=SOURCE_SHA,
+        source_filename="constructed-member-bounded.pdf", page_count=1,
+        coordinate_system="pymupdf_page_top_left", coordinate_unit="pdf_point",
+        coordinate_note="original synthetic fixture", ocr_applied=False,
+        extractor="fixture", extractor_version="1", pages=(PdfPageText(
+            page_number=1, width=595.0, height=842.0, rotation=0, status="extracted",
+            image_block_count=0, limitation=None, blocks=tuple(
+                PdfTextBlock(evidence["block_index"], evidence["raw_text"], PdfBBox(**evidence["bbox"]))
+                for evidence in evidences
+            ),
+        ),),
+    )
+    sent: list[dict] = []
+    control = {"stop_after_group_calls": None, "exclude_finding_id": None, "snapshots": []}
+
+    def audited_fixture(messages, settings, *, run_dir, prompt_version, **_kwargs):
+        value = decode_annual_issue_input_wire(json.loads(messages[1].content))
+        if (
+            prompt_version == "annual_issue_grouping_v1"
+            and control["stop_after_group_calls"] is not None
+            and sum(row["prompt_version"] == prompt_version for row in sent) >= control["stop_after_group_calls"]
+        ):
+            error = RuntimeError("constructed exhausted stage allowance")
+            error.category = "task_budget_exhausted"
+            raise error
+        if prompt_version == "annual_issue_grouping_v1":
+            decisions = []
+            for group in value["groups"]:
+                representative = group["representative_finding_id"]
+                for finding_id in group["member_finding_ids"]:
+                    retained = finding_id == representative
+                    if finding_id == control["exclude_finding_id"]:
+                        candidate = next(row for row in value["candidate_pool"] if row["finding_id"] == finding_id)
+                        citation = candidate["citations"][0]
+                        decisions.append({
+                            "finding_id": finding_id, "disposition": "exclude",
+                            "target_finding_id": None, "reason_code": "not_financial_condition",
+                            "reason_evidence_id": citation["evidence_id"], "reason_quote": citation["quote"],
+                        })
+                        continue
+                    decisions.append({
+                        "finding_id": finding_id, "disposition": "retain" if retained else "merge",
+                        "target_finding_id": None if retained else representative,
+                        "reason_code": "distinct_issue" if retained else "same_observed_event",
+                        "reason_evidence_id": None, "reason_quote": None,
+                    })
+            result = {"schema_version": "annual_issue_group_shard_result_v1", "decisions": decisions}
+        elif prompt_version == "annual_issue_global_v1":
+            result = {
+                "schema_version": "annual_issue_global_result_v1",
+                "decisions": [{
+                    "issue_id": issue_id,
+                    "disposition": "merge" if exact_family and index else "retain",
+                    "target_issue_id": value["input_issue_ids"][0] if exact_family and index else None,
+                    "reason_code": "same_observed_event" if exact_family and index else "distinct_across_shards",
+                    "reason_evidence_id": None, "reason_quote": None,
+                } for index, issue_id in enumerate(value["input_issue_ids"])],
+            }
+        else:
+            raise AssertionError(f"unexpected model stage: {prompt_version}")
+        text = json.dumps(result, ensure_ascii=False)
+        request = {
+            "model": settings.model, "prompt_version": prompt_version,
+            "messages": [{"role": message.role, "content": message.content} for message in messages],
+        }
+        audit_dir = run_dir / f"constructed-audit-{len(sent):03d}"
+        audit_dir.mkdir(parents=True)
+        (audit_dir / "request.json").write_text(json.dumps(request, ensure_ascii=False), encoding="utf-8")
+        (audit_dir / "response.json").write_text(
+            json.dumps({"status": "succeeded", "text": text}, ensure_ascii=False), encoding="utf-8",
+        )
+        sent.append({
+            "prompt_version": prompt_version, "input": value, "request": request,
+            "body": serialize_chat_body(settings.model, messages),
+        })
+        return SimpleNamespace(
+            audit_dir=audit_dir, completion=SimpleNamespace(text=text),
+            provider_admission_count=1, response_count=1,
+        )
+
+    monkeypatch.setattr(issue_pipeline, "audited_complete_chat", audited_fixture)
+
+    def record_checkpoint(state, identity):
+        validate_pipeline(state, identity=identity)
+        control["snapshots"].append(copy.deepcopy(state))
+
+    def run(run_id: str, *, parent: dict | None = None, binding: dict | None = None):
+        identity = dict(SOURCE_IDENTITY, run_id=run_id)
+        discovery = {
+            "kind": "fintrace_annual_discovery",
+            **{key: identity[key] for key in ("run_id", "company_id", "report_year", "source_document_id", "source_sha256")},
+            "status": "completed", "prompt_version": "annual_discovery_v4",
+            "coverage": {"complete": True}, "findings": copy.deepcopy(findings),
+            "evidences": copy.deepcopy(evidences),
+        }
+        pipeline = run_annual_issue_pipeline(
+            discovery, identity=identity, parsed_pdf=parsed,
+            settings=ModelSettings("http://127.0.0.1:1", "unused-constructed-key", "offline-mock-model"),
+            run_dir=artifacts / "runs" / run_id, artifacts_root=artifacts,
+            execution_binding=binding or _binding_v10(), parent_pipeline=parent,
+            parent_run_id=parent["source_identity"]["run_id"] if parent is not None else None,
+            checkpoint_callback=lambda state: record_checkpoint(state, identity),
+        )
+        validate_pipeline(pipeline, identity=identity)
+        return pipeline
+
+    return run, findings, sent, control
+
+
+def test_v10_local_checkpoint_keeps_provisional_and_excluded_global_account(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    run, findings, _sent, control = _member_bounded_runtime_fixture(monkeypatch, tmp_path, 4)
+    excluded = findings[0]["finding_id"]
+    control["exclude_finding_id"] = excluded
+    control["stop_after_group_calls"] = 1
+    run("annual-analysis-member-bounded-local-checkpoint")
+    first = next(
+        state for state in control["snapshots"]
+        if sum(shard["status"] == "accepted" for shard in state["shards"]) == 1
+    )
+    expected_live = sorted(row["finding_id"] for row in findings if row["finding_id"] != excluded)
+    assert first["global_closure"]["closed"] is False
+    assert first["global_closure"]["pending_finding_ids"] == expected_live
+    assert first["global_closure"]["excluded_finding_ids"] == [excluded]
+    assert {tuple(row["member_finding_ids"]) for row in first["issues"]} == {
+        (findings[1]["finding_id"],), (findings[2]["finding_id"],),
+    }
+    assert first["global_closure"]["pending_issue_ids"] == sorted(row["issue_id"] for row in first["issues"])
+    assert first["global_closure"]["input_issue_ids"] == first["global_closure"]["pending_issue_ids"]
+    pending_member = next(row for row in first["member_decisions"] if row["finding_id"] == findings[3]["finding_id"])
+    assert pending_member["disposition"] == "pending"
+
+
+@pytest.mark.parametrize("count, expected_sizes", [(3, [3]), (4, [3, 1]), (13, [3, 3, 3, 3, 1])])
+@pytest.mark.parametrize("exact_family", [False, True])
+def test_v10_production_shards_preserve_complete_raw_members_and_quotes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, count: int, expected_sizes: list[int], exact_family: bool,
+) -> None:
+    run, findings, sent, _control = _member_bounded_runtime_fixture(monkeypatch, tmp_path, count, exact_family=exact_family)
+    pipeline = run("annual-analysis-member-bounded-parent")
+    group_shards = [row for row in pipeline["shards"] if row["kind"] == "grouping"]
+    assert [len(row["input_finding_ids"]) for row in group_shards] == expected_sizes
+    member_ids = [member for row in group_shards for member in row["input_finding_ids"]]
+    assert len(member_ids) == len(set(member_ids)) == count
+    assert set(member_ids) == {finding["finding_id"] for finding in findings}
+    candidates = {row["finding_id"]: row for row in pipeline["candidates"]}
+    original = {row["finding_id"]: row for row in findings}
+    for shard in group_shards:
+        for group in shard["input"]["groups"]:
+            assert group["representative_finding_id"] in group["member_finding_ids"]
+        for candidate in shard["input"]["candidate_pool"]:
+            assert candidate == candidates[candidate["finding_id"]]
+            finding = original[candidate["finding_id"]]
+            for field in ("title", "observation", "why_it_matters", "follow_up", "priority"):
+                assert candidate[field] == finding[field]
+            assert [(row["evidence_id"], row["quote"]) for row in candidate["citations"]] == [
+                (row["evidence_id"], row["quote"]) for row in finding["citations"]
+            ]
+            assert candidate["citations"][0]["source_sha256"] == SOURCE_SHA
+            assert candidate["citations"][0]["start_char"] == 0
+            assert candidate["citations"][0]["bbox"] == {"x0": 0.0, "y0": 0.0, "x1": 100.0, "y1": 20.0}
+    for shard, request in zip(pipeline["shards"], sent, strict=True):
+        assert shard["request_body_sha256"] == hashlib.sha256(request["body"]).hexdigest()
+        assert shard["semantic_input_sha256"] == hashlib.sha256(json.dumps(
+            request["input"], ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
+        ).encode("utf-8")).hexdigest()
+        assert len(request["body"].decode("utf-8")) <= (22_000 if shard["kind"] == "grouping" else 96_000)
+    if count > 3:
+        global_input = next(row["input"] for row in sent if row["prompt_version"] == "annual_issue_global_v1")
+        assert global_input["candidate_pool"] == sorted(pipeline["candidates"], key=lambda row: row["finding_id"])
+        assert len(global_input["member_decisions"]) == count
+        assert pipeline["global_closure"]["closure_method"] == "global_reconciliation"
+    else:
+        assert pipeline["global_closure"]["closure_method"] == "single_group_shard"
+    assert pipeline["global_closure"]["closed"] is True
+    assert len(pipeline["member_decisions"]) == count
+    assert sum(len(row["member_finding_ids"]) for row in pipeline["issues"]) == count
+
+
+def test_v10_same_identity_reuses_real_success_audits_without_calls_and_rejects_business_drift(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    run, findings, sent, _control = _member_bounded_runtime_fixture(monkeypatch, tmp_path, 7, exact_family=True)
+    parent = run("annual-analysis-member-bounded-reuse-parent")
+    parent_bytes = copy.deepcopy(parent)
+    sent.clear()
+    child = run("annual-analysis-member-bounded-reuse-child", parent=parent)
+    assert sent == []
+    assert child["audit_summary"]["attempt_count"] == child["audit_summary"]["response_count"] == 0
+    assert child["audit_summary"]["reused_count"] == len(parent["shards"])
+    assert [row["shard_id"] for row in child["shards"]] == [row["shard_id"] for row in parent["shards"]]
+    assert parent == parent_bytes
+
+    findings[0]["follow_up"] = "业务核查路径已经改变，不能复用原请求。"
+    changed = run("annual-analysis-member-bounded-business-change", parent=parent)
+    assert sent
+    changed_hashes = {row["semantic_input_sha256"] for row in changed["shards"] if not row["reused"]}
+    assert changed_hashes - {row["semantic_input_sha256"] for row in parent["shards"]}
+    assert parent == parent_bytes
+    sent.clear()
+    legacy_parent = copy.deepcopy(parent)
+    legacy_parent["execution_binding"] = _binding_v9()
+    with pytest.raises(ValueError, match="annual_issue_pipeline_parent_binding_mismatch"):
+        run("annual-analysis-member-bounded-legacy-parent", parent=legacy_parent)
+    assert sent == []
+
+
+def test_v10_budget_exhaustion_marks_every_remaining_shard_pending_without_global_closure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    run, findings, sent, control = _member_bounded_runtime_fixture(monkeypatch, tmp_path, 10)
+    control["stop_after_group_calls"] = 1
+    pipeline = run("annual-analysis-member-bounded-pending")
+    assert [len(row["input_finding_ids"]) for row in pipeline["shards"]] == [3, 3, 3, 1]
+    assert [row["status"] for row in pipeline["shards"]] == ["accepted", "pending", "pending", "pending"]
+    assert all(row["reason"] == "task_budget_exhausted" for row in pipeline["shards"][1:])
+    assert len(pipeline["candidates"]) == len(pipeline["member_decisions"]) == len(findings)
+    assert sum(row["disposition"] == "pending" for row in pipeline["member_decisions"]) == 7
+    assert [row["prompt_version"] for row in sent] == ["annual_issue_grouping_v1"]
+    assert pipeline["global_closure"]["closed"] is False
+    assert pipeline["global_closure"]["no_priority_allowed"] is False
+    assert pipeline["status"] == "partial"
+
+
+def test_v9_archive_shards_and_recovery_plan_keep_twelve_member_policy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    run, _findings, _sent, control = _member_bounded_runtime_fixture(monkeypatch, tmp_path, 12)
+    control["stop_after_group_calls"] = 0
+    checkpoint = run("annual-analysis-legacy-policy-reader")
+    checkpoint["execution_binding"] = _binding_v9()
+    root = Path(__file__).resolve().parents[2]
+    prompt = (root / "config" / "prompts" / "annual_issue_grouping_v1.md").read_text(encoding="utf-8")
+    planned = _build_group_shards(
+        _local_exact_duplicate_groups(checkpoint["candidates"]), {}, checkpoint["source_identity"],
+        "offline-mock-model", prompt, execution_binding=checkpoint["execution_binding"],
+    )
+    assert len(planned) == 1 and len(planned[0]["input"]["input_member_finding_ids"]) == 12
+    checkpoint["shards"] = [issue_pipeline._pending_shard(
+        f"group:000:{planned[0]['semantic_sha256'][:16]}", planned[0], "request_size_exceeded",
+    )]
+    checkpoint["audit_summary"] = issue_pipeline._audit_summary_from_shards(checkpoint["shards"])
+    validate_pipeline(checkpoint, identity=checkpoint["source_identity"])
+    assert _annual_issue_pipeline_has_executable_work(root, checkpoint) is False
+    current = copy.deepcopy(checkpoint)
+    current["execution_binding"] = _binding_v10()
+    with pytest.raises(ValueError, match="annual_issue_pipeline_shard_member_invalid"):
+        validate_pipeline(current, identity=current["source_identity"])
+
+
+@pytest.mark.parametrize("mutation", ["duplicate_shard", "duplicate_group", "foreign_representative"])
+def test_v10_reader_rejects_duplicate_or_foreign_member_groups(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mutation: str,
+) -> None:
+    run, _findings, _sent, _control = _member_bounded_runtime_fixture(monkeypatch, tmp_path, 7, exact_family=True)
+    pipeline = run("annual-analysis-member-bounded-repeated-group")
+    if mutation == "duplicate_shard":
+        repeated = copy.deepcopy(pipeline["shards"][0])
+        repeated["shard_id"] = "group:999:" + repeated["semantic_input_sha256"][:16]
+        pipeline["shards"].insert(1, repeated)
+        pipeline["audit_summary"] = issue_pipeline._audit_summary_from_shards(pipeline["shards"])
+    else:
+        shard = pipeline["shards"][0]
+        if mutation == "duplicate_group":
+            shard["input"]["groups"].append(copy.deepcopy(shard["input"]["groups"][0]))
+        else:
+            shard["input"]["groups"][0]["representative_finding_id"] = pipeline["shards"][1]["input_finding_ids"][0]
+        prompt = (Path(__file__).resolve().parents[2] / "config" / "prompts" / "annual_issue_grouping_v1.md").read_text(encoding="utf-8")
+        shard["semantic_input_sha256"] = hashlib.sha256(json.dumps(
+            shard["input"], ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
+        ).encode("utf-8")).hexdigest()
+        shard["request_body_sha256"] = _wire_hash("offline-mock-model", prompt, shard["input"])
+        shard["input_members"] = copy.deepcopy(shard["input"]["groups"])
+        shard["audit"].update(
+            semantic_input_sha256=shard["semantic_input_sha256"], request_body_sha256=shard["request_body_sha256"],
+        )
+    with pytest.raises(ValueError, match="annual_issue_pipeline_shard_"):
+        validate_pipeline(pipeline, identity=pipeline["source_identity"])

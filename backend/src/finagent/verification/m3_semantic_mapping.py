@@ -1,11 +1,12 @@
-"""M3 规则 2 的专属跨表语义映射核验。
+"""M3 规则 2 的跨表语义映射核验。
 
 “归属于上市公司股东”来自主要会计数据表，不能因为数值已核验就自动视为
-合并利润表口径。本模块重新读取第 7 页直接披露的归母净利润，并要求其与
-合并利润表两年归母净利润逐期完全相等。返回的映射 proof 仅在签发进程有效。
-当前重定位逻辑只针对海天味业 603288 的 2024 年报物理第 7 页版式，不是跨公司
-或跨报告期的通用映射。
+合并利润表口径。本模块从同一 PDF 的唯一主要会计数据表重读直接披露的归母
+净利润，并要求其与合并利润表两年归母净利润逐期完全相等。返回的映射 proof
+仅在签发进程有效。定位必须发现实际页、年份、币种、单位和直接归母行；公司
+代码、报告年或物理页码不能作为通用放行条件。
 """
+
 
 from __future__ import annotations
 
@@ -38,7 +39,8 @@ _CURRENCY_UNKNOWN = {"未披露", "未知", "unknown", "undisclosed"}
 
 @dataclass(frozen=True, slots=True)
 class ParentProfitMappingEvidence:
-    """从主要会计数据表第 7 页重新定位的一年金额证据。"""
+    """从主要会计数据表重新定位的一年金额证据。"""
+
 
     year: int
     row_label: str
@@ -66,7 +68,8 @@ class ParentProfitMappingEvidence:
 
 @dataclass(frozen=True, slots=True)
 class ParentProfitSemanticMapping:
-    """绑定同源两年事实与第 7 页交叉核对证据的进程内 proof。"""
+    """绑定同源两年事实与主要会计数据表交叉核对证据的进程内 proof。"""
+
 
     mapping_id: str
     company_id: str
@@ -136,8 +139,9 @@ def verify_parent_profit_semantic_mapping(
     """对两年扣非事实定义唯一的 ``scope=unknown`` 规则专属语义映射。
 
     要求 key-data 事实具有准确 metric_id 和完整原文标签；扣非事实和合并利润表
-    归母净利润均须有唯一的独立 verified 结果。随后从原始 PDF 物理第 7 页按
-    年度表头重定位“归属于上市公司股东的净利润”，并与利润表事实逐年精确对值。
+    归母净利润均须有唯一的独立 verified 结果。随后从同一原始 PDF 发现唯一的
+    “主要会计数据”表，按实际页码和年度表头重定位“归属于上市公司股东的净利润”，
+    并与利润表事实逐年精确对值。
     """
 
     if type(report_year) is not int or not 1900 <= report_year <= 2100:
@@ -148,9 +152,6 @@ def verify_parent_profit_semantic_mapping(
     if issues:
         return ParentProfitMappingCheck(None, tuple(dict.fromkeys(issues)))
     assert key_pair is not None and parent_pair is not None
-
-    if report_year != 2024 or key_pair[0].company_id != "603288":
-        return _failed("规则二语义映射目前仅支持海天味业 603288 的 2024 年报第 7 页版式。")
 
     aligned = (*key_pair, *parent_pair)
     issues.extend(_check_shared_metadata(aligned))
@@ -174,9 +175,7 @@ def verify_parent_profit_semantic_mapping(
     except Exception:
         return _failed("原始文件无法作为 PDF 打开，不能建立跨表语义映射。")
     try:
-        if len(document) < 7:
-            return _failed("原始 PDF 不足 7 页，无法重读主要会计数据表。")
-        evidence, page_issues = _locate_direct_parent_profit(document[6], report_year)
+        evidence, page_issues = _locate_direct_parent_profit(document, report_year)
     finally:
         document.close()
     if page_issues:
@@ -187,8 +186,9 @@ def verify_parent_profit_semantic_mapping(
     parent_values = tuple(item.normalized_value for item in parent_pair)
     if not _same_decimal_values(direct_values, parent_values):
         return _failed(
-            "第 7 页“归属于上市公司股东的净利润”与合并利润表归母净利润至少一年金额不一致。"
+            "主要会计数据表“归属于上市公司股东的净利润”与合并利润表归母净利润至少一年金额不一致。"
         )
+
 
     proof = ParentProfitSemanticMapping(
         mapping_id=f"m3-parent-profit-map-{secrets.token_hex(12)}",
@@ -312,43 +312,81 @@ def _check_verifications(
     return tuple(issues)
 
 
-def _locate_direct_parent_profit(page, report_year: int):
-    page_text = page.get_text("text")
-    compact_text = _compact(page_text).replace("（", "(").replace("）", ")")
-    if "七、近三年主要会计数据和财务指标" not in compact_text:
-        return None, ("PDF 第 7 页缺少预期的主要会计数据章节标题。",)
-    if "(一)主要会计数据" not in compact_text:
-        return None, ("PDF 第 7 页缺少唯一可定位的“主要会计数据”表。",)
-    unit_lines = [
-        line.strip()
-        for line in page_text.splitlines()
-        if "单位" in line and "币种" in line
-    ]
-    if len(unit_lines) != 1 or not _has_cny_yuan_unit(unit_lines[0]):
-        return None, ("PDF 第 7 页主要会计数据表缺少唯一的“单位：元、币种：人民币”披露。",)
-    unit_text = unit_lines[0]
+def _locate_direct_parent_profit(document, report_year: int):
+    located: list[tuple] = []
+    failures: list[str] = []
+    section_pages = 0
+    for page_index, page in enumerate(document):
+        page_number = page_index + 1
+        compact_text = _compact(page.get_text("text")).replace("（", "(").replace("）", ")")
+        section_count = compact_text.count("(一)主要会计数据")
+        if section_count == 0:
+            continue
+        section_pages += 1
+        if section_count > 1:
+            return None, ("同一页出现多个“（一）主要会计数据”小节，无法唯一重定位。",)
+        evidence, issues = _locate_direct_parent_profit_on_page(page, page_number, report_year)
+        if evidence is not None:
+            located.append(evidence)
+        else:
+            failures.extend(issues)
+    if section_pages == 0:
+        return None, ("未找到唯一的“（一）主要会计数据”表。",)
+    if section_pages != 1:
+        return None, ("主要会计数据表或直接归母净利润行不唯一，无法建立跨表语义映射。",)
+    if len(located) != 1:
+        return None, tuple(dict.fromkeys(failures)) or ("未能从主要会计数据表重定位直接归母净利润。",)
+    return located[0], ()
 
+
+def _locate_direct_parent_profit_on_page(page, page_number: int, report_year: int):
     words = tuple(page.get_text("words"))
+    lines = _visual_lines(words)
+    section_ones = [line for line in lines if _normalized_section(line.text) == "(一)主要会计数据"]
+    if len(section_ones) != 1:
+        return None, ("未能唯一定位“（一）主要会计数据”小节。",)
+    section_one = section_ones[0]
+    section_twos = [
+        line for line in lines if _normalized_section(line.text) == "(二)主要财务指标" and line.y0 > section_one.y0
+    ]
+    end_y = section_twos[0].y0 if section_twos else float(page.rect.height)
+    region_words = tuple(word for word in words if section_one.y0 < float(word[1]) < end_y)
+    if not region_words:
+        return None, ("主要会计数据小节内没有可定位文字。",)
+
+    unit_text = _unique_cny_yuan_unit(region_words)
+    if unit_text is None:
+        return None, ("主要会计数据表缺少唯一的“单位：元、币种：人民币”披露。",)
+
     header_words: dict[int, tuple] = {}
     for year in (report_year, report_year - 1):
-        candidates = [
-            word
-            for word in words
-            if 230 <= float(word[1]) <= 275
-            and _YEAR_HEADER_RE.fullmatch(str(word[4]))
-            and int(_YEAR_HEADER_RE.fullmatch(str(word[4])).group(1)) == year
-        ]
+        candidates = []
+        for word in region_words:
+            match = _YEAR_HEADER_RE.fullmatch(str(word[4]))
+            if match is not None and int(match.group(1)) == year:
+                candidates.append(word)
         if len(candidates) != 1:
-            return None, (f"PDF 第 7 页无法唯一定位 {year} 年金额列的年份表头。",)
+            return None, (f"主要会计数据表无法唯一定位 {year} 年金额列的年份表头。",)
         header_words[year] = candidates[0]
 
-    # 主表数据区位于年份表头下方、年末资产表头上方。
     data_header_y = min(float(item[1]) for item in header_words.values())
+    first_year_center = (
+        float(header_words[report_year][0]) + float(header_words[report_year][2])
+    ) / 2
+    title_words = [
+        word
+        for word in region_words
+        if _compact(str(word[4])) == "主要会计数据" and abs(float(word[1]) - data_header_y) <= 8
+    ]
+    if len(title_words) == 1:
+        label_limit = (float(title_words[0][2]) + first_year_center) / 2
+    else:
+        label_limit = min(float(header_words[year][0]) for year in header_words) - 24
     label_lines = _visual_lines(
         tuple(
             word
-            for word in words
-            if float(word[0]) < 170 and data_header_y + 10 < float(word[1]) < 405
+            for word in region_words
+            if float(word[2]) <= label_limit and float(word[1]) > data_header_y + 8
         )
     )
     row_candidates: list[tuple[tuple[_WordLine, ...], str]] = []
@@ -358,15 +396,14 @@ def _locate_direct_parent_profit(page, report_year: int):
             if collected and line.y0 - collected[-1].y1 > 25:
                 break
             collected.append(line)
-            if _compact("".join(item.text for item in collected)) == _DIRECT_LABEL:
+            joined = _compact("".join(item.text for item in collected))
+            if joined == _DIRECT_LABEL:
                 row_candidates.append((tuple(collected), "".join(item.text for item in collected)))
                 break
-            if not _DIRECT_LABEL.startswith(_compact("".join(item.text for item in collected))):
+            if not _DIRECT_LABEL.startswith(joined):
                 break
     if len(row_candidates) != 1:
-        return None, (
-            "PDF 第 7 页无法唯一定位完整原文行“归属于上市公司股东的净利润”。",
-        )
+        return None, ("主要会计数据表无法唯一定位完整原文行“归属于上市公司股东的净利润”。",)
 
     label_group, row_label = row_candidates[0]
     row_y0 = min(line.y0 for line in label_group)
@@ -375,7 +412,7 @@ def _locate_direct_parent_profit(page, report_year: int):
     for year, header in header_words.items():
         header_center = (float(header[0]) + float(header[2])) / 2
         candidates = []
-        for word in words:
+        for word in region_words:
             if not _AMOUNT_RE.fullmatch(str(word[4])):
                 continue
             word_y0, word_y1 = float(word[1]), float(word[3])
@@ -383,7 +420,7 @@ def _locate_direct_parent_profit(page, report_year: int):
             if row_y0 - 2 <= word_y0 and word_y1 <= row_y1 + 2 and abs(center - header_center) <= 25:
                 candidates.append((str(word[4]), word))
         if len(candidates) != 1:
-            return None, (f"PDF 第 7 页完整原文行无法唯一定位 {year} 年金额列。",)
+            return None, (f"主要会计数据表完整原文行无法唯一定位 {year} 年金额列。",)
         amounts_by_year[year] = candidates[0]
 
     evidence: list[ParentProfitMappingEvidence] = []
@@ -392,7 +429,7 @@ def _locate_direct_parent_profit(page, report_year: int):
         try:
             normalized = _amount(raw_value)
         except (InvalidOperation, ValueError):
-            return None, (f"PDF 第 7 页 {year} 年归母净利润金额无法解析为 Decimal。",)
+            return None, (f"主要会计数据表 {year} 年归母净利润金额无法解析为 Decimal。",)
         label_words = tuple(word for line in label_group for word in line.words)
         evidence.append(
             ParentProfitMappingEvidence(
@@ -400,14 +437,35 @@ def _locate_direct_parent_profit(page, report_year: int):
                 row_label=row_label,
                 amount_raw=raw_value,
                 amount_normalized=normalized,
-                page=7,
-                row_region=_region(label_words, 7),
-                value_region=_region((value_word,), 7),
-                year_header_region=_region((header_words[year],), 7),
+                page=page_number,
+                row_region=_region(label_words, page_number),
+                value_region=_region((value_word,), page_number),
+                year_header_region=_region((header_words[year],), page_number),
                 unit_text=unit_text,
             )
         )
     return tuple(evidence), ()
+
+
+def _normalized_section(text: str) -> str:
+    return _compact(text).replace("（", "(").replace("）", ")")
+
+
+def _unique_cny_yuan_unit(words: Sequence[tuple]) -> str | None:
+    lines = _visual_lines(words)
+    hits: list[str] = []
+    for index, line in enumerate(lines):
+        texts = [line.text]
+        if index + 1 < len(lines) and lines[index + 1].y0 - line.y1 <= 16:
+            texts.append(line.text + lines[index + 1].text)
+        for text in texts:
+            if _has_cny_yuan_unit(text):
+                hits.append(text.strip())
+                break
+    unique = list(dict.fromkeys(hits))
+    if len(unique) != 1:
+        return None
+    return unique[0]
 
 
 def _visual_lines(words: Sequence[tuple]) -> tuple[_WordLine, ...]:

@@ -5,8 +5,11 @@ import type {
   AnnualAnalysisResponse,
   AnnualAnalysisSnapshot,
   AnnualIssuePipeline,
+  AnnualIssueExecutionBinding,
   AnnualIssueSupplementEvidence,
   AnnualIssueSupplementEvidenceIndex,
+  AnnualIssueSupplement,
+  AnnualIssueSupplementSection,
   AnnualReportRecord,
   AnnualSourceProvenance,
   CandidateSignal,
@@ -29,6 +32,8 @@ import type {
   AnnualDiscoveryExecutionContract,
   AnnualDiscoveryExecutionBindingV3,
   AnnualDiscoveryExecutionBindingV4,
+  AnnualDiscoveryExecutionBindingV8,
+  AnnualDiscoveryExecutionBindingV5,
   AnnualDiscoveryEvidenceIndex,
   AnnualDiscoveryFinding,
   AnnualModelDiscovery,
@@ -189,6 +194,7 @@ export async function loadAnnualIssueSupplementEvidenceIndex(
     const end = safeNonNegativeInteger(row.end_char, `${path}.end_char`);
     const rawText = requireString(row.raw_text, `${path}.raw_text`);
     const section = requireString(row.section, `${path}.section`);
+    if (!["unknown", "management_discussion", "financial_statements", "notes"].includes(section)) throw invalidResponse(`${path}.section`);
     const roleStatus = requireString(row.role_status, `${path}.role_status`);
     const bboxRecord = requireRecord(row.bbox, `${path}.bbox`);
     exactKeys(bboxRecord, ["x0", "y0", "x1", "y1"], `${path}.bbox`);
@@ -220,7 +226,7 @@ export async function loadAnnualIssueSupplementEvidenceIndex(
     ) throw invalidResponse(`${path} 来源定位或排序无效`);
     return { evidence_id: evidenceId, source_document_id: rowSourceId, source_sha256: rowSourceSha,
       pdf_page: page, block_index: block, start_char: start, end_char: end, bbox, raw_text: rawText,
-      section, role_status: roleStatus as AnnualIssueSupplementEvidence["role_status"], issue_roles: issueRoles, preview_url: previewUrl };
+      section: section as AnnualIssueSupplementSection, role_status: roleStatus as AnnualIssueSupplementEvidence["role_status"], issue_roles: issueRoles, preview_url: previewUrl };
   });
   if (items.length !== expectedSupplements.length) throw invalidResponse("补证原文索引数量与问题处理账不一致");
   for (const item of items) {
@@ -615,7 +621,7 @@ function readModelDiscovery(
   const promptVersion = requireString(value.prompt_version, `${path}.prompt_version`);
   if (
     value.kind !== "fintrace_annual_discovery" ||
-    promptVersion !== "annual_discovery_v1" && promptVersion !== "annual_discovery_v2" && promptVersion !== "annual_discovery_v3" ||
+    promptVersion !== "annual_discovery_v1" && promptVersion !== "annual_discovery_v2" && promptVersion !== "annual_discovery_v3" && promptVersion !== "annual_discovery_v4" && promptVersion !== "annual_discovery_v5" ||
     status !== "completed" && status !== "partial" && status !== "failed" && status !== "not_called" ||
     requireString(value.run_id, `${path}.run_id`) !== expected.runId ||
     requireString(value.company_id, `${path}.company_id`) !== expected.companyId ||
@@ -634,8 +640,8 @@ function readModelDiscovery(
   if (reason !== null && !/^[a-z][a-z0-9_]{0,99}$/.test(reason)) throw invalidResponse(`${path}.reason`);
   const hasExecutionContract = Object.prototype.hasOwnProperty.call(value, "execution_contract");
   if (
-    hasExecutionContract && promptVersion !== "annual_discovery_v2" && promptVersion !== "annual_discovery_v3" ||
-    !hasExecutionContract && promptVersion === "annual_discovery_v3"
+    hasExecutionContract && promptVersion !== "annual_discovery_v2" && promptVersion !== "annual_discovery_v3" && promptVersion !== "annual_discovery_v4" && promptVersion !== "annual_discovery_v5" ||
+    !hasExecutionContract && (promptVersion === "annual_discovery_v3" || promptVersion === "annual_discovery_v4" || promptVersion === "annual_discovery_v5")
   ) {
     throw invalidResponse(`${path}.execution_contract 与发现提示词版本不匹配`);
   }
@@ -643,7 +649,7 @@ function readModelDiscovery(
   const executionContract = hasExecutionContract
     ? readExecutionContract(value.execution_contract, `${path}.execution_contract`, coverage, expected, promptVersion)
     : undefined;
-  if (executionContract?.kind === "fintrace_annual_discovery_execution_v4") {
+  if (executionContract?.kind === "fintrace_annual_discovery_execution_v4" || executionContract?.kind === "fintrace_annual_discovery_execution_v6" || executionContract?.kind === "fintrace_annual_discovery_execution_v7" || executionContract?.kind === "fintrace_annual_discovery_execution_v8" || executionContract?.kind === "fintrace_annual_discovery_execution_v9" || executionContract?.kind === "fintrace_annual_discovery_execution_v10" || executionContract?.kind === "fintrace_annual_discovery_execution_v11") {
     const closedReason = executionContract.scheduler.dispatch_closed_reason;
     const timeDeadlineReason = executionContract.scheduler.time_deadline_reason;
     if (
@@ -791,6 +797,13 @@ function readModelDiscovery(
   };
 }
 
+function isPhasedExecutionBinding(
+  binding: AnnualDiscoveryExecutionBindingV3 | AnnualDiscoveryExecutionBindingV4 | AnnualDiscoveryExecutionBindingV8,
+): binding is AnnualDiscoveryExecutionBindingV4 | AnnualDiscoveryExecutionBindingV8 {
+  return "plan_version" in binding && "execution_version" in binding
+    && binding.plan_version === "annual_discovery_plan_v3" && binding.execution_version === "execution_v4";
+}
+
 function readExecutionContract(
   value: unknown,
   path: string,
@@ -799,37 +812,49 @@ function readExecutionContract(
   promptVersion: AnnualModelDiscovery["prompt_version"],
 ): AnnualDiscoveryExecutionContract {
   const record = requireRecord(value, path);
-  const isV4 = promptVersion === "annual_discovery_v3";
+  const isPhased = promptVersion === "annual_discovery_v3" || promptVersion === "annual_discovery_v4" || promptVersion === "annual_discovery_v5";
+  const envelopeKind = record.kind;
+  if (promptVersion === "annual_discovery_v5") {
+    if (envelopeKind !== "fintrace_annual_discovery_execution_v11") {
+      throw invalidResponse(`${path} 执行契约版本未知`);
+    }
+  } else if (isPhased) {
+    if (promptVersion === "annual_discovery_v4" ? envelopeKind !== "fintrace_annual_discovery_execution_v8" && envelopeKind !== "fintrace_annual_discovery_execution_v9" && envelopeKind !== "fintrace_annual_discovery_execution_v10" : envelopeKind !== "fintrace_annual_discovery_execution_v4" && envelopeKind !== "fintrace_annual_discovery_execution_v6" && envelopeKind !== "fintrace_annual_discovery_execution_v7") {
+      throw invalidResponse(`${path} 执行契约版本未知`);
+    }
+  } else if (envelopeKind !== "fintrace_annual_discovery_execution_v3") {
+    throw invalidResponse(`${path} 执行契约版本未知`);
+  }
   exactKeys(record, [
     "kind", "plan_sha256", "identity_sha256", "binding", "parent_run_id", "provider_admission_count",
     "parent_provider_admission_count", "cumulative_provider_admission_count", "response_count",
     "reused_batches", "batches",
-    ...(isV4 ? ["scheduler", "phase_budget", "timing"] : []),
+    ...(isPhased ? ["scheduler", "phase_budget", "timing"] : []),
   ], path);
   const planSha256 = requireString(record.plan_sha256, `${path}.plan_sha256`).toLowerCase();
   const identitySha256 = requireString(record.identity_sha256, `${path}.identity_sha256`).toLowerCase();
-  const binding = isV4
-    ? readExecutionBindingV4(record.binding, `${path}.binding`, expected)
-    : readExecutionBindingV3(record.binding, `${path}.binding`, expected);
-  const phaseBudget = isV4 ? readDiscoveryPhaseBudget(record.phase_budget, `${path}.phase_budget`) : undefined;
-  const scheduler = isV4 ? readExecutionScheduler(record.scheduler, `${path}.scheduler`) : undefined;
-  const timing = isV4 ? readExecutionTiming(record.timing, `${path}.timing`) : undefined;
+  const binding = promptVersion === "annual_discovery_v5"
+    ? readExecutionBindingV5(record.binding, `${path}.binding`, expected)
+    : isPhased
+      ? readExecutionBindingV4(record.binding, `${path}.binding`, expected, promptVersion === "annual_discovery_v4")
+      : readExecutionBindingV3(record.binding, `${path}.binding`, expected);
+  const phaseBudget = isPhased ? readDiscoveryPhaseBudget(record.phase_budget, `${path}.phase_budget`, String(envelopeKind)) : undefined;
+  const scheduler = isPhased ? readExecutionScheduler(record.scheduler, `${path}.scheduler`) : undefined;
+  const timing = isPhased ? readExecutionTiming(record.timing, `${path}.timing`) : undefined;
   const parentRunId = nullableString(record.parent_run_id, `${path}.parent_run_id`);
   const providerAdmissionCount = safeNonNegativeInteger(record.provider_admission_count, `${path}.provider_admission_count`);
   const parentProviderAdmissionCount = safeNonNegativeInteger(record.parent_provider_admission_count, `${path}.parent_provider_admission_count`);
   const cumulativeProviderAdmissionCount = safeNonNegativeInteger(record.cumulative_provider_admission_count, `${path}.cumulative_provider_admission_count`);
   const responseCount = safeNonNegativeInteger(record.response_count, `${path}.response_count`);
-  const validAttemptReasons = isV4
+  const validAttemptReasons = isPhased
     ? new Set([...SAFE_EXECUTION_ATTEMPT_REASONS, "stage_budget_exhausted", "task_budget_exhausted"])
     : SAFE_EXECUTION_ATTEMPT_REASONS;
   if (
-    record.kind !== (isV4 ? "fintrace_annual_discovery_execution_v4" : "fintrace_annual_discovery_execution_v3") ||
-    isV4 !== (promptVersion === "annual_discovery_v3") ||
     !SHA256_PATTERN.test(planSha256) || !SHA256_PATTERN.test(identitySha256) ||
     planSha256 !== binding.plan_sha256.toLowerCase() ||
     (parentRunId !== null && (!RUN_ID_PATTERN.test(parentRunId) || parentRunId === expected.runId)) ||
     (parentRunId === null && parentProviderAdmissionCount !== 0) ||
-    (isV4 && ((phaseBudget?.scope === "resume") !== (parentRunId !== null))) ||
+    (isPhased && ((phaseBudget?.scope === "resume") !== (parentRunId !== null))) ||
     cumulativeProviderAdmissionCount !== parentProviderAdmissionCount + providerAdmissionCount ||
     responseCount > providerAdmissionCount || providerAdmissionCount > 4096 ||
     parentProviderAdmissionCount > 4096 || cumulativeProviderAdmissionCount > 8192
@@ -872,7 +897,7 @@ function readExecutionContract(
         (providerAdmitted !== (admissionId !== null)) ||
         (attemptStatus === "rejected") !== !providerAdmitted ||
         (attemptStatus === "succeeded") !== responseAccepted ||
-        (!responseAccepted && acceptedFindings !== 0) || acceptedFindings > (isV4 ? 3 : 6)
+        (!responseAccepted && acceptedFindings !== 0) || acceptedFindings > (isPhased ? 3 : 6)
       ) throw invalidResponse(`${attemptPath} 调用尝试字段无效`);
       if (auditIdsAcrossBatches.has(auditId)) {
         throw invalidResponse(`${attemptPath}.audit_id 在 execution_contract 中重复`);
@@ -901,7 +926,7 @@ function readExecutionContract(
         ? reason === "some_findings_rejected"
         : state === "failed"
           ? SAFE_V3_BATCH_FAILURE_REASONS.has(reason ?? "")
-          : (isV4 ? SAFE_V4_UNATTEMPTED_BATCH_REASONS : SAFE_UNATTEMPTED_BATCH_REASONS).has(reason ?? "");
+          : (isPhased ? SAFE_V4_UNATTEMPTED_BATCH_REASONS : SAFE_UNATTEMPTED_BATCH_REASONS).has(reason ?? "");
     if (
       (state === "unattempted") !== (resolution === "unattempted") ||
       resolution === "reused" && (state !== "succeeded" || attempts.length !== 0) ||
@@ -935,7 +960,7 @@ function readExecutionContract(
     !sameJsonValue(reusedBatches, expectedReused) ||
     new Set(reusedBatches).size !== reusedBatches.length ||
     reusedBatches.length > 0 && parentRunId === null ||
-    isV4 && unattemptedBatches.some((batch) =>
+    isPhased && unattemptedBatches.some((batch) =>
       batch.reason !== "awaiting_model" && batch.reason !== scheduler?.dispatch_closed_reason
     ) ||
     reusedBatches.some((index, position) => index < 1 || index > coverage.planned_batches || (position > 0 && reusedBatches[position - 1] >= index)) ||
@@ -948,7 +973,7 @@ function readExecutionContract(
         covered.reason !== batch.reason || covered.accepted_findings === undefined || covered.inherited_findings === undefined ||
         covered.accepted_findings > covered.inherited_findings + attemptAccepted ||
         batch.resolution === "reused" && covered.accepted_findings !== covered.inherited_findings ||
-        isV4 && (
+        isPhased && (
           covered.accepted_findings < covered.inherited_findings ||
           batch.resolution === "executed" && (
             newAccepted + (covered.rejected_findings ?? 0) > acceptedResponses * 3 ||
@@ -971,20 +996,91 @@ function readExecutionContract(
     reused_batches: reusedBatches,
     batches,
   };
-  return isV4
-    ? {
-        kind: "fintrace_annual_discovery_execution_v4",
-        ...common,
-        binding: binding as AnnualDiscoveryExecutionBindingV4,
-        phase_budget: phaseBudget!,
-        scheduler: scheduler!,
-        timing: timing!,
-      }
-    : {
-        kind: "fintrace_annual_discovery_execution_v3",
-        ...common,
-        binding: binding as AnnualDiscoveryExecutionBindingV3,
-      };
+  if (!isPhased) {
+    if ("plan_version" in binding) throw invalidResponse(`${path}.binding 执行版本无效`);
+    return {
+      kind: "fintrace_annual_discovery_execution_v3",
+      ...common,
+      binding,
+    };
+  }
+  if (scheduler === undefined || timing === undefined || phaseBudget === undefined) {
+    throw invalidResponse(`${path} 缺少阶段调度记录`);
+  }
+  if (envelopeKind === "fintrace_annual_discovery_execution_v11") {
+    if (phaseBudget.schema_version !== "annual_analysis_budget_v4" ||
+        !("prompt_version" in binding) || binding.prompt_version !== "annual_discovery_v5") {
+      throw invalidResponse(`${path} 提示词/预算与信封不一致`);
+    }
+    return {
+      kind: "fintrace_annual_discovery_execution_v11",
+      ...common,
+      binding,
+      phase_budget: phaseBudget,
+      scheduler,
+      timing,
+    };
+  }
+  if ("prompt_version" in binding && binding.prompt_version === "annual_discovery_v5") {
+    throw invalidResponse(`${path}.binding 旧信封不能升级提示词`);
+  }
+  if (!isPhasedExecutionBinding(binding)) {
+    throw invalidResponse(`${path}.binding 执行版本无效`);
+  }
+  if (envelopeKind === "fintrace_annual_discovery_execution_v9" || envelopeKind === "fintrace_annual_discovery_execution_v10") {
+    if (phaseBudget.schema_version !== "annual_analysis_budget_v4" || !("prompt_version" in binding)) throw invalidResponse(`${path} 提示词/预算与信封不一致`);
+    return {
+      kind: envelopeKind,
+      ...common,
+      binding,
+      phase_budget: phaseBudget,
+      scheduler,
+      timing,
+    };
+  }
+  if (envelopeKind === "fintrace_annual_discovery_execution_v8") {
+    if (phaseBudget.schema_version !== "annual_analysis_budget_v3" || !("prompt_version" in binding)) throw invalidResponse(`${path} 提示词/预算与信封不一致`);
+    return {
+      kind: "fintrace_annual_discovery_execution_v8",
+      ...common,
+      binding,
+      phase_budget: phaseBudget,
+      scheduler,
+      timing,
+    };
+  }
+  if ("prompt_version" in binding) throw invalidResponse(`${path}.binding 旧信封不能升级提示词`);
+  if (envelopeKind === "fintrace_annual_discovery_execution_v7") {
+    if (phaseBudget.schema_version !== "annual_analysis_budget_v3") throw invalidResponse(`${path}.phase_budget 版本与封装不一致`);
+    return {
+      kind: "fintrace_annual_discovery_execution_v7",
+      ...common,
+      binding,
+      phase_budget: phaseBudget,
+      scheduler,
+      timing,
+    };
+  }
+  if (envelopeKind === "fintrace_annual_discovery_execution_v6") {
+    if (phaseBudget.schema_version !== "annual_analysis_budget_v2") throw invalidResponse(`${path}.phase_budget 版本与封装不一致`);
+    return {
+      kind: "fintrace_annual_discovery_execution_v6",
+      ...common,
+      binding,
+      phase_budget: phaseBudget,
+      scheduler,
+      timing,
+    };
+  }
+  if (phaseBudget.schema_version !== "annual_analysis_budget_v1") throw invalidResponse(`${path}.phase_budget 版本与封装不一致`);
+  return {
+    kind: "fintrace_annual_discovery_execution_v4",
+    ...common,
+    binding,
+    phase_budget: phaseBudget,
+    scheduler,
+    timing,
+  };
 }
 
 function readExecutionBindingV3(
@@ -1037,12 +1133,14 @@ function readExecutionBindingV4(
   value: unknown,
   path: string,
   expected: { companyId: string; reportYear: number; sourceDocumentId: string; sourceSha256: string },
-): AnnualDiscoveryExecutionBindingV4 {
+  active: boolean = false,
+): AnnualDiscoveryExecutionBindingV4 | AnnualDiscoveryExecutionBindingV8 {
   const record = requireRecord(value, path);
   exactKeys(record, [
     "source_sha256", "company_id", "report_year", "source_document_id", "analysis_mode",
     "provider_model_fingerprint", "model", "prompts_sha256", "parser_version", "plan_sha256",
     "m3_binding_sha256", "plan_version", "execution_version",
+    ...(active ? ["prompt_version", "prompt_sha256"] : []),
   ], path);
   const sourceSha256 = requireString(record.source_sha256, `${path}.source_sha256`).toLowerCase();
   const companyId = requireString(record.company_id, `${path}.company_id`);
@@ -1065,12 +1163,16 @@ function readExecutionBindingV4(
     record.plan_version !== "annual_discovery_plan_v3" || record.execution_version !== "execution_v4" ||
     (analysisMode === "model_investigation" ? m3BindingSha256 !== null : m3BindingSha256 === null || !SHA256_PATTERN.test(m3BindingSha256))
   ) throw invalidResponse(`${path} 的 v4 来源或执行版本绑定无效`);
-  return {
+  const promptSha256 = active ? requireString(record.prompt_sha256, `${path}.prompt_sha256`) : undefined;
+  if (active && (record.prompt_version !== "annual_discovery_v4" || promptSha256 === undefined || !SHA256_PATTERN.test(promptSha256))) {
+    throw invalidResponse(`${path} 提示词身份无效`);
+  }
+  const common: AnnualDiscoveryExecutionBindingV4 = {
     source_sha256: sourceSha256,
     company_id: companyId,
     report_year: reportYear,
     source_document_id: sourceDocumentId,
-    analysis_mode: analysisMode as AnnualDiscoveryExecutionBindingV4["analysis_mode"],
+    analysis_mode: analysisMode,
     provider_model_fingerprint: providerFingerprint,
     model,
     prompts_sha256: promptsSha256,
@@ -1080,46 +1182,168 @@ function readExecutionBindingV4(
     plan_version: "annual_discovery_plan_v3",
     execution_version: "execution_v4",
   };
+  if (active && promptSha256 !== undefined) return { ...common, prompt_version: "annual_discovery_v4", prompt_sha256: promptSha256 };
+  return common;
 }
 
-function readDiscoveryPhaseBudget(value: unknown, path: string): AnnualDiscoveryPhaseBudget {
+function readExecutionBindingV5(
+  value: unknown,
+  path: string,
+  expected: { companyId: string; reportYear: number; sourceDocumentId: string; sourceSha256: string },
+): AnnualDiscoveryExecutionBindingV5 {
   const record = requireRecord(value, path);
+  exactKeys(record, [
+    "source_sha256", "company_id", "report_year", "source_document_id", "analysis_mode",
+    "provider_model_fingerprint", "model", "prompts_sha256", "parser_version", "plan_sha256",
+    "m3_binding_sha256", "plan_version", "execution_version", "prompt_version", "prompt_sha256",
+  ], path);
+  const sourceSha256 = requireString(record.source_sha256, `${path}.source_sha256`).toLowerCase();
+  const companyId = requireString(record.company_id, `${path}.company_id`);
+  const reportYear = requireInteger(record.report_year, `${path}.report_year`);
+  const sourceDocumentId = requireString(record.source_document_id, `${path}.source_document_id`);
+  const analysisMode = requireString(record.analysis_mode, `${path}.analysis_mode`);
+  const providerFingerprint = requireString(record.provider_model_fingerprint, `${path}.provider_model_fingerprint`).toLowerCase();
+  const model = requireString(record.model, `${path}.model`);
+  const promptsSha256 = requireString(record.prompts_sha256, `${path}.prompts_sha256`).toLowerCase();
+  const planSha256 = requireString(record.plan_sha256, `${path}.plan_sha256`).toLowerCase();
+  const m3BindingSha256 = nullableString(record.m3_binding_sha256, `${path}.m3_binding_sha256`);
+  const promptSha256 = requireString(record.prompt_sha256, `${path}.prompt_sha256`);
+  if (
+    sourceSha256 !== expected.sourceSha256.toLowerCase() || companyId !== expected.companyId ||
+    reportYear !== expected.reportYear || sourceDocumentId !== expected.sourceDocumentId ||
+    (analysisMode !== "model_investigation" && analysisMode !== "integrated_analysis") ||
+    !SHA256_PATTERN.test(providerFingerprint) || !SHA256_PATTERN.test(promptsSha256) || !SHA256_PATTERN.test(planSha256) ||
+    model.trim() === "" || model.length > 128 || /[\u0000-\u001f\u007f]/.test(model) ||
+    record.parser_version !== "annual-discovery-parser-v3-execution-v5" ||
+    record.plan_version !== "annual_discovery_plan_v4" || record.execution_version !== "execution_v5" ||
+    record.prompt_version !== "annual_discovery_v5" || !SHA256_PATTERN.test(promptSha256) ||
+    (analysisMode === "model_investigation" ? m3BindingSha256 !== null : m3BindingSha256 === null || !SHA256_PATTERN.test(m3BindingSha256))
+  ) throw invalidResponse(`${path} 的 v5 来源或执行版本绑定无效`);
+  return {
+    source_sha256: sourceSha256,
+    company_id: companyId,
+    report_year: reportYear,
+    source_document_id: sourceDocumentId,
+    analysis_mode: analysisMode,
+    provider_model_fingerprint: providerFingerprint,
+    model,
+    prompts_sha256: promptsSha256,
+    parser_version: "annual-discovery-parser-v3-execution-v5",
+    plan_sha256: planSha256,
+    m3_binding_sha256: m3BindingSha256,
+    plan_version: "annual_discovery_plan_v4",
+    execution_version: "execution_v5",
+    prompt_version: "annual_discovery_v5",
+    prompt_sha256: promptSha256,
+  };
+}
+
+function readDiscoveryPhaseBudget(value: unknown, path: string, envelopeKind: string): AnnualDiscoveryPhaseBudget {
+  const record = requireRecord(value, path);
+  const isV9 = envelopeKind === "fintrace_annual_discovery_execution_v9";
+  const isV10 = envelopeKind === "fintrace_annual_discovery_execution_v10";
+  const isBudgetV4 = isV9 || isV10 || envelopeKind === "fintrace_annual_discovery_execution_v11";
+  const isV7 = envelopeKind === "fintrace_annual_discovery_execution_v7" || envelopeKind === "fintrace_annual_discovery_execution_v8";
+  const isV6 = envelopeKind === "fintrace_annual_discovery_execution_v6";
+  const hasReviewCapacity = isV6 || isV7 || isBudgetV4;
+  if (!hasReviewCapacity && envelopeKind !== "fintrace_annual_discovery_execution_v4") {
+    throw invalidResponse(`${path} 执行封装版本未知`);
+  }
   exactKeys(record, [
     "schema_version", "scope", "main_report_limit_seconds", "work_deadline_seconds",
     "finalization_reserve_seconds", "shared_goal_limit", "shared_goal_remaining_at_start",
     "task_provider_attempt_limit", "stage_time_limits_seconds", "stage_provider_attempt_limits",
     "stage_provider_attempt_limits_status",
+    ...(hasReviewCapacity ? ["review_request_limit_chars", "model_call_timeout_seconds"] : []),
+    ...(isBudgetV4 ? ["global_request_limit_chars"] : []),
   ], path);
   const scope = requireString(record.scope, `${path}.scope`);
+  if (scope !== "new_run" && scope !== "resume") throw invalidResponse(`${path}.scope`);
+  const budgetScope: AnnualDiscoveryPhaseBudget["scope"] = scope === "resume" ? "resume" : "new_run";
   const stageSecondsRecord = requireRecord(record.stage_time_limits_seconds, `${path}.stage_time_limits_seconds`);
   exactKeys(stageSecondsRecord, ["annual_discovery", "annual_investigation", "annual_issue_grouping", "annual_review"], `${path}.stage_time_limits_seconds`);
   const stageLimitsRecord = requireRecord(record.stage_provider_attempt_limits, `${path}.stage_provider_attempt_limits`);
   exactKeys(stageLimitsRecord, ["annual_discovery", "annual_investigation", "annual_issue_grouping", "annual_review"], `${path}.stage_provider_attempt_limits`);
-  const isResume = scope === "resume";
-  const expectedTaskLimit = isResume ? 20 : 30;
-  const expectedStageLimits: AnnualDiscoveryPhaseBudget["stage_provider_attempt_limits"] = isResume
-    ? { annual_discovery: 14, annual_investigation: 2, annual_issue_grouping: 2, annual_review: 2 }
-    : { annual_discovery: 18, annual_investigation: 2, annual_issue_grouping: 8, annual_review: 2 };
+  const isResume = budgetScope === "resume";
+  const expectedTaskLimit: 20 | 30 = isResume ? 20 : 30;
+  const expectedStageLimits = isResume
+    ? { annual_discovery: 14, annual_investigation: 2, annual_issue_grouping: 2, annual_review: 2 } as const
+    : { annual_discovery: 18, annual_investigation: 2, annual_issue_grouping: 8, annual_review: 2 } as const;
   const sharedGoalLimit = record.shared_goal_limit === null
     ? null
     : safeNonNegativeInteger(record.shared_goal_limit, `${path}.shared_goal_limit`);
   const sharedGoalRemaining = record.shared_goal_remaining_at_start === null
     ? null
     : safeNonNegativeInteger(record.shared_goal_remaining_at_start, `${path}.shared_goal_remaining_at_start`);
+  const expectedSchema = isBudgetV4 ? "annual_analysis_budget_v4" : isV7 ? "annual_analysis_budget_v3" : isV6 ? "annual_analysis_budget_v2" : "annual_analysis_budget_v1";
+  const expectedMain = isV7 || isBudgetV4 ? 375 : isV6 ? 345 : 300;
+  const expectedWork = isV7 || isBudgetV4 ? 360 : isV6 ? 330 : 285;
+  const expectedGrouping = isV7 || isBudgetV4 ? 90 : isV6 ? 60 : 35;
+  const expectedReview = isV7 || isBudgetV4 || isV6 ? 45 : 25;
+  const expectedTimeout = isV7 || isBudgetV4 ? 90 : isV6 ? 60 : null;
+  const reviewLimit = hasReviewCapacity ? safeNonNegativeInteger(record.review_request_limit_chars, `${path}.review_request_limit_chars`) : null;
+  const modelTimeout = hasReviewCapacity ? record.model_call_timeout_seconds : null;
   if (
-    record.schema_version !== "annual_analysis_budget_v1" || !isResume && scope !== "new_run" ||
-    record.main_report_limit_seconds !== 300 || record.work_deadline_seconds !== 285 ||
+    record.schema_version !== expectedSchema || !isResume && scope !== "new_run" ||
+    record.main_report_limit_seconds !== expectedMain || record.work_deadline_seconds !== expectedWork ||
     record.finalization_reserve_seconds !== 15 || record.task_provider_attempt_limit !== expectedTaskLimit ||
     record.stage_provider_attempt_limits_status !== "configured" ||
     sharedGoalLimit === null && sharedGoalRemaining !== null ||
     sharedGoalLimit !== null && sharedGoalRemaining !== null && sharedGoalRemaining > sharedGoalLimit ||
     stageSecondsRecord.annual_discovery !== 150 || stageSecondsRecord.annual_investigation !== 60 ||
-    stageSecondsRecord.annual_issue_grouping !== 35 || stageSecondsRecord.annual_review !== 25 ||
-    stageNames.some((name) => stageLimitsRecord[name] !== expectedStageLimits[name])
+    stageSecondsRecord.annual_issue_grouping !== expectedGrouping || stageSecondsRecord.annual_review !== expectedReview ||
+    stageNames.some((name) => stageLimitsRecord[name] !== expectedStageLimits[name]) ||
+    hasReviewCapacity && (reviewLimit !== (isBudgetV4 ? 128000 : 40000) || typeof modelTimeout !== "number" || !Number.isFinite(modelTimeout) || modelTimeout !== expectedTimeout) ||
+    isBudgetV4 && record.global_request_limit_chars !== 96000
   ) throw invalidResponse(`${path} 的阶段预算与执行版本不匹配`);
+  if (isV7 || isBudgetV4) {
+    const commonBudget = {
+      scope: budgetScope,
+      main_report_limit_seconds: 375,
+      work_deadline_seconds: 360,
+      finalization_reserve_seconds: 15,
+      shared_goal_limit: sharedGoalLimit,
+      shared_goal_remaining_at_start: sharedGoalRemaining,
+      task_provider_attempt_limit: expectedTaskLimit,
+      stage_time_limits_seconds: {
+        annual_discovery: 150,
+        annual_investigation: 60,
+        annual_issue_grouping: 90,
+        annual_review: 45,
+      },
+      stage_provider_attempt_limits: expectedStageLimits,
+      stage_provider_attempt_limits_status: "configured",
+      model_call_timeout_seconds: 90,
+    } as const;
+    return isBudgetV4
+      ? { ...commonBudget, schema_version: "annual_analysis_budget_v4", global_request_limit_chars: 96000, review_request_limit_chars: 128000 }
+      : { ...commonBudget, schema_version: "annual_analysis_budget_v3", review_request_limit_chars: 40000 };
+  }
+  if (isV6) {
+    return {
+      schema_version: "annual_analysis_budget_v2",
+      scope: budgetScope,
+      main_report_limit_seconds: 345,
+      work_deadline_seconds: 330,
+      finalization_reserve_seconds: 15,
+      shared_goal_limit: sharedGoalLimit,
+      shared_goal_remaining_at_start: sharedGoalRemaining,
+      task_provider_attempt_limit: expectedTaskLimit,
+      stage_time_limits_seconds: {
+        annual_discovery: 150,
+        annual_investigation: 60,
+        annual_issue_grouping: 60,
+        annual_review: 45,
+      },
+      stage_provider_attempt_limits: expectedStageLimits,
+      stage_provider_attempt_limits_status: "configured",
+      review_request_limit_chars: 40000,
+      model_call_timeout_seconds: 60,
+    };
+  }
   return {
     schema_version: "annual_analysis_budget_v1",
-    scope: scope as AnnualDiscoveryPhaseBudget["scope"],
+    scope: budgetScope,
     main_report_limit_seconds: 300,
     work_deadline_seconds: 285,
     finalization_reserve_seconds: 15,
@@ -1388,7 +1612,7 @@ function readDiscoveryBatchResult(
   const restored = isV2 ? safeNonNegativeInteger(record.restored_quotes, `${path}.restored_quotes`) : 0;
   const resolution = executionV3 ? requireString(record.resolution, `${path}.resolution`) : undefined;
   const inherited = executionV3 ? safeNonNegativeInteger(record.inherited_findings, `${path}.inherited_findings`) : undefined;
-  const unattemptedBatchReasons = promptVersion === "annual_discovery_v3"
+  const unattemptedBatchReasons = promptVersion === "annual_discovery_v3" || promptVersion === "annual_discovery_v4" || promptVersion === "annual_discovery_v5"
     ? SAFE_V4_UNATTEMPTED_BATCH_REASONS
     : SAFE_UNATTEMPTED_BATCH_REASONS;
   const pages = requireArray(record.pages, `${path}.pages`).map((page, pageIndex) => safeNonNegativeInteger(page, `${path}.pages[${pageIndex}]`));
@@ -1776,6 +2000,11 @@ function readReport(value: Record<string, unknown>, path: string): AnnualAnalysi
           path + ".model_review",
           { runId, companyId, reportYear, sourceDocumentId, sourceSha256 },
         );
+  const modelDiscovery = value.model_discovery === undefined
+    ? undefined
+    : readModelDiscovery(requireRecord(value.model_discovery, path + ".model_discovery"), path + ".model_discovery", {
+        runId, companyId, reportYear, sourceDocumentId, sourceSha256,
+      });
   const modelIssuePipeline =
     value.model_issue_pipeline === undefined
       ? undefined
@@ -1784,6 +2013,21 @@ function readReport(value: Record<string, unknown>, path: string): AnnualAnalysi
         : readAnnualIssuePipeline(requireRecord(value.model_issue_pipeline, path + ".model_issue_pipeline"), path + ".model_issue_pipeline", {
             runId, companyId, reportYear, sourceDocumentId, sourceSha256,
           });
+  if (
+    modelDiscovery?.prompt_version === "annual_discovery_v4" &&
+    modelIssuePipeline !== undefined && modelIssuePipeline !== null &&
+    (modelIssuePipeline.execution_binding === undefined || modelIssuePipeline.input.discovery_prompt_version !== "annual_discovery_v4")
+  ) throw invalidResponse(path + ".model_issue_pipeline 缺少匹配的执行绑定");
+  if (
+    modelDiscovery?.prompt_version === "annual_discovery_v5" &&
+    (modelIssuePipeline === undefined || modelIssuePipeline === null ||
+      modelIssuePipeline.execution_binding?.execution_version !== "execution_v11" ||
+      modelIssuePipeline.input.discovery_prompt_version !== "annual_discovery_v5")
+  ) throw invalidResponse(path + ".model_issue_pipeline 缺少匹配的 v11 执行绑定");
+  if (
+    modelIssuePipeline?.execution_binding?.execution_version === "execution_v11" &&
+    modelDiscovery?.prompt_version !== "annual_discovery_v5"
+  ) throw invalidResponse(path + ".model_discovery 与 v11 执行绑定不一致");
   if (modelIssuePipeline !== undefined && modelIssuePipeline !== null && value.model_investigation !== undefined && value.model_investigation !== null) {
     const nested = requireRecord(value.model_investigation, path + ".model_investigation").model_issue_pipeline;
     if (nested !== undefined && !sameJsonValue(nested, value.model_issue_pipeline)) {
@@ -1845,16 +2089,7 @@ function readReport(value: Record<string, unknown>, path: string): AnnualAnalysi
         : value.model_investigation === null
           ? null
           : requireRecord(value.model_investigation, path + ".model_investigation"),
-    model_discovery:
-      value.model_discovery === undefined
-        ? undefined
-        : readModelDiscovery(requireRecord(value.model_discovery, path + ".model_discovery"), path + ".model_discovery", {
-            runId,
-            companyId,
-            reportYear,
-            sourceDocumentId,
-            sourceSha256,
-          }),
+    model_discovery: modelDiscovery,
     model_review: modelReview,
     model_issue_pipeline: modelIssuePipeline,
   };
@@ -1886,10 +2121,29 @@ function readAnnualIssuePipeline(
     requireInteger(input.candidate_count, path + ".input.candidate_count") < 0 ||
     typeof input.discovery_coverage_complete !== "boolean"
   ) throw invalidResponse(path + ".input");
+  const executionBinding = value.execution_binding === undefined ? undefined : readIssueExecutionBinding(value.execution_binding, path + ".execution_binding");
+  // Unbound waiting states are internal only; published v4/v5 checkpoints carry an exact binding.
+  if ((input.discovery_prompt_version === "annual_discovery_v4" || input.discovery_prompt_version === "annual_discovery_v5") && executionBinding === undefined) {
+    throw invalidResponse(path + ".execution_binding 缺少发现版本对应的执行绑定");
+  }
+  if (executionBinding !== undefined) {
+    const isV11 = executionBinding.execution_version === "execution_v11";
+    const active = isV11 || executionBinding.execution_version === "execution_v8" || executionBinding.execution_version === "execution_v9" || executionBinding.execution_version === "execution_v10";
+    if (input.discovery_prompt_version !== (isV11 ? "annual_discovery_v5" : active ? "annual_discovery_v4" : "annual_discovery_v3")) throw invalidResponse(path + ".input.discovery_prompt_version");
+    const retrieval = requireRecord(value.retrieval_coverage, path + ".retrieval_coverage");
+    if (retrieval.selection_algorithm_version !== (active ? "source_anchor_then_ngram_v2" : "section_filter_then_ngram_overlap_v1")) throw invalidResponse(path + ".retrieval_coverage.selection_algorithm_version");
+  }
   const candidates = readRecordArray(value.candidates, path + ".candidates");
   const issues = readRecordArray(value.issues, path + ".issues");
   const memberDecisions = readRecordArray(value.member_decisions, path + ".member_decisions");
-  const supplements = readRecordArray(value.supplements, path + ".supplements");
+  const supplements = readRecordArray(value.supplements, path + ".supplements").map((item, index) => {
+    const supplementPath = `${path}.supplements[${index}]`;
+    const active = executionBinding?.execution_version === "execution_v8" || executionBinding?.execution_version === "execution_v9" || executionBinding?.execution_version === "execution_v10" || executionBinding?.execution_version === "execution_v11";
+    const sections = active ? ["unknown", "management_discussion", "financial_statements", "notes"] : ["management_discussion", "financial_statements", "notes"];
+    const reasons = active ? ["source_anchor_context", "adjacent_source_context", "same_source_ngram_context_match"] : ["same_source_keyword_context_match"];
+    if (!sections.includes(requireString(item.section, supplementPath + ".section")) || !reasons.includes(requireString(item.selection_reason, supplementPath + ".selection_reason"))) throw invalidResponse(supplementPath + " provenance");
+    return item as AnnualIssueSupplement;
+  });
   const globalClosure = requireRecord(value.global_closure, path + ".global_closure");
   const presentation = requireRecord(value.presentation_order, path + ".presentation_order");
   exactKeys(presentation, ["schema_version", "issue_order", "candidate_order"], path + ".presentation_order");
@@ -1962,7 +2216,51 @@ function readAnnualIssuePipeline(
     ...(value.shards === undefined ? {} : { shards: readRecordArray(value.shards, path + ".shards") }),
     ...(value.audit_summary === undefined ? {} : { audit_summary: requireRecord(value.audit_summary, path + ".audit_summary") }),
     ...(value.verification_notice === undefined ? {} : { verification_notice: requireString(value.verification_notice, path + ".verification_notice") }),
+    ...(executionBinding === undefined ? {} : { execution_binding: executionBinding }),
   };
+}
+
+function readIssueExecutionBinding(value: unknown, path: string): AnnualIssueExecutionBinding {
+  const record = requireRecord(value, path);
+  if (record.kind === "fintrace_annual_execution_binding_v5" && record.execution_version === "execution_v5") {
+    exactKeys(record, ["kind", "execution_version"], path);
+    return { kind: record.kind, execution_version: record.execution_version };
+  }
+  const isV6 = record.kind === "fintrace_annual_execution_binding_v6" && record.execution_version === "execution_v6";
+  const isV7 = record.kind === "fintrace_annual_execution_binding_v7" && record.execution_version === "execution_v7";
+  const isV8 = record.kind === "fintrace_annual_execution_binding_v8" && record.execution_version === "execution_v8";
+  const isV9 = record.kind === "fintrace_annual_execution_binding_v9" && record.execution_version === "execution_v9";
+  const isV10 = record.kind === "fintrace_annual_execution_binding_v10" && record.execution_version === "execution_v10";
+  const isV11 = record.kind === "fintrace_annual_execution_binding_v11" && record.execution_version === "execution_v11";
+  const isBudgetV4 = isV9 || isV10 || isV11;
+  if (!isV6 && !isV7 && !isV8 && !isBudgetV4) throw invalidResponse(path + " execution version");
+  exactKeys(record, [
+    "kind", "execution_version", "budget_contract_version", "review_request_limit_chars", "model_call_timeout_seconds",
+    ...(isV8 || isBudgetV4 ? ["supplement_retrieval_version"] : []),
+    ...(isBudgetV4 ? ["global_request_limit_chars"] : []),
+    ...(isV10 || isV11 ? ["grouping_shard_plan_version", "grouping_shard_max_members"] : []),
+  ], path);
+  if (record.review_request_limit_chars !== (isBudgetV4 ? 128000 : 40000) || record.model_call_timeout_seconds !== (isV6 ? 60 : 90) || record.budget_contract_version !== (isV6 ? "annual_analysis_budget_v2" : isBudgetV4 ? "annual_analysis_budget_v4" : "annual_analysis_budget_v3")) throw invalidResponse(path + " budget mapping");
+  if (isV11) {
+    if (record.global_request_limit_chars !== 96000 || record.supplement_retrieval_version !== "source_anchor_then_ngram_v2") throw invalidResponse(path + " global capacity or retrieval version");
+    if (record.grouping_shard_plan_version !== "member_bounded_v2" || requireInteger(record.grouping_shard_max_members, path + ".grouping_shard_max_members") !== 3) throw invalidResponse(path + " grouping shard plan");
+    return { kind: "fintrace_annual_execution_binding_v11", execution_version: "execution_v11", budget_contract_version: "annual_analysis_budget_v4", global_request_limit_chars: 96000, review_request_limit_chars: 128000, model_call_timeout_seconds: 90, supplement_retrieval_version: "source_anchor_then_ngram_v2", grouping_shard_plan_version: "member_bounded_v2", grouping_shard_max_members: 3 };
+  }
+  if (isV10) {
+    if (record.global_request_limit_chars !== 96000 || record.supplement_retrieval_version !== "source_anchor_then_ngram_v2") throw invalidResponse(path + " global capacity or retrieval version");
+    if (record.grouping_shard_plan_version !== "member_bounded_v2" || record.grouping_shard_max_members !== 3) throw invalidResponse(path + " grouping shard plan");
+    return { kind: "fintrace_annual_execution_binding_v10", execution_version: "execution_v10", budget_contract_version: "annual_analysis_budget_v4", global_request_limit_chars: 96000, review_request_limit_chars: 128000, model_call_timeout_seconds: 90, supplement_retrieval_version: "source_anchor_then_ngram_v2", grouping_shard_plan_version: "member_bounded_v2", grouping_shard_max_members: 3 };
+  }
+  if (isV9) {
+    if (record.global_request_limit_chars !== 96000 || record.supplement_retrieval_version !== "source_anchor_then_ngram_v2") throw invalidResponse(path + " global capacity or retrieval version");
+    return { kind: "fintrace_annual_execution_binding_v9", execution_version: "execution_v9", budget_contract_version: "annual_analysis_budget_v4", global_request_limit_chars: 96000, review_request_limit_chars: 128000, model_call_timeout_seconds: 90, supplement_retrieval_version: "source_anchor_then_ngram_v2" };
+  }
+  if (isV8) {
+    if (record.supplement_retrieval_version !== "source_anchor_then_ngram_v2") throw invalidResponse(path + " retrieval version");
+    return { kind: "fintrace_annual_execution_binding_v8", execution_version: "execution_v8", budget_contract_version: "annual_analysis_budget_v3", review_request_limit_chars: 40000, model_call_timeout_seconds: 90, supplement_retrieval_version: "source_anchor_then_ngram_v2" };
+  }
+  if (isV7) return { kind: "fintrace_annual_execution_binding_v7", execution_version: "execution_v7", budget_contract_version: "annual_analysis_budget_v3", review_request_limit_chars: 40000, model_call_timeout_seconds: 90 };
+  return { kind: "fintrace_annual_execution_binding_v6", execution_version: "execution_v6", budget_contract_version: "annual_analysis_budget_v2", review_request_limit_chars: 40000, model_call_timeout_seconds: 60 };
 }
 
 function readIssueDisplayReason(value: unknown, path: string): string {

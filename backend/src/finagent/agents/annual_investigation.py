@@ -19,6 +19,7 @@ from typing import Literal, TypedDict
 
 from finagent.audit import AuditPersistError, EvidenceRef, audited_complete_chat
 from finagent.audit.audited_chat import repository_runs_root
+from finagent.core.annual_work_budget import MODEL_CALL_TIMEOUT_SECONDS
 from finagent.core.model_settings import ModelSettings
 from finagent.llm.chat_completion import ChatMessage
 from finagent.retrieval.annual_context import (
@@ -247,6 +248,7 @@ def run_annual_investigation(
     *,
     run_dir: str | Path | None = None,
     reusable_items: Sequence[Mapping[str, object]] = (),
+    reusable_narrative_evidences: Sequence[NarrativeSnippet] = (),
     checkpoint_callback: Callable[[Mapping[str, object]], None] | None = None,
     parsed_pdf: ParsedTextPdf | None = None,
 ) -> AnnualInvestigationResult:
@@ -264,6 +266,19 @@ def run_annual_investigation(
     if chosen_run_dir.resolve() != expected_run_dir.resolve():
         raise ValueError("run_dir 必须与 report.run_id 对应的 artifacts/runs 子目录一致。")
     reusable = _normalize_reusable_items(reusable_items)
+    inherited = _same_source_snippets(
+        reusable_narrative_evidences,
+        str(identity["source_document_id"]),
+        str(identity["source_sha256"]),
+    )
+    inherited_by_id = {item.evidence_id: item for item in inherited}
+    for item in reusable.values():
+        if any(
+            evidence_id not in inherited_by_id
+            or item.signal_id not in inherited_by_id[evidence_id].signal_ids
+            for evidence_id in item.narrative_evidence_ids
+        ):
+            raise ValueError("annual_investigation_reusable_evidence_missing")
     prompt_text = _load_prompt()
     graph = build_annual_investigation_graph()
     state = graph.invoke(
@@ -286,7 +301,7 @@ def run_annual_investigation(
             "model_call_attempt_count": 0,
             "stop_reason": None,
             "supplementary_retrieval_used": False,
-            "context_snippets": [],
+            "context_snippets": list(inherited),
             "supplementary_evidence_ids": [],
             "items": [reusable[key] for key in SUPPORTED_SIGNAL_IDS if key in reusable],
             "reusable_items": reusable,
@@ -348,6 +363,12 @@ def _initial_retrieval_node(state: AnnualInvestigationState) -> dict[str, object
             "initial_context_result": None,
             "overall_reason": "no_supported_candidate_signal",
         }
+    if not candidates:
+        return {
+            "candidate_signals": [],
+            "initial_context_result": None,
+            "overall_reason": None,
+        }
     try:
         context = retrieve_annual_context(
             state["report"],
@@ -369,6 +390,7 @@ def _initial_retrieval_node(state: AnnualInvestigationState) -> dict[str, object
         state["source_document_id"],
         state["source_sha256"],
     )
+    snippets = _merge_bounded_snippets(state.get("context_snippets", []), snippets)
     return {
         "candidate_signals": candidates,
         "initial_context_result": context,
@@ -440,6 +462,7 @@ def _call_model_node(state: AnnualInvestigationState) -> dict[str, object]:
             evidence_refs=[EvidenceRef(state["source_document_id"], page) for page in pages],
             prompt_version=PROMPT_VERSION,
             call_stage="annual_investigation",
+            timeout_seconds=MODEL_CALL_TIMEOUT_SECONDS,
         )
     except Exception as exc:
         failure_reason = _safe_model_failure_reason(exc)

@@ -221,8 +221,8 @@ def test_cross_process_writers_allocate_monotonic_unique_sequences(tmp_path: Pat
         worker.join(timeout=15)
     try:
         assert [worker.exitcode for worker in workers] == [0, 0]
-        assert sorted(result[1] for result in results if result[0] == "ok") == [1, 2]
-        assert all(result[0] == "ok" for result in results)
+        assert all(result[0] == "ok" for result in results), results
+        assert sorted(result[1] for result in results) == [1, 2]
         current = load_current_annual_checkpoint(tmp_path, _RUN_ID)
         assert current is not None and current.sequence == 2
     finally:
@@ -230,6 +230,47 @@ def test_cross_process_writers_allocate_monotonic_unique_sequences(tmp_path: Pat
             if worker.is_alive():
                 worker.terminate()
                 worker.join(timeout=5)
+
+
+def test_lock_file_initialization_by_another_process_does_not_reject_same_inode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, snapshot = _archive(tmp_path)
+    lock_path = tmp_path / "artifacts" / "runs" / _RUN_ID / ".checkpoint-writer.lock"
+    lock_path.touch()
+    context = multiprocessing.get_context("spawn")
+    start = context.Event()
+    output = context.Queue()
+    worker = context.Process(
+        target=_save_checkpoint_in_process,
+        args=(str(tmp_path), {**snapshot, "state": "running"}, start, output),
+    )
+    worker.start()
+    original_open = checkpoints.os.open
+    other_result = []
+
+    def open_after_other_writer(path, flags, *args, **kwargs):
+        if Path(path) == lock_path and not start.is_set():
+            # Model the legacy initialization window without replacing the inode.
+            with lock_path.open("r+b") as lock_file:
+                lock_file.truncate(1)
+            start.set()
+            other_result.append(output.get(timeout=15))
+            assert other_result == [("ok", 1)]
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(checkpoints.os, "open", open_after_other_writer)
+    try:
+        record = save_annual_checkpoint(tmp_path, _RUN_ID, {**snapshot, "state": "partial"})
+        assert record.sequence == 2
+        current = load_current_annual_checkpoint(tmp_path, _RUN_ID)
+        assert current is not None and current.sequence == 2
+    finally:
+        worker.join(timeout=15)
+        if worker.is_alive():
+            worker.terminate()
+            worker.join(timeout=5)
+    assert worker.exitcode == 0
 
 
 @pytest.mark.parametrize(

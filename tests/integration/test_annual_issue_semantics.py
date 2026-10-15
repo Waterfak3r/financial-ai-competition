@@ -820,7 +820,7 @@ class _LoopbackFixture:
             raise ValueError("Chat request did not contain system and user messages")
         system = messages[0].get("content", "") if isinstance(messages[0], dict) else ""
         user = messages[1].get("content", "") if isinstance(messages[1], dict) else ""
-        if "annual_discovery_v3" in system:
+        if "annual_discovery_v4" in system:
             status, response, meta = _discovery_fixture(self.case, request)
             return status, response, "annual_discovery", meta
         try:
@@ -1330,7 +1330,7 @@ def _validate_issue_case(outcome: dict[str, Any], source: dict[str, Any], proble
         problems,
     )
     _require(archive.snapshot is not None, f"{case}: strict annual report reader did not expose verified checkpoint seal metadata", problems)
-    _require(discovery.get("prompt_version") == "annual_discovery_v3", f"{case}: discovery did not use LangGraph v3 prompt", problems)
+    _require(discovery.get("prompt_version") == "annual_discovery_v4", f"{case}: discovery did not use the current prompt", problems)
     contract = discovery.get("execution_contract") if isinstance(discovery.get("execution_contract"), dict) else {}
     contract_binding = contract.get("binding") if isinstance(contract.get("binding"), dict) else {}
     _require(contract_binding.get("plan_version") == "annual_discovery_plan_v3", f"{case}: compact v3 discovery plan was not used", problems)

@@ -41,16 +41,31 @@ from finagent.core.annual_recovery import (
 )
 from finagent.core.model_call_ledger import close_admission_gate, open_admission_gate
 from finagent.core.model_call_ledger import read_gate_stage_admission_counts
+from finagent.core.model_call_ledger import (
+    ModelCallAdmissionError,
+    ModelCallLedgerReadError,
+    read_shared_goal_budget,
+)
 from finagent.core.annual_work_budget import (
+    BUDGET_CONTRACT_VERSION,
     DISCOVERY_BUDGET_SECONDS,
     FINALIZATION_RESERVE_SECONDS,
     FINAL_REVIEW_BUDGET_SECONDS,
     FIXED_INVESTIGATION_BUDGET_SECONDS,
+    GLOBAL_REQUEST_LIMIT_CHARS,
     ISSUE_GROUPING_RESERVED_SECONDS,
+    MAIN_REPORT_BUDGET_SECONDS,
+    MODEL_CALL_TIMEOUT_SECONDS,
     NEW_RUN_ATTEMPT_BUDGET,
     NEW_RUN_STAGE_ATTEMPT_BUDGETS,
     RESUME_ATTEMPT_BUDGET,
     RESUME_STAGE_ATTEMPT_BUDGETS,
+    REVIEW_REQUEST_LIMIT_CHARS,
+    archived_budget_contract_v2,
+    archived_budget_contract_v3,
+    archived_runtime_stage_time_limits_v1,
+    archived_runtime_stage_time_limits_v2,
+    archived_runtime_stage_time_limits_v3,
     runtime_stage_time_limits,
 )
 
@@ -94,6 +109,19 @@ class CliResult:
     returncode: int
     stdout: str
     stderr: str
+
+
+def _sealed_final_archive_status(archive: Any) -> str | None:
+    snapshot = archive.snapshot
+    if isinstance(snapshot, Mapping):
+        if snapshot.get("is_partial") is True:
+            return None
+        terminal = snapshot.get("state")
+    else:
+        terminal = archive.manifest_summary.get("status")
+    if terminal in {"completed", "completed_with_issues"}:
+        return str(terminal)
+    return None
 
 
 class AnnualAnalysisJobService:
@@ -151,7 +179,7 @@ class AnnualAnalysisJobService:
             )
         except RuntimeError:
             raise AnnualAnalysisJobError(
-                500, "analysis_budget_invalid", "年度分析运行时限配置无效，未创建任务。"
+                500, "analysis_budget_invalid", "年度分析预算或共同账本配置无效，未创建任务。"
             ) from None
         if normalized["mode"] in {"model_investigation", "integrated_analysis"}:
             capability = get_annual_analysis_capabilities(self.project_root)
@@ -251,11 +279,27 @@ class AnnualAnalysisJobService:
                 raise AnnualAnalysisJobError(404, "job_not_found", "找不到该年度分析任务。")
             self._states[checked] = state
             state = dict(state)
+        # Read once outside the service lock. All projections below describe
+        # this verified generation (or this read's failure); the next GET must
+        # strictly read again. Ellipsis in projection defaults means no read
+        # was supplied, whereas None is an already failed/unavailable read.
+        strict_archive: Any | None = None
+        strict_archive_error: Exception | None = None
+        run_id = state.get("run_id")
+        if isinstance(run_id, str):
+            try:
+                strict_archive = load_annual_report(self.project_root, run_id)
+            except Exception as exc:
+                strict_archive_error = exc
         public = _public_state(state)
-        public["result_availability"] = _result_availability_projection(self.project_root, state)
-        public["recovery_progress"] = self._recovery_progress_projection(state)
-        public["recovery_capability"] = self._recovery_capability_projection(state, public["result_availability"])
-        recovery = _discovery_recovery_projection(self.project_root, state)
+        public["result_availability"] = _result_availability_projection(
+            self.project_root, state, archive=strict_archive, archive_error=strict_archive_error,
+        )
+        public["recovery_progress"] = self._recovery_progress_projection(state, archive=strict_archive)
+        public["recovery_capability"] = self._recovery_capability_projection(
+            state, public["result_availability"], archive=strict_archive, archive_error=strict_archive_error,
+        )
+        recovery = _discovery_recovery_projection(self.project_root, state, archive=strict_archive)
         if recovery is not None:
             public["recovery"] = recovery
         if state.get("status") == "running" and state.get("stage") == "annual_analysis_cli":
@@ -263,9 +307,9 @@ class AnnualAnalysisJobService:
             if progress is not None:
                 public["discovery_progress"] = progress
         budget = _analysis_budget_projection(
-            self.project_root,
-            state,
+            self.project_root, state,
             progress=public.get("discovery_progress") if isinstance(public.get("discovery_progress"), Mapping) else None,
+            archive=strict_archive,
         )
         if budget is not None:
             public["analysis_budget"] = budget
@@ -381,7 +425,7 @@ class AnnualAnalysisJobService:
             normalized,
             settings=settings,
             archive=archive,
-            require_issue_pipeline_v5=True,
+            require_issue_pipeline=True,
         )
         if capability.get("can_resume") is not True:
             reason = _public_recovery_reason(capability.get("reason"))
@@ -395,7 +439,7 @@ class AnnualAnalysisJobService:
             budget_contract = _job_budget_contract("resume")
         except RuntimeError:
             raise AnnualAnalysisJobError(
-                500, "analysis_budget_invalid", "年度分析运行时限配置无效，未创建续跑任务。"
+                500, "analysis_budget_invalid", "年度分析预算或共同账本配置无效，未创建续跑任务。"
             ) from None
 
         if not self._slots.acquire(blocking=False):
@@ -1385,14 +1429,8 @@ class AnnualAnalysisJobService:
             archive = load_annual_report(self.project_root, run_id)
         except Exception:
             return False
-        snapshot = archive.snapshot
-        if isinstance(snapshot, Mapping):
-            if snapshot.get("is_partial") is True:
-                return False
-            terminal = snapshot.get("state")
-        else:
-            terminal = archive.manifest_summary.get("status")
-        if terminal not in {"completed", "completed_with_issues"}:
+        terminal = _sealed_final_archive_status(archive)
+        if terminal is None:
             return False
         with self._lock:
             state = self._load_persisted_state_locked(job_id)
@@ -1479,7 +1517,7 @@ class AnnualAnalysisJobService:
             parent_provider_admission_count=parent.get("parent_provider_admission_count", 0),
         )
 
-    def _recovery_progress_projection(self, state: Mapping[str, Any]) -> dict[str, Any]:
+    def _recovery_progress_projection(self, state: Mapping[str, Any], *, archive: Any = ...) -> dict[str, Any]:
         current = state.get("recovery_progress")
         if not isinstance(current, Mapping):
             current = _empty_recovery_progress(None)
@@ -1505,7 +1543,7 @@ class AnnualAnalysisJobService:
             "parent_provider_admission_count": parent_count,
             "current_provider_admission_count": count,
             "cumulative_provider_admission_count": parent_count + count,
-            "reused_batch_count": _reused_batch_count_for_state(self.project_root, state),
+            "reused_batch_count": _reused_batch_count_for_state(self.project_root, state, archive=archive),
             "updated_at": now,
         }
 
@@ -1513,6 +1551,7 @@ class AnnualAnalysisJobService:
         self,
         state: Mapping[str, Any],
         availability: Mapping[str, Any],
+        *, archive: Any = ..., archive_error: Exception | None = None,
     ) -> dict[str, Any]:
         status = state.get("status")
         if state.get("_recovery_owner_pending") is True:
@@ -1524,7 +1563,12 @@ class AnnualAnalysisJobService:
         if availability.get("status") != "available" or not isinstance(state.get("run_id"), str):
             return {"can_resume": False, "reason": "source_invalid" if availability.get("category") == "source_validation_failed" else "recovery_not_available"}
         try:
-            archive = load_annual_report(self.project_root, str(state["run_id"]))
+            if archive_error is not None:
+                raise archive_error
+            if archive is ...:
+                archive = load_annual_report(self.project_root, str(state["run_id"]))
+            if archive is None:
+                return {"can_resume": False, "reason": "recovery_not_available"}
             request = state.get("request")
             if not isinstance(request, Mapping):
                 return {"can_resume": False, "reason": "binding_missing"}
@@ -1536,7 +1580,7 @@ class AnnualAnalysisJobService:
                 normalized,
                 settings=settings,
                 archive=archive,
-                require_issue_pipeline_v5=True,
+                require_issue_pipeline=True,
             )
         except AnnualReportReadError as exc:
             return {"can_resume": False, "reason": "source_invalid" if _is_source_validation_error(exc.code) else "recovery_not_available"}
@@ -1696,13 +1740,11 @@ class AnnualAnalysisJobService:
                     archive = load_annual_report(self.project_root, run_id)
                 except AnnualReportReadError:
                     archive = None
-                snapshot = archive.snapshot if archive is not None else None
-                if (
-                    isinstance(snapshot, Mapping)
-                    and snapshot.get("is_partial") is False
-                    and snapshot.get("state") in {"completed", "completed_with_issues"}
-                ):
-                    final_status = str(snapshot["state"])
+                sealed_status = (
+                    _sealed_final_archive_status(archive) if archive is not None else None
+                )
+                if sealed_status is not None:
+                    final_status = sealed_status
                     error = None
                 else:
                     target = state.get("_recovery_terminal_target")
@@ -2227,6 +2269,7 @@ def _invoke_cli(project_root: Path, artifacts_root: Path, request: Mapping[str, 
             not isinstance(hard_deadline, (int, float))
             or not isinstance(soft_deadline, (int, float))
             or not isinstance(stage_time_limits, Mapping)
+            or budget_contract.get("schema_version") != BUDGET_CONTRACT_VERSION
         ):
             raise RuntimeError("年度分析运行时限传递无效。")
         environment.update({
@@ -2236,6 +2279,7 @@ def _invoke_cli(project_root: Path, artifacts_root: Path, request: Mapping[str, 
             "FINTRACE_ANNUAL_STAGE_TIME_LIMITS_SECONDS": json.dumps(
                 dict(stage_time_limits), sort_keys=True, separators=(",", ":")
             ),
+            "FINTRACE_ANNUAL_BUDGET_CONTRACT_VERSION": BUDGET_CONTRACT_VERSION,
         })
         timeout = max(0.0, float(hard_deadline) - time.monotonic())
     register_process = request.get("_register_process")
@@ -2347,6 +2391,7 @@ def _public_runtime_identity(identity: Mapping[str, Any]) -> dict[str, Any]:
 def _result_availability_projection(
     project_root: Path,
     state: Mapping[str, Any],
+    *, archive: Any = ..., archive_error: Exception | None = None,
 ) -> dict[str, Any]:
     unavailable = lambda category, message: {
         "status": "unavailable",
@@ -2362,7 +2407,12 @@ def _result_availability_projection(
     if not isinstance(run_id, str):
         return unavailable("no_recovery_projection", None)
     try:
-        archive = load_annual_report(project_root, run_id)
+        if archive_error is not None:
+            raise archive_error
+        if archive is ...:
+            archive = load_annual_report(project_root, run_id)
+        if archive is None:
+            return unavailable("archive_incompatible", "报告归档无法安全读取，报告不可用。")
     except AnnualReportReadError as exc:
         source_codes = {
             "source_sha256_mismatch", "source_pdf_invalid", "source_identity_mismatch",
@@ -2848,11 +2898,15 @@ def _job_budget_contract(scope: str) -> dict[str, Any]:
     if scope not in {"new_run", "resume"}:
         raise RuntimeError("annual_budget_scope_invalid")
     owner_limit = _configured_cli_timeout_seconds("model_investigation")
-    main_limit = min(300, owner_limit)
+    main_limit = min(MAIN_REPORT_BUDGET_SECONDS, owner_limit)
     resumed = scope == "resume"
     stage_attempt_limits = RESUME_STAGE_ATTEMPT_BUDGETS if resumed else NEW_RUN_STAGE_ATTEMPT_BUDGETS
+    try:
+        shared_limit, shared_remaining = read_shared_goal_budget()
+    except (ModelCallAdmissionError, ModelCallLedgerReadError):
+        raise RuntimeError("annual_shared_budget_unavailable") from None
     return {
-        "schema_version": "annual_analysis_budget_v1",
+        "schema_version": BUDGET_CONTRACT_VERSION,
         "scope": scope,
         "main_report_limit_seconds": main_limit,
         "work_deadline_seconds": main_limit - FINALIZATION_RESERVE_SECONDS,
@@ -2860,10 +2914,13 @@ def _job_budget_contract(scope: str) -> dict[str, Any]:
         "task_default_new_run": NEW_RUN_ATTEMPT_BUDGET,
         "task_default_resume": RESUME_ATTEMPT_BUDGET,
         "task_effective": RESUME_ATTEMPT_BUDGET if resumed else NEW_RUN_ATTEMPT_BUDGET,
-        "shared_goal_limit": None,
-        "shared_goal_remaining_at_start": None,
+        "shared_goal_limit": shared_limit,
+        "shared_goal_remaining_at_start": shared_remaining,
         "stage_time_limits_seconds": runtime_stage_time_limits(main_limit),
         "stage_attempt_limits": dict(stage_attempt_limits),
+        "global_request_limit_chars": GLOBAL_REQUEST_LIMIT_CHARS,
+        "review_request_limit_chars": REVIEW_REQUEST_LIMIT_CHARS,
+        "model_call_timeout_seconds": MODEL_CALL_TIMEOUT_SECONDS,
     }
 
 
@@ -2872,6 +2929,7 @@ def _analysis_budget_projection(
     state: Mapping[str, Any],
     *,
     progress: Mapping[str, Any] | None = None,
+    archive: Any = ...,
 ) -> dict[str, Any] | None:
     contract = state.get("_analysis_budget_contract")
     if not isinstance(contract, Mapping):
@@ -2882,15 +2940,89 @@ def _analysis_budget_projection(
     task_limit = contract.get("task_effective")
     stage_time_limits = contract.get("stage_time_limits_seconds")
     stage_attempt_limits = contract.get("stage_attempt_limits")
+    schema = contract.get("schema_version")
+    review_limit_out: int | None = None
+    timeout_out: float | None = None
+    global_limit_out: int | None = None
+    if schema == "annual_analysis_budget_v1":
+        if "review_request_limit_chars" in contract or "model_call_timeout_seconds" in contract:
+            raise AnnualAnalysisJobError(503, "analysis_budget_invalid", "任务预算记录无效，未返回推测值。")
+        try:
+            expected_stages = archived_runtime_stage_time_limits_v1(main_limit)
+        except (TypeError, ValueError):
+            raise AnnualAnalysisJobError(503, "analysis_budget_invalid", "任务预算记录无效，未返回推测值。") from None
+    elif schema == "annual_analysis_budget_v2":
+        try:
+            expected_stages = archived_runtime_stage_time_limits_v2(main_limit)
+        except (TypeError, ValueError):
+            raise AnnualAnalysisJobError(503, "analysis_budget_invalid", "任务预算记录无效，未返回推测值。") from None
+        frozen_v2 = archived_budget_contract_v2(scope="new_run")
+        review_limit = contract.get("review_request_limit_chars")
+        model_timeout = contract.get("model_call_timeout_seconds")
+        if (
+            review_limit != frozen_v2["review_request_limit_chars"]
+            or type(model_timeout) not in {int, float}
+            or not math.isfinite(float(model_timeout))
+            or float(model_timeout) != float(frozen_v2["model_call_timeout_seconds"])
+        ):
+            raise AnnualAnalysisJobError(503, "analysis_budget_invalid", "任务预算记录无效，未返回推测值。")
+        review_limit_out = int(frozen_v2["review_request_limit_chars"])
+        timeout_out = float(frozen_v2["model_call_timeout_seconds"])
+    elif schema == "annual_analysis_budget_v3":
+        try:
+            expected_stages = archived_runtime_stage_time_limits_v3(main_limit)
+        except (TypeError, ValueError):
+            raise AnnualAnalysisJobError(503, "analysis_budget_invalid", "历史任务预算记录无效，未返回推测值。") from None
+        frozen_v3 = archived_budget_contract_v3(scope="new_run")
+        model_timeout = contract.get("model_call_timeout_seconds")
+        if (
+            contract.get("review_request_limit_chars") != frozen_v3["review_request_limit_chars"]
+            or type(model_timeout) not in {int, float}
+            or not math.isfinite(float(model_timeout))
+            or float(model_timeout) != float(frozen_v3["model_call_timeout_seconds"])
+        ):
+            raise AnnualAnalysisJobError(503, "analysis_budget_invalid", "历史任务预算记录无效，未返回推测值。")
+        review_limit_out = int(frozen_v3["review_request_limit_chars"])
+        timeout_out = float(frozen_v3["model_call_timeout_seconds"])
+    elif schema == BUDGET_CONTRACT_VERSION:
+        try:
+            expected_stages = runtime_stage_time_limits(main_limit)
+        except (TypeError, ValueError):
+            raise AnnualAnalysisJobError(503, "analysis_budget_invalid", "任务预算记录无效，未返回推测值。") from None
+        review_limit = contract.get("review_request_limit_chars")
+        model_timeout = contract.get("model_call_timeout_seconds")
+        if (
+            review_limit != REVIEW_REQUEST_LIMIT_CHARS
+            or contract.get("global_request_limit_chars") != GLOBAL_REQUEST_LIMIT_CHARS
+            or type(model_timeout) not in {int, float}
+            or not math.isfinite(float(model_timeout))
+            or float(model_timeout) != float(MODEL_CALL_TIMEOUT_SECONDS)
+        ):
+            raise AnnualAnalysisJobError(503, "analysis_budget_invalid", "任务预算记录无效，未返回推测值。")
+        review_limit_out = REVIEW_REQUEST_LIMIT_CHARS
+        global_limit_out = GLOBAL_REQUEST_LIMIT_CHARS
+        timeout_out = float(MODEL_CALL_TIMEOUT_SECONDS)
+    else:
+        raise AnnualAnalysisJobError(503, "analysis_budget_invalid", "任务预算记录无效，未返回推测值。")
     if (
         scope not in {"new_run", "resume"}
-        or type(main_limit) is not int or not 60 <= main_limit <= 300
+        or type(main_limit) is not int
         or work_limit != main_limit - FINALIZATION_RESERVE_SECONDS
         or task_limit != (RESUME_ATTEMPT_BUDGET if scope == "resume" else NEW_RUN_ATTEMPT_BUDGET)
         or not isinstance(stage_time_limits, Mapping)
         or not isinstance(stage_attempt_limits, Mapping)
+        or dict(stage_time_limits) != expected_stages
     ):
         raise AnnualAnalysisJobError(503, "analysis_budget_invalid", "任务预算记录无效，未返回推测值。")
+    shared_limit = contract.get("shared_goal_limit")
+    shared_remaining = contract.get("shared_goal_remaining_at_start")
+    if (
+        shared_limit is not None and (type(shared_limit) is not int or shared_limit <= 0)
+        or shared_remaining is not None and (type(shared_remaining) is not int or shared_remaining < 0)
+        or shared_limit is None and shared_remaining is not None
+        or shared_limit is not None and shared_remaining is not None and shared_remaining > shared_limit
+    ):
+        raise AnnualAnalysisJobError(503, "analysis_budget_invalid", "共同预算记录无效，未返回推测值。")
 
     job_id = state.get("job_id")
     gate_db = state.get("_call_gate_db")
@@ -2955,7 +3087,9 @@ def _analysis_budget_projection(
     run_id = state.get("run_id")
     if status in {"running", "completed", "completed_with_issues", "failed", "interrupted", "cancelled"} and isinstance(run_id, str):
         try:
-            terminal_report = load_annual_report(project_root, run_id).report
+            if archive is ...:
+                archive = load_annual_report(project_root, run_id)
+            terminal_report = archive.report if archive is not None else None
         except Exception:
             terminal_report = None
 
@@ -2981,7 +3115,7 @@ def _analysis_budget_projection(
             if isinstance(terminal_report, Mapping):
                 investigation = terminal_report.get("model_investigation")
                 discovery = investigation.get("discovery") if isinstance(investigation, Mapping) else terminal_report.get("model_discovery")
-                if not isinstance(discovery, Mapping) or discovery.get("prompt_version") != "annual_discovery_v3":
+                if not isinstance(discovery, Mapping) or discovery.get("prompt_version") not in {"annual_discovery_v4", "annual_discovery_v5"}:
                     return "reserved"
                 return "partial"
             if status == "running" and counts.get(name, 0) > 0:
@@ -3048,8 +3182,8 @@ def _analysis_budget_projection(
                 stages[name]["elapsed_seconds"] = round(float(group_elapsed), 3)
 
     provider_admissions = sum(counts.values())
-    return {
-        "schema_version": "annual_analysis_budget_v1",
+    payload = {
+        "schema_version": schema,
         "scope": scope,
         "main_report_limit_seconds": main_limit,
         "work_deadline_seconds": work_limit,
@@ -3060,13 +3194,19 @@ def _analysis_budget_projection(
             "task_default_new_run": NEW_RUN_ATTEMPT_BUDGET,
             "task_default_resume": RESUME_ATTEMPT_BUDGET,
             "task_effective": task_limit,
-            "shared_goal_limit": None,
-            "shared_goal_remaining_at_start": None,
+            "shared_goal_limit": shared_limit,
+            "shared_goal_remaining_at_start": shared_remaining,
         },
         "provider_admission_count": provider_admissions,
         "provider_attempts_remaining": max(0, task_limit - provider_admissions),
         "stages": stages,
     }
+    if review_limit_out is not None and timeout_out is not None:
+        payload["review_request_limit_chars"] = review_limit_out
+        payload["model_call_timeout_seconds"] = timeout_out
+    if global_limit_out is not None:
+        payload["global_request_limit_chars"] = global_limit_out
+    return payload
 
 
 def _parse_utc_timestamp(value: object) -> datetime | None:
@@ -3129,11 +3269,14 @@ def _is_source_validation_error(code: str) -> bool:
     }
 
 
-def _reused_batch_count_for_state(project_root: Path, state: Mapping[str, Any]) -> int:
+def _reused_batch_count_for_state(project_root: Path, state: Mapping[str, Any], *, archive: Any = ...) -> int:
     run_id = state.get("run_id")
     if isinstance(run_id, str):
         try:
-            archive = load_annual_report(project_root, run_id)
+            if archive is ...:
+                archive = load_annual_report(project_root, run_id)
+            if archive is None:
+                raise ValueError("strict_archive_unavailable")
             discovery = archive.report.get("model_discovery")
             contract = discovery.get("execution_contract") if isinstance(discovery, Mapping) else None
             batches = contract.get("reused_batches") if isinstance(contract, Mapping) else None
@@ -3146,7 +3289,7 @@ def _reused_batch_count_for_state(project_root: Path, state: Mapping[str, Any]) 
     return reused if type(reused) is int and reused >= 0 else 0
 
 
-def _discovery_recovery_projection(project_root: Path, state: Mapping[str, Any]) -> dict[str, Any] | None:
+def _discovery_recovery_projection(project_root: Path, state: Mapping[str, Any], *, archive: Any = ...) -> dict[str, Any] | None:
     recovery = state.get("recovery")
     if not isinstance(recovery, Mapping):
         return None
@@ -3154,7 +3297,10 @@ def _discovery_recovery_projection(project_root: Path, state: Mapping[str, Any])
     run_id = state.get("run_id")
     if isinstance(run_id, str):
         try:
-            archive = load_annual_report(project_root, run_id)
+            if archive is ...:
+                archive = load_annual_report(project_root, run_id)
+            if archive is None:
+                raise ValueError("strict_archive_unavailable")
             discovery = archive.report.get("model_discovery")
             contract = discovery.get("execution_contract") if isinstance(discovery, Mapping) else None
             if isinstance(contract, Mapping):

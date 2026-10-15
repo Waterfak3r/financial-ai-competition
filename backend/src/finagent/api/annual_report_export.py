@@ -10,11 +10,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from finagent.api.annual_report_read import AnnualReportArchive, load_annual_report
+from finagent.api.annual_report_read import AnnualReportArchive, load_annual_report, project_issue_execution_binding
 from finagent.core.sample_provenance import resolve_sample_provenance
 from finagent.reports.annual_report import render_markdown
 
 _FORMATS = {"json", "markdown", "html"}
+_PHASED_DISCOVERY_EXECUTION_KINDS = frozenset({
+    "fintrace_annual_discovery_execution_v4",
+    "fintrace_annual_discovery_execution_v6",
+    "fintrace_annual_discovery_execution_v7",
+    "fintrace_annual_discovery_execution_v8",
+    "fintrace_annual_discovery_execution_v9",
+    "fintrace_annual_discovery_execution_v10",
+})
 _V2_SAFE_BATCH_FAILURES = frozenset(
     {
         "all_findings_rejected",
@@ -497,6 +505,9 @@ def _project_issue_pipeline(value: Any, identity: Mapping[str, Any]) -> dict[str
         for item in _list_maps(value.get("shards"))
     ]
     result["audit_summary"] = _pick(_mapping(value.get("audit_summary")), ("attempt_count", "response_count", "reused_count", "model_called"))
+    outer_binding = _project_outer_execution_binding(value.get("execution_binding"))
+    if outer_binding is not None:
+        result["execution_binding"] = outer_binding
     result["verification_notice"] = "发现线索和同源检索均未经独立语义核验；补证角色不是事实验证。"
     return result
 
@@ -711,9 +722,9 @@ def _project_discovery(
             "limitations": ["开放式发现来源身份未能绑定到当前报告，已省略动态发现内容。"],
         }, set()
     prompt_version = value.get("prompt_version")
-    if not isinstance(prompt_version, str) or prompt_version not in {"annual_discovery_v1", "annual_discovery_v2", "annual_discovery_v3"}:
+    if not isinstance(prompt_version, str) or prompt_version not in {"annual_discovery_v1", "annual_discovery_v2", "annual_discovery_v3", "annual_discovery_v4"}:
         return {"status": "limited", "source_binding_status": "matched_but_invalid", "findings": []}, set()
-    is_v2 = prompt_version in {"annual_discovery_v2", "annual_discovery_v3"}
+    is_v2 = prompt_version in {"annual_discovery_v2", "annual_discovery_v3", "annual_discovery_v4"}
     is_v3 = "execution_contract" in value
     status = value.get("status")
     called = value.get("model_called")
@@ -857,7 +868,7 @@ def _project_discovery(
     if is_v3:
         projected_execution = (
             _project_v4_execution_contract(value.get("execution_contract"))
-            if prompt_version == "annual_discovery_v3"
+            if prompt_version in {"annual_discovery_v3", "annual_discovery_v4"}
             else _project_v3_execution_contract(value.get("execution_contract"))
         )
         if projected_execution is None:
@@ -873,7 +884,7 @@ def _project_discovery_coverage(
     execution_contract: object = None,
 ) -> dict[str, Any] | None:
     is_v3 = isinstance(execution_contract, Mapping)
-    is_v2 = prompt_version in {"annual_discovery_v2", "annual_discovery_v3"}
+    is_v2 = prompt_version in {"annual_discovery_v2", "annual_discovery_v3", "annual_discovery_v4"}
     fields = (
         "total_pages", "text_pages", "total_blocks", "total_chars", "planned_batches",
         "processed_batches", "successful_batches", "failed_batches", "processed_chars",
@@ -1008,9 +1019,9 @@ def _project_v3_execution_contract(value: object) -> dict[str, Any] | None:
 
 
 def _project_v4_execution_contract(value: object) -> dict[str, Any] | None:
-    """Export v4 stage and scheduler facts while dropping binding UUIDs."""
+    """Export phased stage/scheduler facts without exposing audit UUIDs."""
 
-    if not isinstance(value, Mapping) or set(value) != {
+    if not isinstance(value, Mapping) or value.get("kind") not in _PHASED_DISCOVERY_EXECUTION_KINDS or set(value) != {
         "kind", "plan_sha256", "identity_sha256", "binding", "parent_run_id",
         "provider_admission_count", "parent_provider_admission_count",
         "cumulative_provider_admission_count", "response_count", "reused_batches", "batches",
@@ -1035,12 +1046,46 @@ def _project_v4_execution_contract(value: object) -> dict[str, Any] | None:
     if not all(isinstance(item, Mapping) for item in (scheduler, phase_budget, timing)):
         return None
     projected.update(
-        kind="fintrace_annual_discovery_execution_v4",
+        kind=value.get("kind"),
         scheduler=dict(scheduler),
         phase_budget=dict(phase_budget),
+        phase_budget_basis="version_default_not_owner_actual",
         timing=dict(timing),
     )
     return projected
+
+def _project_outer_execution_binding(value: object) -> dict[str, Any] | None:
+    """Use the same read-only binding view as the ordinary report API."""
+    return project_issue_execution_binding(value) if isinstance(value, Mapping) else None
+
+
+def _archived_phase_budget_status(execution: Mapping[str, Any]) -> dict[str, Any] | None:
+    budget = execution.get("phase_budget")
+    if not isinstance(budget, Mapping):
+        return None
+    schema = budget.get("schema_version")
+    main_limit = budget.get("main_report_limit_seconds")
+    work_limit = budget.get("work_deadline_seconds")
+    reserve = budget.get("finalization_reserve_seconds")
+    if not isinstance(schema, str) or type(main_limit) is not int or type(work_limit) is not int or type(reserve) is not int:
+        return None
+    status = {
+        "envelope_kind": execution.get("kind"),
+        "schema_version": schema,
+        "main_report_limit_seconds": main_limit,
+        "work_deadline_seconds": work_limit,
+        "finalization_reserve_seconds": reserve,
+        "stage_time_limits_seconds": dict(_mapping(budget.get("stage_time_limits_seconds"))),
+        "label": "归档版本默认预算，不是本次任务的实际 owner 时限",
+    }
+    if schema in {"annual_analysis_budget_v2", "annual_analysis_budget_v3", "annual_analysis_budget_v4"}:
+        status["review_request_limit_chars"] = budget.get("review_request_limit_chars")
+        status["model_call_timeout_seconds"] = budget.get("model_call_timeout_seconds")
+    if schema == "annual_analysis_budget_v4":
+        status["global_request_limit_chars"] = budget.get("global_request_limit_chars")
+    return status
+
+
 
 
 def _layer_binding(value: Mapping[str, Any], identity: Mapping[str, Any]) -> str:
@@ -1215,6 +1260,29 @@ def _render_discovery(value: Any) -> list[str]:
             f"{coverage.get('processed_chars')} / {coverage.get('total_chars')}", coverage.get("truncated"),
         )],
     ))
+    execution = value.get("execution_contract")
+    if isinstance(execution, Mapping):
+        budget_status = _archived_phase_budget_status(execution)
+        if budget_status is not None:
+            lines.append("<h3>归档执行预算（版本默认值）</h3>")
+            lines.append(f"<p>{_h(budget_status['label'])}</p>")
+            budget_rows = [
+                ("封装", budget_status["envelope_kind"]),
+                ("预算版本", budget_status["schema_version"]),
+                ("主报告上限（秒）", budget_status["main_report_limit_seconds"]),
+                ("工作阶段上限（秒）", budget_status["work_deadline_seconds"]),
+                ("收尾预留（秒）", budget_status["finalization_reserve_seconds"]),
+            ]
+            budget_rows.extend((
+                ("全文发现扫描阶段（秒）", budget_status["stage_time_limits_seconds"].get("annual_discovery")),
+                ("固定候选调查阶段（秒）", budget_status["stage_time_limits_seconds"].get("annual_investigation")),
+                ("公司问题归并与补证阶段（秒）", budget_status["stage_time_limits_seconds"].get("annual_issue_grouping")),
+                ("最终评审阶段（秒）", budget_status["stage_time_limits_seconds"].get("annual_review")),
+            ))
+            if "review_request_limit_chars" in budget_status:
+                budget_rows.append(("评审请求上限（字符）", budget_status["review_request_limit_chars"]))
+                budget_rows.append(("单次模型调用上限（秒）", budget_status["model_call_timeout_seconds"]))
+            lines.append(_html_table(("字段", "归档值"), budget_rows))
     rows = []
     for finding in value.get("findings", []) if isinstance(value.get("findings"), list) else []:
         if not isinstance(finding, Mapping):
@@ -1252,6 +1320,21 @@ def _render_discovery_markdown(value: Any) -> str:
         f"已结束批次 {coverage.get('processed_batches')} / 计划 {coverage.get('planned_batches')}（成功 {coverage.get('successful_batches')}、部分 {coverage.get('partial_batches', 0)}、失败 {coverage.get('failed_batches')}）；",
         f"完整={coverage.get('complete')}，截断={coverage.get('truncated')}。",
     ]
+    execution = value.get("execution_contract")
+    if isinstance(execution, Mapping):
+        budget_status = _archived_phase_budget_status(execution)
+        if budget_status is not None:
+            lines.extend([
+                f"- 归档执行预算（版本默认值，不是本次 owner 实际时限）：封装 `{budget_status['envelope_kind']}`，预算 `{budget_status['schema_version']}`，主报告 {budget_status['main_report_limit_seconds']} 秒，工作阶段 {budget_status['work_deadline_seconds']} 秒，收尾预留 {budget_status['finalization_reserve_seconds']} 秒",
+            ])
+            stage_seconds = budget_status["stage_time_limits_seconds"]
+            lines.append(
+                f"- 归档阶段默认时限（秒）：全文发现扫描 {stage_seconds.get('annual_discovery')}；固定候选调查 {stage_seconds.get('annual_investigation')}；公司问题归并与补证 {stage_seconds.get('annual_issue_grouping')}；最终评审 {stage_seconds.get('annual_review')}"
+            )
+            if "review_request_limit_chars" in budget_status:
+                lines.append(
+                    f"- 归档评审请求上限 {budget_status['review_request_limit_chars']} 字符；单次模型调用上限 {budget_status['model_call_timeout_seconds']} 秒"
+                )
     unread = coverage.get("unread_pages")
     if isinstance(unread, list) and unread:
         lines.append("- 未完整处理页码：" + "、".join(str(page) for page in unread))
@@ -1293,6 +1376,21 @@ def _render_issue_pipeline(value: Any) -> list[str]:
             [(value.get("status"), f"{input_value.get('finding_count', 0)} / {input_value.get('candidate_count', 0)}", closure.get("closed"), len(closure.get("pending_issue_ids", [])) + len(closure.get("pending_finding_ids", [])), input_value.get("discovery_coverage_complete"), closure.get("no_priority_allowed"))],
         ),
     ]
+    binding = value.get("execution_binding")
+    if isinstance(binding, Mapping) and isinstance(binding.get("execution_version"), str):
+        review_limit = binding.get("review_request_limit_chars")
+        if binding.get("execution_version") in {"execution_v6", "execution_v7", "execution_v8", "execution_v9", "execution_v10"} and type(review_limit) is int:
+            lines.append(f"<p>归档执行绑定 `{_h(binding.get('execution_version'))}`；评审请求上限 {_h(review_limit)} 字符。这是归档政策，不是本次 owner 实际时限。</p>")
+        else:
+            lines.append(f"<p>归档执行绑定 `{_h(binding.get('execution_version'))}`。</p>")
+        global_limit = binding.get("global_request_limit_chars")
+        if binding.get("execution_version") in {"execution_v9", "execution_v10"} and type(global_limit) is int:
+            lines.append(f"<p>全局归并与补证完整请求上限 {_h(global_limit)} 字符；不会截断原文或成员。</p>")
+        if binding.get("execution_version") == "execution_v10":
+            lines.append(
+                f"<p>局部分片计划 grouping_shard_plan_version=`{_h(binding.get('grouping_shard_plan_version'))}`；"
+                f"grouping_shard_max_members={_h(binding.get('grouping_shard_max_members'))}（每片最多原 finding 成员）。</p>"
+            )
     if closure.get("coverage_gaps") or closure.get("relation_gaps"):
         lines.extend(_render_text_list(closure.get("coverage_gaps"), "发现覆盖缺口"))
         lines.extend(_render_text_list(closure.get("relation_gaps"), "跨片关系缺口"))
@@ -1358,6 +1456,14 @@ def _render_issue_pipeline_markdown(value: Any) -> str:
         f"- 状态：`{value.get('status')}`；当前已知发现 {input_value.get('finding_count', 0)} 条，候选 {input_value.get('candidate_count', 0)} 项。",
         f"- 已知候选关系闭合：`{closure.get('closed')}`；全文扫描覆盖完整：`{input_value.get('discovery_coverage_complete')}`；允许无优先事项意见：`{closure.get('no_priority_allowed')}`。",
     ]
+    binding = value.get("execution_binding")
+    if isinstance(binding, Mapping):
+        lines.append(f"- 归档执行绑定：`{binding.get('execution_version')}`。")
+        if binding.get("execution_version") == "execution_v10":
+            lines.append(
+                f"- 局部分片计划 grouping_shard_plan_version=`{binding.get('grouping_shard_plan_version')}`；"
+                f"grouping_shard_max_members={binding.get('grouping_shard_max_members')}（每片最多原 finding 成员）。"
+            )
     coverage = value.get("retrieval_coverage")
     if isinstance(coverage, Mapping) and coverage.get("scope") != "not_started":
         lines.append(

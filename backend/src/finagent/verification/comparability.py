@@ -11,6 +11,7 @@ import hmac
 import json
 import re
 import secrets
+from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -20,16 +21,166 @@ from finagent.schemas.text_pdf import PdfBBox
 
 ComparabilityStatus = Literal["verified", "conflict", "insufficient_evidence"]
 RestatementStatus = Literal["not_restated", "unknown"]
+_TopicOutcome = Literal[
+    "no_impact",
+    "unconfirmed_applicable",
+    "impact",
+    "unresolved_comparative_impact",
+    "choice_conflict",
+    "association_ambiguous",
+]
+_CheckboxChoice = Literal["not_applicable", "applicable", "yes", "no"]
+_ChoiceResult = Literal["not_applicable", "applicable", "yes", "no", "conflict"]
+_HeadingSource = Literal["major", "summary"]
 
 _SIGNING_KEY = secrets.token_bytes(32)
-_CHECKBOX_NOT_APPLICABLE = "□适用√不适用"
-_CHECKBOX_APPLICABLE = "√适用□不适用"
 _REQUIRED_CAUSES = (
     "准则追溯调整",
     "会计政策变更",
     "重大会计差错更正",
     "同一控制合并范围变更",
     "其他调整",
+)
+_TOPIC_POLICY = "major_accounting_policy_change"
+_TOPIC_ESTIMATE = "major_accounting_estimate_change"
+_TOPIC_FIRST_ADOPTION = "first_adoption_opening_balance_adjustment"
+_TOPIC_PRIOR_ERROR = "prior_error_retrospective_restatement"
+_TOPIC_OPENING = "opening_retained_earnings_adjustments_zero"
+_TOPIC_NO_RESTATEMENT = "no_prior_period_restatement_declared"
+_REQUIRED_TOPICS = (
+    _TOPIC_POLICY,
+    _TOPIC_ESTIMATE,
+    _TOPIC_FIRST_ADOPTION,
+    _TOPIC_PRIOR_ERROR,
+)
+_TOPIC_LABELS = {
+    _TOPIC_POLICY: "重要会计政策变更",
+    _TOPIC_ESTIMATE: "重要会计估计变更",
+    _TOPIC_FIRST_ADOPTION: "首次执行新准则对年初财务报表的调整披露",
+    _TOPIC_PRIOR_ERROR: "前期差错追溯重述法",
+    _TOPIC_NO_RESTATEMENT: "是否需追溯调整或重述以前年度会计数据",
+}
+_TOPIC_ASSOCIATION = {
+    _TOPIC_POLICY: ("会计政策变更", "政策变更"),
+    _TOPIC_ESTIMATE: ("会计估计变更", "估计变更"),
+    _TOPIC_FIRST_ADOPTION: ("首次执行",),
+    _TOPIC_PRIOR_ERROR: ("会计差错", "差错更正", "追溯重述"),
+    _TOPIC_NO_RESTATEMENT: ("追溯调整或重述", "重述以前年度"),
+}
+_CHECKED_MARKS = frozenset(
+    {
+        "√",
+        "✓",
+        "✔",
+        "☑",
+        "■",
+        "●",
+        "\u221a",
+        "\u2611",
+        "\u25a0",
+        "\u25cf",
+        "\u2713",
+        "\u2714",
+        "\uf052",
+        "\uf0d2",
+        "\uf0fc",
+    }
+)
+_EMPTY_MARKS = frozenset({"□", "☐", "○", "◻", "\u25a1", "\u25cb", "\u2610", "\uf0a8"})
+_SUBJECT_TOKEN_RE = (
+    r"(?:本期|本次|上述)?(?:"
+    + "|".join(
+        re.escape(cue)
+        for cue in sorted(
+            {item for cues in _TOPIC_ASSOCIATION.values() for item in cues},
+            key=len,
+            reverse=True,
+        )
+    )
+    + ")"
+)
+_NO_IMPACT_PREDICATE_RE = (
+    r"(?:"
+    r"未对(?:本公司|本集团|公司)?的?(?:合并)?财务报表产生影响"
+    r"|对(?:本公司|本集团|公司)?的?(?:合并)?财务报表无影响"
+    r"|不影响(?:本公司|本集团|公司)?的?(?:合并)?财务报表"
+    r"|未对比较数据产生影响"
+    r"|不影响比较数据"
+    r"|不需追溯调整"
+    r")"
+)
+_EXPLICIT_NO_IMPACT_RE = re.compile(
+    "(" + _SUBJECT_TOKEN_RE + "(?:[及和、]" + _SUBJECT_TOKEN_RE + ")*)(均)?" + _NO_IMPACT_PREDICATE_RE
+)
+_COMPARATIVE_IMPACT_PREDICATE_RE = r"(?:仍)?对比较数据(?:产生了?(?:重大)?影响|有(?:重大)?影响|进行了?调整)"
+_EXPLICIT_COMPARATIVE_IMPACT_RE = re.compile(
+    r"(?:本集团|本公司|公司)?"
+    + "("
+    + _SUBJECT_TOKEN_RE
+    + "(?:[及和、]"
+    + _SUBJECT_TOKEN_RE
+    + ")*)(均)?"
+    + _COMPARATIVE_IMPACT_PREDICATE_RE
+)
+_SUMMARY_BLOCKING_OUTCOMES = frozenset(
+    {"impact", "unresolved_comparative_impact", "choice_conflict", "association_ambiguous"}
+)
+_UNRESOLVED_COMPARATIVE_OBJECT_RE = re.compile(r"比较数据|比较报表|以前年度会计数据")
+_UNRESOLVED_COMPARATIVE_EFFECT_RE = re.compile(r"影响|调整|重述")
+_CLAUSE_END_RE = re.compile(r"[。；;]")
+_BODY_EVIDENCE_OUTCOMES = frozenset({"no_impact", "impact", "unresolved_comparative_impact"})
+
+_TABLE_AMOUNT_RE = re.compile(
+    r"(?<![\d.,])(-?(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+|\d+))(?![\d.,])"
+)
+_CHOICE_PATTERNS: tuple[tuple[_CheckboxChoice, str], ...] = (
+    ("not_applicable", "□适用√不适用"),
+    ("not_applicable", "√不适用□适用"),
+    ("applicable", "√适用□不适用"),
+    ("applicable", "□不适用√适用"),
+    ("no", "□是√否"),
+    ("no", "√否□是"),
+    ("yes", "√是□否"),
+    ("yes", "□否√是"),
+)
+_HEADING_PREFIX_PATTERN = (
+    r"(?:"
+    r"第[一二三四五六七八九十百0-9]+节"
+    r"|[一二三四五六七八九十]+、"
+    r"|[0-9]+、"
+    r"|[（(][一二三四五六七八九十]+[)）]"
+    r"|[（(][0-9]+[)）]"
+    r"|[0-9]+(?:\.[0-9]+)+"
+    r"|[0-9]+\.(?![0-9])"
+    r")"
+)
+_CHAPTER_HEADING_RE = re.compile(r"^" + _HEADING_PREFIX_PATTERN)
+_HEADING_PREFIX_FIND_RE = re.compile(_HEADING_PREFIX_PATTERN)
+_COMBINED_HEADING_TOPICS: tuple[tuple[str, frozenset[str]], ...] = (
+    (
+        "会计政策、会计估计变更或重大会计差错更正的情况说明",
+        frozenset({_TOPIC_POLICY, _TOPIC_ESTIMATE, _TOPIC_PRIOR_ERROR}),
+    ),
+    (
+        "会计政策、会计估计变更原因及影响",
+        frozenset({_TOPIC_POLICY, _TOPIC_ESTIMATE}),
+    ),
+)
+_SEPARATE_HEADING_TITLES: tuple[tuple[str, str, _HeadingSource], ...] = (
+    ("重要会计政策变更", _TOPIC_POLICY, "major"),
+    ("重要会计估计变更", _TOPIC_ESTIMATE, "major"),
+    ("重大会计差错更正原因及影响", _TOPIC_PRIOR_ERROR, "summary"),
+    ("是否需追溯调整或重述以前年度会计数据", _TOPIC_NO_RESTATEMENT, "major"),
+)
+_OPENING_OTHER_ROW_TOKENS = (
+    "调整后",
+    "调整前",
+    "加：",
+    "减：",
+    "期末未分配",
+    "影响期初",
+    "明细",
+    "本期归属于",
 )
 
 
@@ -113,6 +264,21 @@ class _Line:
     bbox: PdfBBox
 
 
+@dataclass(frozen=True, slots=True)
+class _HeadingUnit:
+    topics: frozenset[str]
+    source: _HeadingSource
+
+
+@dataclass(frozen=True, slots=True)
+class _Hit:
+    topic: str
+    outcome: _TopicOutcome
+    choice: _ChoiceResult
+    evidence: ComparabilityEvidence
+    source: _HeadingSource
+
+
 def verify_annual_comparability(
     pdf_path: str | Path,
     *,
@@ -123,8 +289,9 @@ def verify_annual_comparability(
     """从实际 PDF 检查本期及上期金额是否有明确追溯调整披露。
 
     当前规则只在年报逐项披露关键追溯调整原因、期初未分配利润影响为零，
-    且相关会计政策、估计、首次执行调整和追溯重述法均明确勾选“不适用”时，
-    才确认 ``not_restated``。缺少任一项或出现冲突文字均不会确认。
+    且相关会计政策、估计、首次执行调整和追溯重述均明确为不适用，
+    或虽勾选适用但原文证实对财务报表无影响时，才确认 ``not_restated``。
+    缺少任一项、空白金额、无法按年度列解释的非零合计或出现冲突文字均不会确认。
     """
 
     _validate_arguments(document_id, source_sha256, report_year)
@@ -182,57 +349,43 @@ def verify_annual_comparability(
     missing: list[str] = []
     conflicts: list[str] = []
 
-    policy, issue = _section_checkbox(
+    hits_by_topic = _collect_disclosure_hits(
         pages,
         report_year,
-        section="重要会计政策变更",
-        subheading="重要会计政策变更",
-        topic="major_accounting_policy_change",
         document_id=document_id,
         source_sha256=actual_sha256,
     )
-    _record_checkbox(policy, issue, "重要会计政策变更未明确勾选不适用", evidence, checks, missing, conflicts)
+    if not hits_by_topic[_TOPIC_PRIOR_ERROR] and hits_by_topic[_TOPIC_NO_RESTATEMENT]:
+        no_restatement = [
+            replace(
+                hit,
+                topic=_TOPIC_PRIOR_ERROR,
+                evidence=replace(
+                    hit.evidence,
+                    topic=_TOPIC_PRIOR_ERROR,
+                    evidence_id=_evidence_id(
+                        hit.evidence.source_sha256,
+                        report_year,
+                        _TOPIC_PRIOR_ERROR,
+                        hit.evidence.pdf_page - 1,
+                    ),
+                ),
+            )
+            for hit in hits_by_topic[_TOPIC_NO_RESTATEMENT]
+            if hit.outcome == "no_impact"
+        ]
+        hits_by_topic[_TOPIC_PRIOR_ERROR].extend(no_restatement)
 
-    estimate, issue = _section_checkbox(
-        pages,
-        report_year,
-        section="重要会计估计变更",
-        subheading="重要会计估计变更",
-        topic="major_accounting_estimate_change",
-        document_id=document_id,
-        source_sha256=actual_sha256,
-    )
-    _record_checkbox(estimate, issue, "重要会计估计变更未明确勾选不适用", evidence, checks, missing, conflicts)
-
-    first_adoption_heading = (
-        f"{report_year}年起首次执行新会计准则或准则解释等涉及调整首次执行当年年初的财务报表"
-    )
-    first_adoption, issue = _section_checkbox(
-        pages,
-        report_year,
-        section=first_adoption_heading,
-        subheading=first_adoption_heading,
-        topic="first_adoption_opening_balance_adjustment",
-        document_id=document_id,
-        source_sha256=actual_sha256,
-    )
-    _record_checkbox(
-        first_adoption,
-        issue,
-        "首次执行新准则对年初财务报表的调整披露未明确勾选不适用",
-        evidence,
-        checks,
-        missing,
-        conflicts,
-    )
-
-    prior_error, issue = _prior_error_checkbox(
-        pages,
-        report_year,
-        document_id=document_id,
-        source_sha256=actual_sha256,
-    )
-    _record_checkbox(prior_error, issue, "前期差错追溯重述法未明确勾选不适用", evidence, checks, missing, conflicts)
+    for topic in (*_REQUIRED_TOPICS, _TOPIC_NO_RESTATEMENT):
+        _record_topic_hits(
+            topic,
+            hits_by_topic[topic],
+            evidence,
+            checks,
+            missing,
+            conflicts,
+            required=topic in _REQUIRED_TOPICS,
+        )
 
     opening, opening_missing, opening_conflicts = _opening_adjustment_evidence(
         pages,
@@ -245,7 +398,10 @@ def verify_annual_comparability(
         missing.extend(opening_missing)
     if opening_conflicts:
         conflicts.extend(opening_conflicts)
-    if not opening_missing and not opening_conflicts:
+    unexplained_totals = _unexplained_opening_totals(pages, report_year)
+    if unexplained_totals:
+        missing.extend(unexplained_totals)
+    elif not opening_missing and not opening_conflicts:
         checks.append("五类期初未分配利润调整原因均有原文披露，金额为 0 元。")
 
     positive_evidence, positive_disclosures = _explicit_positive_restatement(
@@ -372,83 +528,462 @@ def _page_lines(page: object) -> tuple[_Line, ...]:
     return tuple(lines)
 
 
-def _section_checkbox(
+def _collect_disclosure_hits(
     pages: tuple[tuple[_Line, ...], ...],
     report_year: int,
     *,
-    section: str,
-    subheading: str,
-    topic: str,
     document_id: str,
     source_sha256: str,
-) -> tuple[ComparabilityEvidence | None, str | None]:
-    heading_norm = _normalize(subheading)
+) -> dict[str, list[_Hit]]:
+    hits: dict[str, list[_Hit]] = defaultdict(list)
     for page_index, lines in enumerate(pages):
-        for line_index, line in enumerate(lines):
-            normalized = _normalize(line.text)
-            if heading_norm not in normalized:
+        header = _report_year_line(lines, report_year)
+        rows = _visual_rows(lines)
+        for row_index, row in enumerate(rows):
+            units = _discrete_heading_units(row, rows, row_index, report_year)
+            if not units:
                 continue
-            # 找与该标题垂直距离最近的选择项，不跨页，也不接受无关的通用“不适用”。
-            for candidate in lines[line_index + 1 :]:
-                if candidate.bbox.y0 - line.bbox.y1 > 36:
-                    break
-                choice = _normalize(candidate.text)
-                if choice in {_CHECKBOX_NOT_APPLICABLE, _CHECKBOX_APPLICABLE}:
-                    header = _report_year_line(lines, report_year)
-                    if header is None:
-                        return None, f"{topic} 所在页面缺少报告年份抬头。"
-                    evidence = _make_evidence(
+            if len(units) > 1:
+                if header is None:
+                    continue
+                _record_association_ambiguity(
+                    hits,
+                    topics=frozenset(topic for unit in units for topic in unit.topics),
+                    row=row,
+                    page_index=page_index,
+                    document_id=document_id,
+                    source_sha256=source_sha256,
+                    report_year=report_year,
+                    header=header,
+                    source="major" if any(unit.source == "major" for unit in units) else "summary",
+                )
+                continue
+            unit = units[0]
+            matched = _adjacent_choice(rows, row_index, report_year)
+            if matched is None:
+                continue
+            choice, choice_lines, choice_index = matched
+            if header is None:
+                continue
+            choice_y1 = max(line.bbox.y1 for line in rows[choice_index])
+            for topic in unit.topics:
+                body_lines = _topic_body_lines(rows, choice_index, choice_y1, report_year)
+                body_outcome = _body_outcome(body_lines, topic)
+                outcome = _choice_outcome(choice, body_outcome)
+                classified_body = body_lines if body_outcome in _BODY_EVIDENCE_OUTCOMES else ()
+                evidence_lines = tuple(dict.fromkeys(tuple(row) + tuple(choice_lines) + tuple(classified_body)))
+                evidence = _make_evidence(
+                    topic=topic,
+                    document_id=document_id,
+                    source_sha256=source_sha256,
+                    report_year=report_year,
+                    page_index=page_index,
+                    lines=evidence_lines,
+                    report_header=header,
+                )
+                hits[topic].append(
+                    _Hit(
                         topic=topic,
-                        document_id=document_id,
-                        source_sha256=source_sha256,
-                        report_year=report_year,
-                        page_index=page_index,
-                        lines=(line, candidate),
-                        report_header=header,
+                        outcome=outcome,
+                        choice=choice,
+                        evidence=evidence,
+                        source=unit.source,
                     )
-                    if choice == _CHECKBOX_APPLICABLE:
-                        return evidence, f"{topic} 明确勾选适用，可能影响比较数据。"
-                    return evidence, None
-            return None, f"{topic} 标题存在，但没有相邻的明确选择项。"
-    return None, f"未找到与 {section} 精确关联的不适用披露。"
+                )
+    return hits
 
 
-def _prior_error_checkbox(
-    pages: tuple[tuple[_Line, ...], ...],
-    report_year: int,
+def _preferred_topic_hits(hits: list[_Hit]) -> list[_Hit]:
+    major = [hit for hit in hits if hit.source == "major"]
+    if not major:
+        return list(hits)
+    extras = [
+        hit for hit in hits if hit.source == "summary" and hit.outcome in _SUMMARY_BLOCKING_OUTCOMES
+    ]
+    return major + extras
+
+
+def _record_topic_hits(
+    topic: str,
+    hits: list[_Hit],
+    evidence: list[ComparabilityEvidence],
+    checks: list[str],
+    missing: list[str],
+    conflicts: list[str],
     *,
+    required: bool,
+) -> None:
+    hits = _preferred_topic_hits(hits)
+    label = _TOPIC_LABELS.get(topic, topic)
+    if not hits:
+        if required:
+            missing.append(f"{label}未明确勾选不适用（未找到与 {label} 精确关联的不适用披露。）。")
+        return
+
+    outcomes = {hit.outcome for hit in hits}
+    for hit in hits:
+        if all(
+            item.evidence_id != hit.evidence.evidence_id
+            or item.topic != hit.topic
+            or item.text != hit.evidence.text
+            for item in evidence
+        ):
+            evidence.append(hit.evidence)
+
+    if "choice_conflict" in outcomes:
+        conflicts.append(f"{label}的选择项存在相互矛盾或无法唯一归属的勾选。")
+        return
+    if "impact" in outcomes:
+        conflicts.append(_impact_conflict_message(topic, hits))
+        return
+    if "association_ambiguous" in outcomes:
+        missing.append(
+            f"{label}与选择项无法唯一关联（同一视觉行存在多个分立标题，不能共用同一勾选）。"
+        )
+        return
+    if "unresolved_comparative_impact" in outcomes:
+        missing.append(
+            f"{label}原文涉及比较数据、比较报表或以前年度会计数据的影响、调整或重述，但未能明确确认或排除。"
+        )
+        return
+    if "unconfirmed_applicable" in outcomes:
+        missing.append(f"{label}勾选适用，但未证实对比较数据或财务报表无影响。")
+        return
+    if outcomes == {"no_impact"}:
+        checks.append(_no_impact_check_message(topic, hits[0].choice))
+
+
+def _impact_conflict_message(topic: str, hits: list[_Hit]) -> str:
+    label = _TOPIC_LABELS.get(topic, topic)
+    if any(hit.choice == "yes" for hit in hits):
+        return f"{label}明确勾选是，比较数据可能已追溯调整或重述。"
+    if any(hit.outcome == "impact" for hit in hits):
+        return f"{label}明确披露对比较数据产生影响。"
+    return f"{label}明确勾选适用，且未排除对比较数据的影响。"
+
+
+def _no_impact_check_message(topic: str, choice: _ChoiceResult) -> str:
+    if choice == "no":
+        return f"{topic} 已从原文定位并明确勾选否（不需追溯调整或重述）。"
+    if choice == "applicable":
+        return f"{topic} 已从原文定位并明确披露对财务报表无影响。"
+    return f"{topic} 已从原文定位并明确勾选不适用。"
+
+
+def _heading_topics(normalized: str, report_year: int) -> frozenset[str]:
+    if _is_first_adoption_heading(normalized, report_year):
+        return frozenset({_TOPIC_FIRST_ADOPTION})
+    topics: set[str] = set()
+    if "重要会计政策变更" in normalized:
+        topics.add(_TOPIC_POLICY)
+    if "重要会计估计变更" in normalized:
+        topics.add(_TOPIC_ESTIMATE)
+    if "会计政策、会计估计变更原因及影响" in normalized:
+        topics.update({_TOPIC_POLICY, _TOPIC_ESTIMATE})
+    if "重大会计差错更正原因及影响" in normalized:
+        topics.add(_TOPIC_PRIOR_ERROR)
+    if "会计政策、会计估计变更或重大会计差错更正的情况说明" in normalized:
+        topics.update({_TOPIC_POLICY, _TOPIC_ESTIMATE, _TOPIC_PRIOR_ERROR})
+    if "是否需追溯调整或重述以前年度会计数据" in normalized:
+        topics.add(_TOPIC_NO_RESTATEMENT)
+    return frozenset(topics)
+
+
+def _discrete_heading_units(
+    row: tuple[_Line, ...],
+    rows: tuple[tuple[_Line, ...], ...],
+    row_index: int,
+    report_year: int,
+) -> tuple[_HeadingUnit, ...]:
+    units: list[_HeadingUnit] = []
+    for line in row:
+        units.extend(_heading_units_in_text(_normalize(line.text), report_year))
+    if units:
+        return tuple(units)
+    if _is_retrospective_restatement_heading(rows, row_index):
+        return (_HeadingUnit(topics=frozenset({_TOPIC_PRIOR_ERROR}), source="major"),)
+    return ()
+
+
+def _heading_units_in_text(normalized: str, report_year: int) -> list[_HeadingUnit]:
+    if not normalized:
+        return []
+    units: list[_HeadingUnit] = []
+    for part in _split_numbered_heading_parts(normalized):
+        units.extend(_units_from_heading_part(part, report_year))
+    return units
+
+
+def _split_numbered_heading_parts(normalized: str) -> list[str]:
+    matches = list(_HEADING_PREFIX_FIND_RE.finditer(normalized))
+    if len(matches) < 2:
+        return [normalized]
+    parts: list[str] = []
+    if matches[0].start() > 0:
+        head = normalized[: matches[0].start()]
+        if head:
+            parts.append(head)
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(normalized)
+        part = normalized[match.start() : end]
+        if part:
+            parts.append(part)
+    return parts
+
+
+def _units_from_heading_part(normalized: str, report_year: int) -> list[_HeadingUnit]:
+    units: list[_HeadingUnit] = []
+    remainder = normalized
+    for phrase, topics in _COMBINED_HEADING_TOPICS:
+        if phrase in remainder:
+            units.append(_HeadingUnit(topics=topics, source="summary"))
+            remainder = remainder.replace(phrase, "", 1)
+            break
+    for title, topic, source in _SEPARATE_HEADING_TITLES:
+        found = remainder.count(title)
+        for _ in range(found):
+            units.append(_HeadingUnit(topics=frozenset({topic}), source=source))
+        if found:
+            remainder = remainder.replace(title, "")
+    if _is_first_adoption_heading(normalized, report_year):
+        units.append(_HeadingUnit(topics=frozenset({_TOPIC_FIRST_ADOPTION}), source="major"))
+    return units
+
+
+def _record_association_ambiguity(
+    hits: dict[str, list[_Hit]],
+    *,
+    topics: frozenset[str],
+    row: tuple[_Line, ...],
+    page_index: int,
     document_id: str,
     source_sha256: str,
-) -> tuple[ComparabilityEvidence | None, str | None]:
-    for page_index, lines in enumerate(pages):
-        for line_index, line in enumerate(lines):
-            if "追溯重述法" not in _normalize(line.text):
+    report_year: int,
+    header: _Line,
+    source: _HeadingSource,
+) -> None:
+    for topic in topics:
+        evidence = _make_evidence(
+            topic=topic,
+            document_id=document_id,
+            source_sha256=source_sha256,
+            report_year=report_year,
+            page_index=page_index,
+            lines=row,
+            report_header=header,
+        )
+        hits[topic].append(
+            _Hit(
+                topic=topic,
+                outcome="association_ambiguous",
+                choice="conflict",
+                evidence=evidence,
+                source=source,
+            )
+        )
+
+
+def _is_first_adoption_heading(normalized: str, report_year: int) -> bool:
+    if f"{report_year}年起首次执行" not in normalized:
+        return False
+    if "年初" not in normalized:
+        return False
+    return "财务报表" in normalized or "报表" in normalized
+
+
+def _is_retrospective_restatement_heading(rows: tuple[tuple[_Line, ...], ...], row_index: int) -> bool:
+    if "追溯重述法" not in _normalize(_row_text(rows[row_index])):
+        return False
+    context = rows[max(0, row_index - 3) : row_index]
+    return any("前期会计差错更正" in _normalize(_row_text(row)) for row in context)
+
+
+def _is_chapter_heading(normalized: str) -> bool:
+    match = _CHAPTER_HEADING_RE.match(normalized)
+    if match is None:
+        return False
+    rest = normalized[match.end() :]
+    if rest.startswith(".") and len(rest) > 1 and not rest[1].isdigit() and rest[1] not in "+-.":
+        rest = rest[1:]
+    if not rest:
+        return False
+    if rest[0] in "+-.%％元" or rest[0].isdigit():
+        return False
+    if rest.endswith("%") or rest.endswith("％"):
+        return False
+    stripped = rest[:-1] if rest.endswith("元") else rest
+    if not stripped or _TABLE_AMOUNT_RE.fullmatch(stripped) is not None:
+        return False
+    return re.match(r"[\u4e00-\u9fffA-Za-z]", rest) is not None
+
+
+def _row_is_heading(rows: tuple[tuple[_Line, ...], ...], row_index: int, report_year: int) -> bool:
+    normalized = _normalize(_row_text(rows[row_index]))
+    if _heading_topics(normalized, report_year):
+        return True
+    if _is_retrospective_restatement_heading(rows, row_index):
+        return True
+    return _is_chapter_heading(normalized)
+
+
+def _adjacent_choice(
+    rows: tuple[tuple[_Line, ...], ...],
+    heading_index: int,
+    report_year: int,
+) -> tuple[_ChoiceResult, tuple[_Line, ...], int] | None:
+    heading = rows[heading_index]
+    heading_y1 = max(line.bbox.y1 for line in heading)
+    same_row_choice = _choice_from_text(_row_text(heading))
+    if same_row_choice is not None:
+        return same_row_choice, heading, heading_index
+
+    for next_index in range(heading_index + 1, len(rows)):
+        candidate = rows[next_index]
+        candidate_y0 = min(line.bbox.y0 for line in candidate)
+        if candidate_y0 - heading_y1 > 36:
+            break
+        if _row_is_heading(rows, next_index, report_year):
+            break
+        choice = _choice_from_text(_row_text(candidate))
+        if choice is None:
+            continue
+        return choice, candidate, next_index
+    return None
+
+
+def _topic_body_lines(
+    rows: tuple[tuple[_Line, ...], ...],
+    start_index: int,
+    start_y1: float,
+    report_year: int,
+) -> tuple[_Line, ...]:
+    collected: list[_Line] = []
+    for index in range(start_index + 1, min(start_index + 6, len(rows))):
+        row = rows[index]
+        y0 = min(line.bbox.y0 for line in row)
+        if y0 - start_y1 > 96:
+            break
+        if _row_is_heading(rows, index, report_year):
+            break
+        collected.extend(row)
+    return tuple(collected)
+
+
+def _body_outcome(body: tuple[_Line, ...], topic: str) -> _TopicOutcome | None:
+    if not body:
+        return None
+    window = "\n".join(line.text for line in body)
+    if _explicit_subject_comparative_impact(window, topic):
+        return "impact"
+    if _explicit_subject_no_impact(window, topic):
+        return "no_impact"
+    if _unresolved_comparative_effect(window, topic):
+        return "unresolved_comparative_impact"
+    return None
+
+
+def _normalized_clauses(text: str) -> list[str]:
+    return [part for part in (_normalize(item) for item in _CLAUSE_END_RE.split(text)) if part]
+
+
+def _explicit_subject_no_impact(text: str, topic: str) -> bool:
+    clauses = _normalized_clauses(text)
+    if not clauses:
+        return False
+    covered = False
+    for clause in clauses:
+        match = _EXPLICIT_NO_IMPACT_RE.fullmatch(clause)
+        if match is None:
+            return False
+        subjects = _topics_from_subject_list(match.group(1))
+        if topic not in subjects:
+            continue
+        if len(subjects) > 1 and match.group(2) != "均":
+            return False
+        covered = True
+    return covered
+
+
+def _explicit_subject_comparative_impact(text: str, topic: str) -> bool:
+    for clause in _normalized_clauses(text):
+        match = _EXPLICIT_COMPARATIVE_IMPACT_RE.fullmatch(clause)
+        if match is None:
+            continue
+        subjects = _topics_from_subject_list(match.group(1))
+        if topic not in subjects:
+            continue
+        if len(subjects) > 1 and match.group(2) != "均":
+            continue
+        return True
+    return False
+
+
+def _unresolved_comparative_effect(text: str, topic: str) -> bool:
+    cues = _TOPIC_ASSOCIATION.get(topic, ())
+    if not cues:
+        return False
+    for clause in _normalized_clauses(text):
+        if (
+            _explicit_subject_no_impact(clause, topic)
+            or _explicit_subject_comparative_impact(clause, topic)
+        ):
+            continue
+        if not any(cue in clause for cue in cues):
+            continue
+        if _UNRESOLVED_COMPARATIVE_OBJECT_RE.search(clause) is None:
+            continue
+        if _UNRESOLVED_COMPARATIVE_EFFECT_RE.search(clause) is None:
+            continue
+        return True
+    return False
+
+
+def _topics_from_subject_list(subject_list: str) -> frozenset[str]:
+    topics: set[str] = set()
+    for other, cues in _TOPIC_ASSOCIATION.items():
+        if any(cue in subject_list for cue in cues):
+            topics.add(other)
+    return frozenset(topics)
+
+
+def _choice_outcome(choice: _ChoiceResult, body_outcome: _TopicOutcome | None) -> _TopicOutcome:
+    if choice == "conflict":
+        return "choice_conflict"
+    if body_outcome == "impact":
+        return "impact"
+    if choice == "yes":
+        return "impact"
+    if body_outcome == "unresolved_comparative_impact":
+        return "unresolved_comparative_impact"
+    if choice in {"not_applicable", "no"}:
+        return "no_impact"
+    if body_outcome == "no_impact":
+        return "no_impact"
+    return "unconfirmed_applicable"
+
+
+def _choice_from_text(value: str) -> _ChoiceResult | None:
+    compact = _normalize_marks(value)
+    found: list[_CheckboxChoice] = []
+    cursor = 0
+    while cursor < len(compact):
+        best: tuple[int, int, _CheckboxChoice] | None = None
+        for choice, pattern in _CHOICE_PATTERNS:
+            index = compact.find(pattern, cursor)
+            if index < 0:
                 continue
-            context = lines[max(0, line_index - 3) : line_index]
-            if not any("前期会计差错更正" in _normalize(item.text) for item in context):
-                continue
-            for candidate in lines[line_index + 1 :]:
-                if candidate.bbox.y0 - line.bbox.y1 > 36:
-                    break
-                choice = _normalize(candidate.text)
-                if choice in {_CHECKBOX_NOT_APPLICABLE, _CHECKBOX_APPLICABLE}:
-                    header = _report_year_line(lines, report_year)
-                    if header is None:
-                        return None, "追溯重述披露所在页面缺少报告年份抬头。"
-                    evidence = _make_evidence(
-                        topic="prior_error_retrospective_restatement",
-                        document_id=document_id,
-                        source_sha256=source_sha256,
-                        report_year=report_year,
-                        page_index=page_index,
-                        lines=(line, candidate),
-                        report_header=header,
-                    )
-                    if choice == _CHECKBOX_APPLICABLE:
-                        return evidence, "前期会计差错的追溯重述法明确勾选适用。"
-                    return evidence, None
-            return None, "追溯重述法标题存在，但没有相邻的明确选择项。"
-    return None, "未找到与前期会计差错更正关联的追溯重述法披露。"
+            if best is None or index < best[0]:
+                best = (index, index + len(pattern), choice)
+        if best is None:
+            break
+        found.append(best[2])
+        cursor = best[1]
+    if not found:
+        return None
+    unique = set(found)
+    if len(unique) == 1:
+        return next(iter(unique))
+    return "conflict"
 
 
 def _opening_adjustment_evidence(
@@ -489,7 +1024,7 @@ def _opening_adjustment_evidence(
             continue
         output.append(
             _make_evidence(
-                topic="opening_retained_earnings_adjustments_zero",
+                topic=_TOPIC_OPENING,
                 document_id=document_id,
                 source_sha256=source_sha256,
                 report_year=report_year,
@@ -501,6 +1036,78 @@ def _opening_adjustment_evidence(
     absent = tuple(f"缺少“{cause}”对期初未分配利润影响为 0 元的明确披露。" for cause in missing)
     absent += tuple(missing_headers)
     return tuple(output), absent, tuple(conflicts)
+
+
+def _unexplained_opening_totals(
+    pages: tuple[tuple[_Line, ...], ...],
+    report_year: int,
+) -> tuple[str, ...]:
+    limitations: list[str] = []
+    for page_index, lines in enumerate(pages):
+        rows = _visual_rows(lines)
+        for row_index, row in enumerate(rows):
+            compact = _normalize(_row_text(row))
+            if "调整期初未分配利润合计" not in compact:
+                continue
+            if "影响期初未分配利润" in compact:
+                continue
+            amounts = _total_row_amounts(rows, row_index)
+            nonzero = [item for item in amounts if not _is_zero_amount(item)]
+            if not nonzero:
+                continue
+            header = _report_year_line(lines, report_year)
+            if header is None:
+                limitations.append(f"第 {page_index + 1} 页的调整期初未分配利润合计缺少报告年份抬头，无法绑定报告年度。")
+                continue
+            limitations.append(
+                f"第 {page_index + 1} 页存在非零“调整期初未分配利润合计”金额，且无法按年度列唯一核验，不能当作无调整。"
+            )
+    return tuple(dict.fromkeys(limitations))
+
+
+def _total_row_amounts(rows: tuple[tuple[_Line, ...], ...], row_index: int) -> list[str]:
+    amounts = _row_table_amounts(rows[row_index])
+    if amounts:
+        return amounts
+    if row_index + 1 >= len(rows):
+        return []
+    current_y1 = max(line.bbox.y1 for line in rows[row_index])
+    nxt = rows[row_index + 1]
+    next_y0 = min(line.bbox.y0 for line in nxt)
+    if next_y0 - current_y1 > 16:
+        return []
+    compact = _normalize(_row_text(nxt))
+    if any(token in compact for token in _OPENING_OTHER_ROW_TOKENS):
+        return []
+    return _row_table_amounts(nxt)
+
+
+def _row_table_amounts(row: tuple[_Line, ...]) -> list[str]:
+    amounts: list[str] = []
+    for line in row:
+        amounts.extend(_table_amounts(line.text))
+    return amounts
+
+
+def _table_amounts(text: str) -> list[str]:
+    amounts: list[str] = []
+    for match in _TABLE_AMOUNT_RE.finditer(text):
+        token = match.group(1)
+        if _is_year_or_note_amount(token, text, match.start(1), match.end(1)):
+            continue
+        amounts.append(token.replace(",", ""))
+    return amounts
+
+
+def _is_year_or_note_amount(token: str, context: str, start: int, end: int) -> bool:
+    body = token.replace(",", "").lstrip("+-")
+    if "." in token:
+        return False
+    suffix = _normalize(context[end : end + 4])
+    if re.fullmatch(r"(?:19|20)\d{2}", body) and suffix.startswith("年"):
+        return True
+    compact = _normalize(context)
+    return bool(re.fullmatch(r"\d{1,3}", body) and re.fullmatch(rf"(?:附)?注{body}", compact))
 
 
 def _opening_cause(normalized_line: str) -> str | None:
@@ -532,7 +1139,10 @@ def _explicit_positive_restatement(
             # 泛指会计政策的理论性段落（如“对于同一控制合并，应调整比较报表”）不作
             # 公司已执行追溯调整的证据；要求披露句直接指向本公司和具体比较年度/数据。
             has_subject = any(token in text for token in ("本集团", "本公司", "公司已", "集团已"))
-            has_period = any(token in text for token in ("上期", "前期", "比较数据", "比较报表", "2023年", "以前年度"))
+            has_period = any(
+                token in text
+                for token in ("上期", "前期", "比较数据", "比较报表", f"{report_year - 1}年", "以前年度")
+            )
             has_action = any(token in text for token in ("追溯调整", "追溯重述", "重新列报", "比较数据调整"))
             opening_amount = re.search(r"影响期初未分配利润(-?\d+(?:\.\d+)?)元", text)
             is_explicit_zero = opening_amount is not None and _is_zero_amount(opening_amount.group(1))
@@ -551,14 +1161,16 @@ def _explicit_positive_restatement(
                             report_header=header,
                         )
                     )
-                # 没有页眉不能单独构成冲突；如果文本本身确实披露了调整，
-                # 上面的冲突仍保留，同时不把缺少页眉重复记成第二个冲突。
     return tuple(evidence), tuple(conflicts)
 
 
 def _report_year_line(lines: tuple[_Line, ...], report_year: int) -> _Line | None:
-    expected = f"{report_year}年年度报告"
-    return next((line for line in lines if expected in _normalize(line.text)), None)
+    needles = (
+        f"{report_year}年年度报告",
+        f"{report_year}年度报告全文",
+        f"{report_year}年年度报告全文",
+    )
+    return next((line for line in lines if any(needle in _normalize(line.text) for needle in needles)), None)
 
 
 def _is_zero_amount(value: str) -> bool:
@@ -583,7 +1195,7 @@ def _make_evidence(
 ) -> ComparabilityEvidence:
     bbox = _union_bbox(tuple(line.bbox for line in lines))
     return ComparabilityEvidence(
-        evidence_id=f"comp-{source_sha256[:12]}-{report_year}-{topic}-p{page_index + 1}",
+        evidence_id=_evidence_id(source_sha256, report_year, topic, page_index),
         topic=topic,
         document_id=document_id,
         source_sha256=source_sha256,
@@ -599,26 +1211,8 @@ def _make_evidence(
     )
 
 
-def _record_checkbox(
-    evidence_item: ComparabilityEvidence | None,
-    issue: str | None,
-    default_missing: str,
-    evidence: list[ComparabilityEvidence],
-    checks: list[str],
-    missing: list[str],
-    conflicts: list[str],
-) -> None:
-    if evidence_item is not None:
-        evidence.append(evidence_item)
-        if issue:
-            conflicts.append(issue)
-        else:
-            checks.append(f"{evidence_item.topic} 已从原文定位并明确勾选不适用。")
-    elif issue:
-        if "明确勾选适用" in issue or "勾选适用" in issue:
-            conflicts.append(issue)
-        else:
-            missing.append(default_missing + "（" + issue + "）。")
+def _evidence_id(source_sha256: str, report_year: int, topic: str, page_index: int) -> str:
+    return f"comp-{source_sha256[:12]}-{report_year}-{topic}-p{page_index + 1}"
 
 
 def _result(
@@ -676,6 +1270,37 @@ def _signature(value: AnnualComparabilityCheck, nonce: str) -> str:
 
 def _normalize(value: str) -> str:
     return re.sub(r"\s+", "", value)
+
+
+def _normalize_marks(value: str) -> str:
+    mapped: list[str] = []
+    for char in value:
+        if char in _CHECKED_MARKS:
+            mapped.append("√")
+        elif char in _EMPTY_MARKS:
+            mapped.append("□")
+        else:
+            mapped.append(char)
+    return _normalize("".join(mapped))
+
+
+def _visual_rows(lines: tuple[_Line, ...]) -> tuple[tuple[_Line, ...], ...]:
+    if not lines:
+        return ()
+    rows: list[list[_Line]] = [[lines[0]]]
+    for line in lines[1:]:
+        previous = rows[-1][-1]
+        overlap = min(previous.bbox.y1, line.bbox.y1) - max(previous.bbox.y0, line.bbox.y0)
+        height = max(previous.bbox.y1 - previous.bbox.y0, line.bbox.y1 - line.bbox.y0, 1.0)
+        if overlap > 0.4 * height or abs(line.bbox.y0 - previous.bbox.y0) <= 2.0:
+            rows[-1].append(line)
+        else:
+            rows.append([line])
+    return tuple(tuple(sorted(row, key=lambda item: item.bbox.x0)) for row in rows)
+
+
+def _row_text(row: tuple[_Line, ...]) -> str:
+    return "".join(line.text for line in row)
 
 
 def _union_bbox(boxes: tuple[PdfBBox, ...]) -> PdfBBox:

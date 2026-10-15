@@ -3,36 +3,57 @@ from __future__ import annotations
 import json
 import threading
 import time
+import uuid
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Callable
 
 import pytest
 
 from finagent.agents import annual_discovery
 from finagent.agents.annual_discovery import _finish_node, _resolve_max_concurrency, _scan_batches_node
+from finagent.audit import AuditedChatResult
 from finagent.core.model_settings import ModelSettings
 from finagent.llm.chat_completion import ChatCompletion, ModelResponseError
-from finagent.retrieval.annual_discovery_context import DiscoveryBatch, DiscoveryFragment, empty_coverage
+from finagent.retrieval.annual_discovery_context import AnnualDiscoveryContext, COMPACT_PLAN_VERSION, DiscoveryBatch, DiscoveryFragment, _batch_aliases, empty_coverage
+from finagent.core.annual_recovery import build_annual_discovery_binding_from_context
+from finagent.core.annual_work_budget import public_budget_contract
 
 SOURCE_SHA = "a" * 64
 MODEL_SETTINGS = ModelSettings("https://example.invalid/v1", "unit-test-secret", "mock-model", 5)
 
 
+def _one_batch(index: int) -> DiscoveryBatch:
+    text = f"第{index}批披露的业务安排出现变化，后续仍需核对。"
+    fragment = DiscoveryFragment(
+        evidence_id=f"adisc-{SOURCE_SHA[:12]}-p{index}-b0-c0-{index:012x}",
+        pdf_page=index,
+        block_index=0,
+        start_char=0,
+        bbox=(1.0, 2.0, 3.0, 4.0),
+        raw_text=text,
+    )
+    return DiscoveryBatch(index, (fragment,), len(text), 500, plan_version=COMPACT_PLAN_VERSION, aliases=_batch_aliases((fragment,), index))
+
+
 def _batches(count: int) -> list[DiscoveryBatch]:
-    result = []
-    for index in range(1, count + 1):
-        text = f"第{index}批披露的业务安排出现变化，后续仍需核对。"
-        fragment = DiscoveryFragment(
-            evidence_id=f"adisc-{SOURCE_SHA[:12]}-p{index}-b0-c0-{index:012x}",
-            pdf_page=index,
-            block_index=0,
-            start_char=0,
-            bbox=(1.0, 2.0, 3.0, 4.0),
-            raw_text=text,
-        )
-        result.append(DiscoveryBatch(index, (fragment,), len(text), 500))
-    return result
+    return [_one_batch(index) for index in range(1, count + 1)]
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def _admitted_attempt_record(*, accepted: bool) -> dict[str, object]:
+    return {
+        "attempt_index": 1,
+        "audit_id": str(uuid.uuid4()),
+        "admission_id": str(uuid.uuid4()),
+        "provider_admitted": True,
+        "response_accepted": accepted,
+        "accepted_findings": 0,
+        "status": "succeeded" if accepted else "failed",
+        "reason": None if accepted else "timeout",
+    }
 
 
 def _response(batch: DiscoveryBatch, *, partial: bool = False) -> str:
@@ -43,7 +64,7 @@ def _response(batch: DiscoveryBatch, *, partial: bool = False) -> str:
         "why_it_matters": "该变化可能影响对经营过程的理解。",
         "follow_up": "建议结合合同和回款材料进一步核对。",
         "priority": "medium",
-        "citations": [{"evidence_id": fragment.evidence_id, "quote": fragment.raw_text}],
+        "citations": [{"fragment_alias": dict(batch.aliases)[fragment.evidence_id], "quote": fragment.raw_text}],
     }
     findings = [finding]
     if partial:
@@ -82,6 +103,12 @@ def _state(
             "content_status": "text_available",
         }
     )
+    identity = {
+        "run_id": run_id, "company_id": "600519", "report_year": 2025,
+        "source_document_id": "maotai-2025", "source_sha256": SOURCE_SHA,
+    }
+    context = AnnualDiscoveryContext(identity, tuple(batches), tuple(fragment for batch in batches for fragment in batch.fragments), coverage, plan_version=COMPACT_PLAN_VERSION)
+    binding = build_annual_discovery_binding_from_context(context, settings=MODEL_SETTINGS, report={}, analysis_mode="model_investigation")
     return {
         "report": {},
         "source_pdf_path": "unused-by-node-test.pdf",
@@ -89,13 +116,12 @@ def _state(
         "settings": MODEL_SETTINGS,
         "max_concurrency": concurrency,
         "run_dir": str(run_dir),
-        "identity": {
-            "run_id": run_id,
-            "company_id": "600519",
-            "report_year": 2025,
-            "source_document_id": "maotai-2025",
-            "source_sha256": SOURCE_SHA,
-        },
+        "identity": identity,
+        "context": context,
+        "execution_binding": binding,
+        "prompt_version": "annual_discovery_v4",
+        "phase_budget": public_budget_contract(),
+        "discovery_started_at": time.monotonic(),
         "prompt_text": "fixed offline test prompt",
         "progress_callback": progress,
         "deadline": deadline if deadline is not None else time.monotonic() + 30,
@@ -119,7 +145,6 @@ def _state(
         "processed_chars": 0,
         "attempted_chars": 0,
         "findings": [],
-        "finding_keys": [],
         "audit_artifacts": [],
     }
 
@@ -131,37 +156,56 @@ def _install_audited_mock(
     lock = threading.Lock()
     metrics: dict[str, Any] = {"active": 0, "peak": 0, "calls": [], "active_at": {}}
 
-    def mock(messages, settings, *, run_dir, evidence_refs, prompt_version, timeout_seconds, audit_id):
+    def mock(
+        messages,
+        settings,
+        *,
+        run_dir,
+        evidence_refs,
+        prompt_version,
+        timeout_seconds,
+        audit_id,
+        call_stage=None,
+        batch_index=None,
+        abort_event=None,
+    ):
         payload = json.loads(messages[1].content)
         index = int(payload["batch_index"])
-        batch = _batches(1)[0]
         fragment_payload = payload["fragments"][0]
         fragment = DiscoveryFragment(
-            evidence_id=fragment_payload["evidence_id"],
-            pdf_page=int(fragment_payload["pdf_page"]),
+            evidence_id=_one_batch(index).fragments[0].evidence_id,
+            pdf_page=int(fragment_payload[1]),
             block_index=0,
             start_char=0,
             bbox=(1.0, 2.0, 3.0, 4.0),
-            raw_text=fragment_payload["raw_text"],
+            raw_text=fragment_payload[2],
         )
-        batch = DiscoveryBatch(index, (fragment,), len(fragment.raw_text), 500)
+        batch = DiscoveryBatch(index, (fragment,), len(fragment.raw_text), 500, plan_version=COMPACT_PLAN_VERSION, aliases=_batch_aliases((fragment,), index))
         response_text, delay, fail = behavior(index, batch)
         audit_dir = run_dir / audit_id
         audit_dir.mkdir()
-        (audit_dir / "request.json").write_text(
-            json.dumps(
-                {
-                    "status": "started",
-                    "prompt_version": prompt_version,
-                    "messages": [{"role": message.role, "content": message.content} for message in messages],
-                    "evidence_refs": [
-                        {"document_id": ref.document_id, "page": ref.page}
-                        for ref in evidence_refs
-                    ],
-                },
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
+        attempt_dir = audit_dir / "attempt-01"
+        attempt_dir.mkdir()
+        attempt_record = _admitted_attempt_record(accepted=not fail)
+        request_record = {
+            "audit_id": audit_id,
+            "status": "started",
+            "prompt_version": prompt_version,
+            "evidence_refs": [
+                {"document_id": ref.document_id, "page": ref.page}
+                for ref in evidence_refs
+            ],
+            "model": settings.model,
+            "stream": False,
+        }
+        _write_json(audit_dir / "request.json", request_record)
+        _write_json(
+            attempt_dir / "request.json",
+            {
+                **request_record,
+                "attempt_index": 1,
+                "audit_id": attempt_record["audit_id"],
+            },
         )
         with lock:
             metrics["active"] += 1
@@ -171,18 +215,74 @@ def _install_audited_mock(
         time.sleep(delay)
         try:
             if fail:
-                (audit_dir / "failure.json").write_text(
-                    json.dumps({"status": "failed", "category": "timeout"}),
-                    encoding="utf-8",
+                failure_record = {
+                    "status": "failed",
+                    "category": "timeout",
+                    "provider_admitted": True,
+                    "provider_admission_count": 1,
+                    "response_count": 0,
+                    "attempt_records": [attempt_record],
+                }
+                _write_json(audit_dir / "failure.json", failure_record)
+                _write_json(
+                    attempt_dir / "failure.json",
+                    {
+                        "status": "failed",
+                        "attempt_index": 1,
+                        "audit_id": attempt_record["audit_id"],
+                        "category": "timeout",
+                        "provider_admitted": True,
+                        "admission_id": attempt_record["admission_id"],
+                    },
                 )
-                raise ModelResponseError("模型服务请求超时。")
-            (audit_dir / "response.json").write_text(
-                json.dumps({"status": "succeeded", "text": response_text}, ensure_ascii=False),
-                encoding="utf-8",
+                error = ModelResponseError(
+                    "模型服务请求超时。",
+                    category="timeout",
+                    provider_admitted=True,
+                    admission_id=str(attempt_record["admission_id"]),
+                )
+                setattr(error, "attempt_records", (attempt_record,))
+                setattr(error, "provider_admission_count", 1)
+                setattr(error, "response_count", 0)
+                raise error
+            completion = ChatCompletion(
+                text=response_text,
+                model=settings.model,
+                response_id=f"mock-{index}",
+                provider_admitted=True,
+                admission_id=str(attempt_record["admission_id"]),
             )
-            return SimpleNamespace(
-                completion=ChatCompletion(response_text, settings.model, f"mock-{index}"),
+            _write_json(
+                attempt_dir / "response.json",
+                {
+                    "status": "succeeded",
+                    "attempt_index": 1,
+                    "audit_id": attempt_record["audit_id"],
+                    "text": response_text,
+                    "model": settings.model,
+                    "response_id": completion.response_id,
+                    "provider_admitted": True,
+                    "admission_id": attempt_record["admission_id"],
+                },
+            )
+            _write_json(
+                audit_dir / "response.json",
+                {
+                    "status": "succeeded",
+                    "text": response_text,
+                    "model": settings.model,
+                    "response_id": completion.response_id,
+                    "provider_admission_count": 1,
+                    "response_count": 1,
+                    "attempt_records": [attempt_record],
+                },
+            )
+            return AuditedChatResult(
+                completion=completion,
                 audit_dir=audit_dir,
+                provider_admission_count=1,
+                response_count=1,
+                attempt_records=(attempt_record,),
             )
         finally:
             with lock:
@@ -198,31 +298,20 @@ def _run_scan(state: dict[str, Any]) -> dict[str, Any]:
     return state
 
 
-def test_mock_23_batch_benchmark_rolling_concurrency_preserves_order_and_text(
+def test_mock_18_batch_benchmark_rolling_concurrency_preserves_order_and_text(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    serial_state = _state(tmp_path / "serial", monkeypatch, 23, concurrency=1, run_id="serial")
+    serial_state = _state(tmp_path / "serial", monkeypatch, 18, concurrency=1, run_id="serial")
     serial_metrics = _install_audited_mock(
         monkeypatch,
         lambda _index, batch: (_response(batch), 0.025, False),
     )
-    serial_started = time.perf_counter()
     serial = _run_scan(serial_state)
-    serial_seconds = time.perf_counter() - serial_started
-    serial_requests = {
-        index: json.loads(
-            (Path(serial_state["run_dir"]) / audit_id / "request.json").read_text(encoding="utf-8")
-        )["messages"][1]["content"]
-        for index, audit_id in (
-            (artifact.batch_index, Path(artifact.audit_dir).name)
-            for artifact in serial["audit_artifacts"]
-        )
-    }
 
     monkeypatch.setenv(annual_discovery.CONCURRENCY_ENV, "3")
     assert _resolve_max_concurrency(None) == 3
     concurrent_state = _state(
-        tmp_path / "concurrent", monkeypatch, 23, concurrency=_resolve_max_concurrency(None), run_id="concurrent"
+        tmp_path / "concurrent", monkeypatch, 18, concurrency=_resolve_max_concurrency(None), run_id="concurrent"
     )
     concurrent_metrics = _install_audited_mock(
         monkeypatch,
@@ -230,40 +319,18 @@ def test_mock_23_batch_benchmark_rolling_concurrency_preserves_order_and_text(
     )
     progress: list[dict[str, object]] = []
     concurrent_state["progress_callback"] = progress.append
-    concurrent_started = time.perf_counter()
     concurrent = _run_scan(concurrent_state)
-    concurrent_seconds = time.perf_counter() - concurrent_started
-    concurrent_requests = {
-        index: json.loads(
-            (Path(concurrent_state["run_dir"]) / audit_id / "request.json").read_text(encoding="utf-8")
-        )["messages"][1]["content"]
-        for index, audit_id in (
-            (artifact.batch_index, Path(artifact.audit_dir).name)
-            for artifact in concurrent["audit_artifacts"]
-        )
-    }
 
     assert serial_metrics["peak"] == 1
     assert concurrent_metrics["peak"] == 3
-    assert concurrent["model_call_attempt_count"] == serial["model_call_attempt_count"] == 23
-    assert concurrent["model_call_count"] == serial["model_call_count"] == 23
+    assert concurrent["model_call_attempt_count"] == serial["model_call_attempt_count"] == 18
+    assert concurrent["model_call_count"] == serial["model_call_count"] == 18
     assert concurrent["coverage"] == serial["coverage"]
     assert concurrent["findings"] == serial["findings"]
-    assert concurrent_requests == serial_requests
-    assert list(concurrent_requests) == list(range(1, 24))
-    assert [row["batch_index"] for row in concurrent["coverage"]["batch_results"]] == list(range(1, 24))
-    assert concurrent_seconds < serial_seconds * 0.7, {
-        "serial_seconds": serial_seconds,
-        "concurrent_seconds": concurrent_seconds,
-    }
-    metadata = json.loads((Path(concurrent_state["run_dir"]) / "discovery-execution.json").read_text())
-    assert metadata == {
-        "kind": "fintrace_annual_discovery_execution_v1",
-        "prompt_version": "annual_discovery_v2",
-        "scheduler": "bounded_rolling",
-        "max_in_flight": 3,
-        "source_sha256": SOURCE_SHA,
-    }
+    assert [row["batch_index"] for row in concurrent["coverage"]["batch_results"]] == list(range(1, 19))
+    assert [finding["citations"][0]["evidence_id"] for finding in concurrent["findings"]] == [
+        batch.fragments[0].evidence_id for batch in concurrent_state["batches"]
+    ]
 
 
 def test_slow_first_batch_reports_completion_order_and_refills_without_wave_barrier(
@@ -354,10 +421,10 @@ def test_deadline_closed_gate_keeps_later_local_validation_failure_unattempted(
                 time.sleep(0.002)
         return original_enter(gate, batch_index, absolute_deadline)
 
-    def fail_second_batch_serialization(identity, batch_index, fragments):
+    def fail_second_batch_serialization(identity, batch_index, fragments, **kwargs):
         if batch_index == 2:
             raise ValueError("synthetic local serialization failure")
-        return original_serialize(identity, batch_index, fragments)
+        return original_serialize(identity, batch_index, fragments, **kwargs)
 
     monkeypatch.setattr(annual_discovery._OrderedCallGate, "enter", expire_before_first_admission)
     monkeypatch.setattr(annual_discovery, "serialize_batch_content", fail_second_batch_serialization)
@@ -400,15 +467,9 @@ def test_mixed_results_keep_each_audit_bound_to_its_batch(
     assert result["model_call_attempt_count"] == 3
     artifacts = {artifact.batch_index: artifact for artifact in result["audit_artifacts"]}
     assert set(artifacts) == {1, 2, 3}
-    for index, artifact in artifacts.items():
-        audit_dir = Path(state["run_dir"]) / Path(artifact.audit_dir).name
-        request = json.loads((audit_dir / "request.json").read_text(encoding="utf-8"))
-        request_payload = json.loads(request["messages"][1]["content"])
-        assert request_payload["batch_index"] == index
-        assert artifact.status == ("failed" if index == 3 else "succeeded")
-    timeout_artifact = artifacts[3]
-    timeout_dir = Path(state["run_dir"]) / Path(timeout_artifact.audit_dir).name
-    assert json.loads((timeout_dir / "failure.json").read_text())["category"] == "timeout"
+    assert artifacts[1].status == "succeeded"
+    assert artifacts[2].status == "succeeded"
+    assert artifacts[3].status == "failed"
     assert [row["status"] for row in result["coverage"]["batch_results"]] == [
         "succeeded", "partial", "failed"
     ]

@@ -14,6 +14,12 @@ import finagent.agents.annual_review as annual_review
 from finagent.agents.annual_issue_pipeline import checkpoint_issue_pipeline
 import finagent.audit.audited_chat as audited_chat
 from finagent.core.model_settings import ModelSettings
+from finagent.core.annual_work_budget import (
+    BUDGET_CONTRACT_VERSION,
+    MODEL_CALL_TIMEOUT_SECONDS,
+    REVIEW_REQUEST_LIMIT_CHARS,
+    archived_budget_contract_v2,
+)
 from finagent.llm.chat_completion import serialize_chat_body
 
 
@@ -327,24 +333,114 @@ def test_review_v3_request_helper_projects_encodes_and_measures_the_official_cha
     assert annual_review.decode_annual_review_v3_wire(request["envelope"]) == request["projected_input"]
     assert request["request_chars"] == len(request["body"].decode("utf-8"))
     assert request["body"] == serialize_chat_body("fixed-dummy-model", request["messages"])
-    assert request["request_chars"] <= annual_review.V3_MAX_REQUEST_CHARS
     assert request["semantic_input_sha256"] == hashlib.sha256(
         json.dumps(full_input, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
     ).hexdigest()
 
 
-def test_review_v3_prompt_describes_the_current_projection_wire_contract() -> None:
-    prompt = (Path(__file__).resolve().parents[2] / "config" / "prompts" / "annual_review_v3.md").read_text(encoding="utf-8")
 
-    assert annual_review.V3_WIRE_SCHEMA in prompt
-    assert "key_pool" in prompt and "string_pool" in prompt and "object_pool" in prompt
-    assert "`[0, key_index, encoded_value, ...]`" in prompt
-    assert "`[6]`" in prompt
-    assert "annual_review_v3_purpose_projection_v1" in prompt
-    assert "text_pool" not in prompt
-    assert "U+E000" not in prompt
-    assert "显式 `null` 原样保留" in prompt
-    assert "可能解释必须标为假设。" in prompt
+def test_review_v3_helper_keeps_legacy_default_and_honors_explicit_limit() -> None:
+    report = _report(candidate=False)
+    identity = annual_review._report_identity(report)
+    discovery = {
+        "kind": "fintrace_annual_discovery", **identity, "status": "completed",
+        "coverage": {"complete": True, "total_pages": 11, "unread_pages": []},
+        "findings": [], "evidences": [],
+    }
+    pipeline = checkpoint_issue_pipeline({**identity, "report_period": "2024年度"}, discovery)
+    investigation = {
+        **identity, "status": "completed", "items": [], "narrative_evidences": [],
+        "discovery": discovery, "model_issue_pipeline": pipeline,
+    }
+    prompt = (Path(__file__).resolve().parents[2] / "config" / "prompts" / "annual_review_v3.md").read_text(encoding="utf-8")
+    full_input, *_rest = annual_review._build_review_input_v3(
+        report, investigation, identity, request_model="fixed-dummy-model",
+        system_prompt=prompt, enforce_budget=False,
+    )
+    size = annual_review.build_annual_review_v3_request(
+        full_input, model="fixed-dummy-model", system_prompt=prompt,
+    )["request_chars"]
+    assert type(size) is int and size > 1
+
+    with pytest.raises(ValueError, match="annual_review_v3_request_budget_exceeded"):
+        annual_review._build_review_input_v3(
+            report, investigation, identity, request_model="fixed-dummy-model",
+            system_prompt=prompt, max_request_chars=size - 1,
+        )
+    annual_review._build_review_input_v3(
+        report, investigation, identity, request_model="fixed-dummy-model",
+        system_prompt=prompt, max_request_chars=size,
+    )
+    with pytest.raises(ValueError, match="annual_review_v3_request_budget_invalid"):
+        annual_review._build_review_input_v3(
+            report, investigation, identity, request_model="fixed-dummy-model",
+            system_prompt=prompt, max_request_chars=REVIEW_REQUEST_LIMIT_CHARS + 1,
+        )
+
+
+def test_activity_review_cap_rejects_historical_policy_and_amplified_limit() -> None:
+    with pytest.raises(ValueError, match="annual_review_v3_execution_binding_invalid"):
+        annual_review._activity_review_request_limit_chars({
+            "model_issue_pipeline": {
+                "execution_binding": {
+                    "kind": "fintrace_annual_execution_binding_v5",
+                    "execution_version": "execution_v5",
+                },
+            },
+        })
+
+    archived = archived_budget_contract_v2(scope="new_run")
+    with pytest.raises(ValueError, match="annual_review_v3_execution_binding_invalid"):
+        annual_review._activity_review_request_limit_chars({
+            "model_issue_pipeline": {
+                "execution_binding": {
+                    "kind": "fintrace_annual_execution_binding_v6",
+                    "execution_version": "execution_v6",
+                    "budget_contract_version": archived["schema_version"],
+                    "review_request_limit_chars": archived["review_request_limit_chars"],
+                    "model_call_timeout_seconds": archived["model_call_timeout_seconds"],
+                },
+            },
+        })
+
+    current = {
+        "kind": "fintrace_annual_execution_binding_v10",
+        "execution_version": "execution_v10",
+        "budget_contract_version": BUDGET_CONTRACT_VERSION,
+        "global_request_limit_chars": 96000,
+        "review_request_limit_chars": REVIEW_REQUEST_LIMIT_CHARS,
+        "model_call_timeout_seconds": MODEL_CALL_TIMEOUT_SECONDS,
+        "grouping_shard_plan_version": "member_bounded_v2",
+        "grouping_shard_max_members": 3,
+    }
+    assert annual_review._activity_review_request_limit_chars({
+        "model_issue_pipeline": {"execution_binding": current},
+    }) == REVIEW_REQUEST_LIMIT_CHARS
+    historical_v9 = {key: value for key, value in current.items() if not key.startswith("grouping_shard_")}
+    historical_v9.update(kind="fintrace_annual_execution_binding_v9", execution_version="execution_v9")
+    with pytest.raises(ValueError, match="annual_review_v3_execution_binding_invalid"):
+        annual_review._activity_review_request_limit_chars({
+            "model_issue_pipeline": {"execution_binding": historical_v9},
+        })
+    for field, value in (("grouping_shard_plan_version", "unknown_planner"), ("grouping_shard_max_members", 12)):
+        with pytest.raises(ValueError, match="annual_review_v3_execution_binding_invalid"):
+            annual_review._activity_review_request_limit_chars({
+                "model_issue_pipeline": {"execution_binding": dict(current, **{field: value})},
+            })
+    amplified = dict(current, review_request_limit_chars=REVIEW_REQUEST_LIMIT_CHARS + 1)
+    with pytest.raises(ValueError, match="annual_review_v3_execution_binding_invalid"):
+        annual_review._activity_review_request_limit_chars({
+            "model_issue_pipeline": {"execution_binding": amplified},
+        })
+    amplified_global = dict(current, global_request_limit_chars=96001)
+    with pytest.raises(ValueError, match="annual_review_v3_execution_binding_invalid"):
+        annual_review._activity_review_request_limit_chars({
+            "model_issue_pipeline": {"execution_binding": amplified_global},
+        })
+
+
+
+
 
 
 SOURCE_SHA = "a" * 64

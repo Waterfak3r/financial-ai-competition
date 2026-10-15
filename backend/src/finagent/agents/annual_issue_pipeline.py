@@ -1,4 +1,4 @@
-"""Strict, resumable issue grouping for the execution_v5 annual workflow.
+"""Strict, resumable issue grouping for the annual issue pipeline.
 
 This layer keeps every accepted discovery finding and its source quote in a
 local candidate ledger. Model responses can only assign typed dispositions to
@@ -25,9 +25,20 @@ from finagent.agents.annual_review_wire import (
     decode_annual_issue_input_wire,
     encode_annual_issue_input_wire,
 )
+from finagent.core.annual_work_budget import (
+    BUDGET_CONTRACT_VERSION,
+    GLOBAL_REQUEST_LIMIT_CHARS,
+    MODEL_CALL_TIMEOUT_SECONDS,
+    REVIEW_REQUEST_LIMIT_CHARS,
+    archived_budget_contract_v2,
+    archived_budget_contract_v3,
+    archived_budget_contract_v4,
+)
 from finagent.core.model_settings import ModelSettings
 from finagent.llm.chat_completion import ChatMessage, serialize_chat_body
 from finagent.retrieval.annual_issue_supplements import (
+    LEGACY_RETRIEVAL_VERSION,
+    RETRIEVAL_VERSION,
     retrieve_annual_issue_supplements as _retrieve_supplements,
     selected_source_char_union_size as _selected_source_char_union_size,
     section_from_heading as _section_from_heading,
@@ -39,12 +50,28 @@ PIPELINE_KIND = "annual_issue_pipeline_v1"
 ISSUE_WIRE_VERSION = ISSUE_INPUT_WIRE_SCHEMA
 GROUP_PROMPT_VERSION = "annual_issue_grouping_v1"
 MAX_SHARD_REQUEST_CHARS = 22_000
-MAX_GLOBAL_REQUEST_CHARS = 24_000
-MAX_REVIEW_REQUEST_CHARS = 24_000
-MAX_FINDINGS_PER_SHARD = 12
+MAX_GLOBAL_REQUEST_CHARS = GLOBAL_REQUEST_LIMIT_CHARS
+GROUPING_SHARD_PLAN_VERSION = "member_bounded_v2"
+MAX_FINDINGS_PER_SHARD = 3
+_LEGACY_MAX_FINDINGS_PER_SHARD = 12
 MAX_SUPPLEMENT_PAIRS = 32
 _SHA = re.compile(r"^[0-9a-f]{64}$")
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
+_EXECUTION_BINDING_V5_FIELDS = frozenset({
+    "kind", "execution_version", "source_sha256", "company_id", "report_year", "source_document_id",
+    "analysis_mode", "provider_model_fingerprint", "model", "discovery_binding", "prompts_sha256",
+    "parser_version", "issue_pipeline_version", "grouping_prompt_version", "review_prompt_version",
+    "issue_wire_version", "review_wire_version", "review_input_projection_version",
+    "plan_version", "plan_sha256", "m3_binding_sha256",
+})
+_EXECUTION_BINDING_V6_FIELDS = _EXECUTION_BINDING_V5_FIELDS | {
+    "budget_contract_version", "review_request_limit_chars", "model_call_timeout_seconds",
+}
+_EXECUTION_BINDING_V8_FIELDS = _EXECUTION_BINDING_V6_FIELDS | {"supplement_retrieval_version"}
+_EXECUTION_BINDING_V9_FIELDS = _EXECUTION_BINDING_V8_FIELDS | {"global_request_limit_chars"}
+_EXECUTION_BINDING_V10_FIELDS = _EXECUTION_BINDING_V9_FIELDS | {
+    "grouping_shard_plan_version", "grouping_shard_max_members",
+}
 _PROMPT_PATH = Path(__file__).resolve().parents[4] / "config" / "prompts" / "annual_issue_grouping_v1.md"
 
 
@@ -59,7 +86,7 @@ def initial_issue_pipeline(identity: Mapping[str, Any]) -> dict[str, Any]:
         "source_identity": source,
         "execution_binding": None,
         "input": {
-            "discovery_prompt_version": "annual_discovery_v3",
+            "discovery_prompt_version": "annual_discovery_v5",
             "discovery_status": "not_started",
             "discovery_coverage_complete": False,
             "finding_ids": [],
@@ -87,6 +114,10 @@ def checkpoint_issue_pipeline(
     """Project every currently accepted discovery finding as pending locally."""
 
     source = _source_identity(identity)
+    if discovery.get("prompt_version") == "annual_discovery_v5":
+        _validate_execution_binding(execution_binding, source)
+        if execution_binding.get("execution_version") != "execution_v11":
+            raise ValueError("annual_issue_pipeline_binding_invalid")
     findings, evidences = _validated_findings(discovery, source)
     coverage = discovery.get("coverage") if isinstance(discovery.get("coverage"), Mapping) else {}
     finding_ids = [str(item["finding_id"]) for item in findings]
@@ -106,7 +137,7 @@ def checkpoint_issue_pipeline(
         for finding_id in finding_ids
     ]
     input_record = {
-        "discovery_prompt_version": discovery.get("prompt_version", "annual_discovery_v3"),
+        "discovery_prompt_version": discovery.get("prompt_version"),
         "discovery_status": discovery.get("status", "partial"),
         "discovery_coverage_complete": coverage.get("complete") is True,
         "finding_ids": finding_ids,
@@ -129,7 +160,9 @@ def checkpoint_issue_pipeline(
         candidates=candidates,
         member_decisions=decisions,
     )
-    pipeline["retrieval_coverage"] = _empty_retrieval_coverage(source)
+    pipeline["retrieval_coverage"] = _empty_retrieval_coverage(
+        source, retrieval_version=RETRIEVAL_VERSION if discovery.get("prompt_version") in {"annual_discovery_v4", "annual_discovery_v5"} else LEGACY_RETRIEVAL_VERSION,
+    )
     pipeline["global_closure"] = _pending_global_closure(pipeline, [], "awaiting_grouping")
     return pipeline
 
@@ -161,6 +194,11 @@ def run_annual_issue_pipeline(
     supplements_started: float | None = None
     supplements_finished: float | None = None
     source = _source_identity(identity)
+    _validate_execution_binding(execution_binding, source)
+    if execution_binding.get("execution_version") != "execution_v11" or discovery.get("prompt_version") != "annual_discovery_v5":
+        raise ValueError("annual_issue_pipeline_binding_invalid")
+    if parent_pipeline is not None and parent_pipeline.get("execution_binding") != execution_binding:
+        raise ValueError("annual_issue_pipeline_parent_binding_mismatch")
     state = checkpoint_issue_pipeline(identity, discovery, execution_binding=execution_binding)
     state["global_closure"]["coverage_gaps"] = [item for item in scope_gaps if isinstance(item, str)]
     state["status"] = "running"
@@ -189,26 +227,37 @@ def run_annual_issue_pipeline(
     candidates = state["candidates"]
     candidate_groups = _local_exact_duplicate_groups(candidates)
     parent_shards = _parent_shards(parent_pipeline)
-    accepted_shards: list[dict[str, Any]] = []
     finding_decisions: dict[str, dict[str, Any]] = {}
     fatal_stop_reason: str | None = None
     prompt = _PROMPT_PATH.read_text(encoding="utf-8")
-    shard_inputs = _build_group_shards(candidate_groups, evidence_map, source, settings.model, prompt)
+    shard_inputs = _build_group_shards(
+        candidate_groups, evidence_map, source, settings.model, prompt,
+        execution_binding=execution_binding,
+    )
+    accepted_shards = [
+        _pending_shard(f"group:{index:03d}:{item['semantic_sha256'][:16]}", item, "awaiting_grouping")
+        for index, item in enumerate(shard_inputs)
+    ]
+    state["shards"] = accepted_shards
+    _apply_group_decisions(state, finding_decisions, candidates, source)
+    state["global_closure"] = _pending_global_closure(state, state["issues"], "awaiting_global_reconciliation")
+    publish_current()
 
     for shard_index, shard_input in enumerate(shard_inputs):
         shard_id = f"group:{shard_index:03d}:{shard_input['semantic_sha256'][:16]}"
         if _stop_reason(deadline, main_soft_deadline, cancel_check):
-            accepted_shards.append(_pending_shard(shard_id, shard_input, "grouping_stopped_before_shard"))
+            accepted_shards[shard_index] = _pending_shard(shard_id, shard_input, "grouping_stopped_before_shard")
             continue
         old = parent_shards.get(shard_id)
         if old is not None and _try_reuse_shard(old, shard_input, source, artifacts_root, "grouping"):
             result = dict(old["result"])
             audit = dict(old["audit"])
-            accepted_shards.append(_accepted_shard(shard_id, shard_input, result, audit, reused=True, parent_run_id=parent_run_id))
+            accepted_shards[shard_index] = _accepted_shard(shard_id, shard_input, result, audit, reused=True, parent_run_id=parent_run_id)
             for decision in result["decisions"]:
                 finding_decisions[decision["finding_id"]] = dict(decision)
             state["shards"] = accepted_shards
             _apply_group_decisions(state, finding_decisions, candidates, source)
+            state["global_closure"] = _pending_global_closure(state, state["issues"], "awaiting_global_reconciliation")
             publish_current()
             continue
         try:
@@ -225,24 +274,26 @@ def run_annual_issue_pipeline(
             )
         except _DurableShardError as exc:
             audit = exc.audit
-            accepted_shards.append(_pending_shard(shard_id, shard_input, exc.code, audit=audit, attempts=exc.attempts, responses=exc.responses))
+            accepted_shards[shard_index] = _pending_shard(shard_id, shard_input, exc.code, audit=audit, attempts=exc.attempts, responses=exc.responses)
             if exc.code in {"http_401", "http_403", "cancelled", "call_gate_closed", "ledger_config_invalid", "ledger_source_context_missing_or_unapproved", "ledger_unavailable", "ledger_provider_mismatch", "ledger_budget_exhausted", "task_budget_exhausted", "ledger_policy_mismatch", "audit_write_failed"}:
                 fatal_stop_reason = exc.code
         except Exception:
-            accepted_shards.append(_pending_shard(shard_id, shard_input, "grouping_call_failed"))
+            accepted_shards[shard_index] = _pending_shard(shard_id, shard_input, "grouping_call_failed")
         else:
-            accepted_shards.append(_accepted_shard(shard_id, shard_input, result, audit, reused=False, parent_run_id=None, attempt_count=call_attempts, response_count=call_responses))
+            accepted_shards[shard_index] = _accepted_shard(shard_id, shard_input, result, audit, reused=False, parent_run_id=None, attempt_count=call_attempts, response_count=call_responses)
             for decision in result["decisions"]:
                 finding_decisions[decision["finding_id"]] = dict(decision)
         state["shards"] = accepted_shards
         _apply_group_decisions(state, finding_decisions, candidates, source)
+        state["global_closure"] = _pending_global_closure(state, state["issues"], "awaiting_global_reconciliation")
         publish_current()
         if fatal_stop_reason is not None:
             for rest_index, rest_input in enumerate(shard_inputs[shard_index + 1 :], start=shard_index + 1):
                 rest_id = f"group:{rest_index:03d}:{rest_input['semantic_sha256'][:16]}"
-                accepted_shards.append(_pending_shard(rest_id, rest_input, fatal_stop_reason, kind="grouping"))
+                accepted_shards[rest_index] = _pending_shard(rest_id, rest_input, fatal_stop_reason, kind="grouping")
             state["shards"] = accepted_shards
             _apply_group_decisions(state, finding_decisions, candidates, source)
+            state["global_closure"] = _pending_global_closure(state, state["issues"], fatal_stop_reason)
             publish_current()
             break
 
@@ -358,6 +409,7 @@ def run_annual_issue_pipeline(
         supplements_started = time.monotonic()
         supplements, retrieval_coverage = _retrieve_supplements(
             state["issues"], parsed_pdf, source, max_role_assignments=MAX_SUPPLEMENT_PAIRS,
+            retrieval_version=execution_binding["supplement_retrieval_version"],
         )
         requested_pairs = [
             (issue_id, item["evidence_id"])
@@ -403,6 +455,8 @@ def run_annual_issue_pipeline(
                     supp_attempts, supp_responses = exc.attempts, exc.responses
                     supp_audit = exc.audit
                     supp_result = None
+                    if exc.code in {"http_401", "http_403", "cancelled", "call_gate_closed", "ledger_config_invalid", "ledger_source_context_missing_or_unapproved", "ledger_unavailable", "ledger_provider_mismatch", "ledger_budget_exhausted", "task_budget_exhausted", "ledger_policy_mismatch", "audit_write_failed"}:
+                        fatal_stop_reason = exc.code
                 except Exception:
                     supp_audit = None
                     supp_result = None
@@ -417,7 +471,7 @@ def run_annual_issue_pipeline(
                 accepted_shards.append(_accepted_shard(supp_id, {"input": supplement_input, "semantic_sha256": sem, "wire_body_sha256": _wire_hash(settings.model, supplement_prompt, supplement_input)}, supp_result, supp_audit or {}, reused=reused_supp, parent_run_id=parent_run_id, attempt_count=supp_attempts, response_count=supp_responses))
                 state["shards"] = accepted_shards
             else:
-                reason = "supplement_result_invalid" if supp_audit and supp_audit.get("status") == "succeeded" else "supplement_role_pending"
+                reason = fatal_stop_reason or ("supplement_result_invalid" if supp_audit and supp_audit.get("status") == "succeeded" else "supplement_role_pending")
                 accepted_shards.append(_pending_shard(supp_id, _seal_input(supplement_input, settings.model, supplement_prompt), reason, audit=supp_audit, attempts=supp_attempts, responses=supp_responses, kind="supplement"))
                 state["shards"] = accepted_shards
         supplements_finished = time.monotonic() if supplements_started is not None else None
@@ -456,7 +510,10 @@ def run_annual_issue_pipeline(
         state["status"] = "partial"
         state["reason"] = state["global_closure"].get("reason") or "issue_pipeline_pending"
     if fatal_stop_reason is not None:
-        state["status"] = "abstained" if fatal_stop_reason == "cancelled" else "failed"
+        state["status"] = (
+            "partial" if fatal_stop_reason in {"task_budget_exhausted", "ledger_budget_exhausted"}
+            else "abstained" if fatal_stop_reason == "cancelled" else "failed"
+        )
         state["reason"] = fatal_stop_reason
     publish_current()
     return state
@@ -489,7 +546,8 @@ def _call_typed_shard(
     try:
         with annual_call_deadline(deadline):
             audited = audited_complete_chat(messages, settings, run_dir=run_dir, evidence_refs=refs,
-                prompt_version=prompt_version, call_stage=call_stage)
+                prompt_version=prompt_version, call_stage=call_stage,
+                timeout_seconds=MODEL_CALL_TIMEOUT_SECONDS)
         audit = _audit_record(audited.audit_dir, artifacts_root, wire_hash, shard["semantic_sha256"], kind)
         result = parse_typed_result(audited.completion.text, kind=kind, input_value=input_value)
         return result, audit, audited.provider_admission_count, audited.response_count
@@ -671,6 +729,126 @@ def _issue_quotes(input_value: Mapping[str, Any]) -> dict[str, set[tuple[str, st
     return result
 
 
+def _validate_execution_binding(binding: Any, source: Mapping[str, Any]) -> None:
+    """Accept exact historical v5-v10 bindings or activity v11 bindings."""
+
+    if not isinstance(binding, Mapping):
+        raise ValueError("annual_issue_pipeline_binding_invalid")
+    fields = set(binding)
+    if fields == set(_EXECUTION_BINDING_V5_FIELDS):
+        kind = "fintrace_annual_execution_binding_v5"
+        version = "execution_v5"
+    elif (
+        fields == set(_EXECUTION_BINDING_V6_FIELDS)
+        and binding.get("kind") == "fintrace_annual_execution_binding_v6"
+    ):
+        kind = "fintrace_annual_execution_binding_v6"
+        version = "execution_v6"
+    elif (
+        fields == set(_EXECUTION_BINDING_V6_FIELDS)
+        and binding.get("kind") == "fintrace_annual_execution_binding_v7"
+    ):
+        kind = "fintrace_annual_execution_binding_v7"
+        version = "execution_v7"
+    elif fields == set(_EXECUTION_BINDING_V8_FIELDS) and binding.get("kind") == "fintrace_annual_execution_binding_v8":
+        kind = "fintrace_annual_execution_binding_v8"
+        version = "execution_v8"
+    elif fields == set(_EXECUTION_BINDING_V9_FIELDS) and binding.get("kind") == "fintrace_annual_execution_binding_v9":
+        kind = "fintrace_annual_execution_binding_v9"
+        version = "execution_v9"
+    elif fields == set(_EXECUTION_BINDING_V10_FIELDS) and binding.get("kind") == "fintrace_annual_execution_binding_v10":
+        kind = "fintrace_annual_execution_binding_v10"
+        version = "execution_v10"
+    elif fields == set(_EXECUTION_BINDING_V10_FIELDS) and binding.get("kind") == "fintrace_annual_execution_binding_v11":
+        kind = "fintrace_annual_execution_binding_v11"
+        version = "execution_v11"
+    else:
+        raise ValueError("annual_issue_pipeline_binding_invalid")
+    archived_v2 = archived_budget_contract_v2(scope="new_run")
+    archived_v3 = archived_budget_contract_v3(scope="new_run")
+    archived_v4 = archived_budget_contract_v4(scope="new_run")
+    if (
+        binding.get("kind") != kind
+        or binding.get("execution_version") != version
+        or any(binding.get(key) != source[key] for key in ("source_sha256", "company_id", "report_year", "source_document_id"))
+        or binding.get("issue_pipeline_version") != PIPELINE_KIND
+        or binding.get("issue_wire_version") != ISSUE_WIRE_VERSION
+        or binding.get("grouping_prompt_version") != GROUP_PROMPT_VERSION
+        or binding.get("review_prompt_version") != "annual_review_v3"
+        or binding.get("review_wire_version") != V3_WIRE_SCHEMA
+        or binding.get("review_input_projection_version") != V3_INPUT_PROJECTION_VERSION
+        or not isinstance(binding.get("model"), str)
+        or not isinstance(binding.get("provider_model_fingerprint"), str)
+        or _SHA.fullmatch(str(binding.get("prompts_sha256", ""))) is None
+        or (
+            version == "execution_v6"
+            and (
+                binding.get("budget_contract_version") != archived_v2["schema_version"]
+                or type(binding.get("review_request_limit_chars")) is not int
+                or binding.get("review_request_limit_chars") != archived_v2["review_request_limit_chars"]
+                or type(binding.get("model_call_timeout_seconds")) is not float
+                or binding.get("model_call_timeout_seconds") != archived_v2["model_call_timeout_seconds"]
+            )
+        )
+        or (
+            version in {"execution_v7", "execution_v8"}
+            and (
+                binding.get("budget_contract_version") != archived_v3["schema_version"]
+                or type(binding.get("review_request_limit_chars")) is not int
+                or binding.get("review_request_limit_chars") != archived_v3["review_request_limit_chars"]
+                or type(binding.get("model_call_timeout_seconds")) is not float
+                or binding.get("model_call_timeout_seconds") != archived_v3["model_call_timeout_seconds"]
+            )
+        )
+        or (
+            version in {"execution_v9", "execution_v10", "execution_v11"}
+            and (
+                binding.get("budget_contract_version") != archived_v4["schema_version"]
+                or type(binding.get("global_request_limit_chars")) is not int
+                or binding.get("global_request_limit_chars") != archived_v4["global_request_limit_chars"]
+                or type(binding.get("review_request_limit_chars")) is not int
+                or binding.get("review_request_limit_chars") != archived_v4["review_request_limit_chars"]
+                or type(binding.get("model_call_timeout_seconds")) is not float
+                or binding.get("model_call_timeout_seconds") != archived_v4["model_call_timeout_seconds"]
+            )
+        )
+        or version in {"execution_v10", "execution_v11"} and (
+            binding.get("grouping_shard_plan_version") != "member_bounded_v2"
+            or type(binding.get("grouping_shard_max_members")) is not int
+            or binding.get("grouping_shard_max_members") != 3
+        )
+        or version in {"execution_v8", "execution_v9", "execution_v10", "execution_v11"} and (
+            binding.get("supplement_retrieval_version") != "source_anchor_then_ngram_v2"
+            or not isinstance(binding.get("discovery_binding"), Mapping)
+            or binding["discovery_binding"].get("prompt_version") != ("annual_discovery_v5" if version == "execution_v11" else "annual_discovery_v4")
+            or _SHA.fullmatch(str(binding["discovery_binding"].get("prompt_sha256", ""))) is None
+        )
+    ):
+        raise ValueError("annual_issue_pipeline_binding_invalid")
+    if version == "execution_v11":
+        discovery = binding["discovery_binding"]
+        fields = {
+            "source_sha256", "company_id", "report_year", "source_document_id", "analysis_mode",
+            "provider_model_fingerprint", "model", "prompts_sha256", "parser_version",
+            "plan_version", "execution_version", "plan_sha256", "m3_binding_sha256",
+            "prompt_version", "prompt_sha256",
+        }
+        if (
+            set(discovery) != fields
+            or discovery.get("execution_version") != "execution_v5"
+            or discovery.get("plan_version") != "annual_discovery_plan_v4"
+            or discovery.get("parser_version") != "annual-discovery-parser-v3-execution-v5"
+            or binding.get("plan_version") != "annual_discovery_plan_v4"
+            or binding.get("parser_version") != "annual-issue-pipeline-parser-v1-execution-v5"
+            or any(discovery.get(key) != binding.get(key) for key in (
+                "source_sha256", "company_id", "report_year", "source_document_id", "analysis_mode",
+                "provider_model_fingerprint", "model", "plan_sha256", "m3_binding_sha256",
+            ))
+        ):
+            raise ValueError("annual_issue_pipeline_binding_invalid")
+
+
+
 def validate_pipeline(value: Any, *, identity: Mapping[str, Any]) -> dict[str, Any]:
     """Strict API reader validator for the full v1 issue object."""
     top_fields = {
@@ -687,35 +865,15 @@ def validate_pipeline(value: Any, *, identity: Mapping[str, Any]) -> dict[str, A
     if dict(value.get("source_identity", {})) != source:
         raise ValueError("annual_issue_pipeline_identity_mismatch")
     binding = value.get("execution_binding")
-    binding_fields = {
-        "kind", "execution_version", "source_sha256", "company_id", "report_year", "source_document_id",
-        "analysis_mode", "provider_model_fingerprint", "model", "discovery_binding", "prompts_sha256",
-        "parser_version", "issue_pipeline_version", "grouping_prompt_version", "review_prompt_version",
-        "issue_wire_version", "review_wire_version", "review_input_projection_version",
-        "plan_version", "plan_sha256", "m3_binding_sha256",
-    }
-    if (
-        not isinstance(binding, Mapping) or set(binding) != binding_fields
-        or binding.get("kind") != "fintrace_annual_execution_binding_v5"
-        or binding.get("execution_version") != "execution_v5"
-        or any(binding.get(key) != source[key] for key in ("source_sha256", "company_id", "report_year", "source_document_id"))
-        or binding.get("issue_pipeline_version") != PIPELINE_KIND
-        or binding.get("issue_wire_version") != ISSUE_WIRE_VERSION
-        or binding.get("grouping_prompt_version") != GROUP_PROMPT_VERSION
-        or binding.get("review_prompt_version") != "annual_review_v3"
-        or binding.get("review_wire_version") != V3_WIRE_SCHEMA
-        or binding.get("review_input_projection_version") != V3_INPUT_PROJECTION_VERSION
-        or not isinstance(binding.get("model"), str)
-        or not isinstance(binding.get("provider_model_fingerprint"), str)
-        or _SHA.fullmatch(str(binding.get("prompts_sha256", ""))) is None
-    ):
-        raise ValueError("annual_issue_pipeline_binding_invalid")
+    _validate_execution_binding(binding, source)
     discovery_binding = binding.get("discovery_binding")
     if not isinstance(discovery_binding, Mapping) or any(
         discovery_binding.get(key) != binding.get(key)
         for key in ("source_sha256", "company_id", "report_year", "source_document_id", "analysis_mode", "provider_model_fingerprint", "model", "plan_version", "plan_sha256", "m3_binding_sha256")
     ):
         raise ValueError("annual_issue_pipeline_binding_invalid")
+    prompt_version = "annual_discovery_v5" if binding.get("execution_version") == "execution_v11" else "annual_discovery_v4" if binding.get("execution_version") in {"execution_v8", "execution_v9", "execution_v10"} else "annual_discovery_v3"
+    retrieval_version = "source_anchor_then_ngram_v2" if binding.get("execution_version") in {"execution_v8", "execution_v9", "execution_v10", "execution_v11"} else LEGACY_RETRIEVAL_VERSION
     input_value = value.get("input")
     input_fields = {"discovery_prompt_version", "discovery_status", "discovery_coverage_complete", "finding_ids", "finding_count", "finding_set_sha256", "candidate_count"}
     if not isinstance(input_value, Mapping) or set(input_value) != input_fields:
@@ -724,7 +882,7 @@ def validate_pipeline(value: Any, *, identity: Mapping[str, Any]) -> dict[str, A
     if (
         not isinstance(finding_ids, list) or any(not isinstance(item, str) or re.fullmatch(rf"disc:{source['source_sha256'][:12]}-[0-9a-f]{{20}}", item) is None for item in finding_ids)
         or len(finding_ids) != len(set(finding_ids))
-        or input_value.get("discovery_prompt_version") != "annual_discovery_v3"
+        or input_value.get("discovery_prompt_version") != prompt_version
         or input_value.get("discovery_status") not in {"not_started", "running", "partial", "completed", "failed", "not_called"}
         or type(input_value.get("discovery_coverage_complete")) is not bool
         or input_value.get("finding_count") != len(finding_ids)
@@ -743,7 +901,7 @@ def validate_pipeline(value: Any, *, identity: Mapping[str, Any]) -> dict[str, A
         if (
             finding_id not in finding_ids or finding_id in candidate_by_finding
             or candidate.get("candidate_id") != "candidate:" + hashlib.sha256((source["source_sha256"] + "\n" + str(finding_id)).encode()).hexdigest()[:24]
-            or candidate.get("origin") != "annual_discovery_v3" or candidate.get("status") != "qualified_unverified_finding"
+            or candidate.get("origin") != prompt_version or candidate.get("status") != "qualified_unverified_finding"
             or candidate.get("member_finding_ids") != [finding_id]
             or candidate.get("source_identity") != {key: source[key] for key in ("company_id", "report_year", "report_period", "source_document_id", "source_sha256")}
             or candidate.get("priority") not in {"high", "medium", "low"}
@@ -817,7 +975,7 @@ def validate_pipeline(value: Any, *, identity: Mapping[str, Any]) -> dict[str, A
         if not roots or issue_id != _issue_id(source, roots[0]):
             raise ValueError("annual_issue_pipeline_issue_invalid")
         expected_evidence = {evidence_id for member in members for evidence_id in candidate_by_finding[member]["evidence_ids"]}
-        if set(issue.get("evidence_ids", [])) != expected_evidence or issue.get("origin") != "annual_discovery_v3" or issue.get("verification_status") != "unverified" or issue.get("independent_verification") is not False:
+        if set(issue.get("evidence_ids", [])) != expected_evidence or issue.get("origin") != prompt_version or issue.get("verification_status") != "unverified" or issue.get("independent_verification") is not False:
             raise ValueError("annual_issue_pipeline_issue_invalid")
         if issue.get("status") not in {"provisional", "accepted", "pending_global_relation", "excluded"}:
             raise ValueError("annual_issue_pipeline_issue_invalid")
@@ -915,8 +1073,8 @@ def validate_pipeline(value: Any, *, identity: Mapping[str, Any]) -> dict[str, A
     ):
         raise ValueError("annual_issue_pipeline_false_no_priority")
     retrieval_coverage = value.get("retrieval_coverage")
-    _validate_pipeline_retrieval(retrieval_coverage, source, supplements)
-    _validate_pipeline_supplements(supplements, source, issue_by_id)
+    _validate_pipeline_retrieval(retrieval_coverage, source, supplements, retrieval_version=retrieval_version)
+    _validate_pipeline_supplements(supplements, source, issue_by_id, retrieval_version=retrieval_version)
     _validate_pipeline_shards(
         shards, finding_ids, candidate_by_finding, decision_by_finding,
         issue_by_id, source, binding, input_value=input_value, closure=closure,
@@ -1002,7 +1160,7 @@ def _validate_member_evidence_pairs(value: Any) -> list[tuple[str, str]]:
     return sorted(pairs)
 
 
-def _validate_pipeline_retrieval(value: Any, source: Mapping[str, Any], supplements: Sequence[Mapping[str, Any]]) -> None:
+def _validate_pipeline_retrieval(value: Any, source: Mapping[str, Any], supplements: Sequence[Mapping[str, Any]], *, retrieval_version: str = RETRIEVAL_VERSION) -> None:
     fields = {
         "source_document_id", "source_sha256", "scope", "requested_sections", "examined_sections",
         "total_pages", "total_text_blocks", "scanned_blocks", "matched_blocks", "matched_issue_block_pairs",
@@ -1033,7 +1191,8 @@ def _validate_pipeline_retrieval(value: Any, source: Mapping[str, Any], suppleme
         or not isinstance(unread_pages, list) or unread_pages != sorted(set(unread_pages))
         or any(type(item) is not int or item < 1 for item in unread_pages)
         or value.get("scope") not in {"not_started", "same_source_extracted_text_blocks"}
-        or value.get("selection_algorithm_version") != "section_filter_then_ngram_overlap_v1"
+        or retrieval_version not in {LEGACY_RETRIEVAL_VERSION, RETRIEVAL_VERSION}
+        or value.get("selection_algorithm_version") != retrieval_version
         or value["max_terms_per_issue"] != 40 or value["max_matches_per_issue"] != 4
         or value["max_excerpt_chars"] != 500 or value["max_role_assignments"] != MAX_SUPPLEMENT_PAIRS
         or not isinstance(value.get("reason"), str) and value.get("reason") is not None
@@ -1063,14 +1222,21 @@ def _validate_pipeline_retrieval(value: Any, source: Mapping[str, Any], suppleme
         raise ValueError("annual_issue_pipeline_retrieval_invalid")
 
 
-def _validate_pipeline_supplements(supplements: Sequence[Any], source: Mapping[str, Any], issues: Mapping[str, Mapping[str, Any]]) -> None:
+def _validate_pipeline_supplements(supplements: Sequence[Any], source: Mapping[str, Any], issues: Mapping[str, Mapping[str, Any]], *, retrieval_version: str = RETRIEVAL_VERSION) -> None:
     fields = {"evidence_id", "source_document_id", "source_sha256", "pdf_page", "block_index", "start_char", "end_char", "bbox", "raw_text", "section", "selection_reason", "role", "issue_ids", "verification_status", "role_status", "independent_verification", "retrieval_is_verification"}
     roles = {"context", "possible_explanation", "unknown"}
+    sections = {"management_discussion", "financial_statements", "notes"}
+    reasons = {"same_source_keyword_context_match"}
+    if retrieval_version == RETRIEVAL_VERSION:
+        sections.add("unknown")
+        reasons = {"source_anchor_context", "adjacent_source_context", "same_source_ngram_context_match"}
+    elif retrieval_version != LEGACY_RETRIEVAL_VERSION:
+        raise ValueError("annual_issue_pipeline_supplement_invalid")
     pairs: set[tuple[str, str]] = set()
     for item in supplements:
         if not isinstance(item, Mapping) or frozenset(item) not in {frozenset(fields), frozenset(fields | {"issue_roles"})}:
             raise ValueError("annual_issue_pipeline_supplement_invalid")
-        if item.get("source_document_id") != source["source_document_id"] or item.get("source_sha256") != source["source_sha256"] or item.get("verification_status") != "unverified" or item.get("independent_verification") is not False or item.get("retrieval_is_verification") is not False or item.get("section") not in {"management_discussion", "financial_statements", "notes"} or item.get("selection_reason") != "same_source_keyword_context_match":
+        if item.get("source_document_id") != source["source_document_id"] or item.get("source_sha256") != source["source_sha256"] or item.get("verification_status") != "unverified" or item.get("independent_verification") is not False or item.get("retrieval_is_verification") is not False or item.get("section") not in sections or item.get("selection_reason") not in reasons:
             raise ValueError("annual_issue_pipeline_supplement_invalid")
         if type(item.get("pdf_page")) is not int or item["pdf_page"] < 1 or type(item.get("block_index")) is not int or item["block_index"] < 0 or type(item.get("start_char")) is not int or type(item.get("end_char")) is not int or item["start_char"] < 0 or item["end_char"] <= item["start_char"] or not isinstance(item.get("raw_text"), str) or len(item["raw_text"]) != item["end_char"] - item["start_char"]:
             raise ValueError("annual_issue_pipeline_supplement_invalid")
@@ -1114,7 +1280,11 @@ def _validate_pipeline_shards(
     global_shards: list[Mapping[str, Any]] = []
     supplement_shards: list[Mapping[str, Any]] = []
     prompt_names = {"grouping": "annual_issue_grouping_v1", "global": "annual_issue_global_v1", "supplement": "annual_issue_supplement_v1"}
-    expected_groups = {item["group_id"]: item for item in _local_exact_duplicate_groups(list(candidates.values()))}
+    max_members = _grouping_shard_max_members(binding, source)
+    local_groups = _local_exact_duplicate_groups(list(candidates.values()))
+    if binding["execution_version"] in {"execution_v10", "execution_v11"}:
+        local_groups = _bounded_exact_duplicate_groups(local_groups, max_members)
+    expected_groups = {item["group_id"]: item for item in local_groups}
     for shard in shards:
         if not isinstance(shard, Mapping) or shard.get("status") not in {"accepted", "pending"}:
             raise ValueError("annual_issue_pipeline_shard_invalid")
@@ -1142,6 +1312,8 @@ def _validate_pipeline_shards(
             raise ValueError("annual_issue_pipeline_wire_hash_invalid")
         if kind == "grouping":
             members = shard.get("input_finding_ids")
+            if binding["execution_version"] in {"execution_v10", "execution_v11"} and (not isinstance(members, list) or len(members) > max_members):
+                raise ValueError("annual_issue_pipeline_shard_member_invalid")
             if members != input_value.get("input_member_finding_ids") or shard.get("input_issue_ids") != [] or shard.get("input_members") != input_value.get("groups"):
                 raise ValueError("annual_issue_pipeline_shard_invalid")
             groups = input_value.get("groups")
@@ -1612,6 +1784,7 @@ def _validated_findings(discovery: Mapping[str, Any], source: Mapping[str, Any])
             continue
         finding = {key: raw.get(key) for key in ("finding_id", "title", "observation", "why_it_matters", "follow_up", "priority", "classification", "verification_status", "evidence_ids", "citations", "batch_index")}
         finding["citations"] = normalized_cites
+        finding["_prompt_version"] = discovery.get("prompt_version")
         finding["evidence_ids"] = list(dict.fromkeys(item["evidence_id"] for item in normalized_cites))
         findings.append(finding)
         seen.add(finding_id)
@@ -1632,7 +1805,7 @@ def _candidate_from_finding(finding: Mapping[str, Any], evidences: Mapping[str, 
         })
     return {
         "candidate_id": "candidate:" + hashlib.sha256((source["source_sha256"] + "\n" + finding_id).encode()).hexdigest()[:24],
-        "origin": "annual_discovery_v3", "status": "qualified_unverified_finding",
+        "origin": finding["_prompt_version"], "status": "qualified_unverified_finding",
         "finding_id": finding_id, "member_finding_ids": [finding_id],
         "title": finding["title"], "observation": finding["observation"],
         "why_it_matters": finding["why_it_matters"], "follow_up": finding["follow_up"],
@@ -1673,15 +1846,67 @@ def _local_exact_duplicate_groups(candidates: Sequence[Mapping[str, Any]]) -> li
     return result
 
 
-def _build_group_shards(groups: Sequence[Mapping[str, Any]], evidences: Mapping[str, Mapping[str, Any]], source: Mapping[str, Any], model: str, prompt: str) -> list[dict[str, Any]]:
+def _grouping_shard_max_members(binding: Mapping[str, Any], source: Mapping[str, Any]) -> int:
+    """Resolve the planner from the archive's identity, never the live default."""
+    _validate_execution_binding(binding, source)
+    return int(binding["grouping_shard_max_members"]) if binding["execution_version"] in {"execution_v10", "execution_v11"} else _LEGACY_MAX_FINDINGS_PER_SHARD
+
+
+def _bounded_exact_duplicate_groups(groups: Sequence[Mapping[str, Any]], max_members: int) -> list[Mapping[str, Any]]:
+    """Partition large exact families without repeating or dropping raw members."""
+    result: list[Mapping[str, Any]] = []
+    seen_groups: set[str] = set()
+    seen_members: set[str] = set()
+    for group in groups:
+        rows = group["member_candidates"]
+        member_ids = group["member_finding_ids"]
+        row_ids = [str(row["finding_id"]) for row in rows]
+        if (
+            group["group_id"] in seen_groups
+            or not row_ids or len(row_ids) != len(set(row_ids))
+            or sorted(row_ids) != sorted(member_ids)
+            or seen_members.intersection(row_ids)
+            or group["representative_finding_id"] not in member_ids
+        ):
+            raise ValueError("annual_issue_pipeline_group_input_invalid")
+        seen_groups.add(group["group_id"])
+        seen_members.update(row_ids)
+        if len(rows) <= max_members:
+            result.append(group)
+            continue
+        ordered = sorted(rows, key=lambda row: str(row["finding_id"]))
+        for start in range(0, len(ordered), max_members):
+            members = ordered[start : start + max_members]
+            member_ids = [str(row["finding_id"]) for row in members]
+            result.append({
+                "group_id": "local:" + _sha_json({
+                    "exact_family_group_id": group["group_id"],
+                    "member_finding_ids": member_ids,
+                })[:24],
+                "representative_finding_id": members[0]["finding_id"],
+                "member_finding_ids": member_ids,
+                "member_candidates": [dict(row) for row in members],
+                "representative": dict(members[0]),
+            })
+    return result
+
+
+def _build_group_shards(
+    groups: Sequence[Mapping[str, Any]], evidences: Mapping[str, Mapping[str, Any]],
+    source: Mapping[str, Any], model: str, prompt: str, *,
+    execution_binding: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    max_members = _grouping_shard_max_members(execution_binding, source)
+    if execution_binding["execution_version"] in {"execution_v10", "execution_v11"}:
+        groups = _bounded_exact_duplicate_groups(groups, max_members)
     result = []
     current: list[Mapping[str, Any]] = []
     for group in groups:
         candidate = dict(group)
         trial = [*current, candidate]
         value = _group_input(trial, source)
-        trial_member_count = sum(len(item.get("member_finding_ids", [])) for item in trial)
-        if current and (trial_member_count > MAX_FINDINGS_PER_SHARD or _wire_chars(model, prompt, value) > MAX_SHARD_REQUEST_CHARS):
+        trial_member_count = len(value["input_member_finding_ids"])
+        if current and (trial_member_count > max_members or _wire_chars(model, prompt, value) > MAX_SHARD_REQUEST_CHARS):
             result.append(_seal_input(_group_input(current, source), model, prompt))
             current = [candidate]
         else:
@@ -1696,6 +1921,8 @@ def _group_input(groups: Sequence[Mapping[str, Any]], source: Mapping[str, Any])
     candidate_by_id: dict[str, dict[str, Any]] = {}
     group_rows = []
     for group in groups:
+        if group["representative_finding_id"] not in group["member_finding_ids"]:
+            raise ValueError("annual_issue_pipeline_group_input_invalid")
         for candidate in group["member_candidates"]:
             finding_id = str(candidate["finding_id"])
             prior = candidate_by_id.get(finding_id)
@@ -1707,7 +1934,7 @@ def _group_input(groups: Sequence[Mapping[str, Any]], source: Mapping[str, Any])
             "representative_finding_id": group["representative_finding_id"],
             "member_finding_ids": list(group["member_finding_ids"]),
         })
-    if set(candidate_by_id) != set(member_ids):
+    if len(member_ids) != len(set(member_ids)) or set(candidate_by_id) != set(member_ids):
         raise ValueError("annual_issue_pipeline_group_input_invalid")
     return {
         "schema_version": "annual_issue_group_shard_input_v1",
@@ -1781,7 +2008,7 @@ def _apply_group_decisions(state: dict[str, Any], decisions: Mapping[str, Mappin
 
 def _make_issue(issue_id: str, candidate: Mapping[str, Any], members: list[str], status: str) -> dict[str, Any]:
     return {
-        "issue_id": issue_id, "origin": "annual_discovery_v3", "status": status,
+        "issue_id": issue_id, "origin": candidate["origin"], "status": status,
         "title": candidate["title"], "observation": candidate["observation"], "why_it_matters": candidate["why_it_matters"],
         "follow_up": candidate["follow_up"], "priority": candidate["priority"],
         "member_finding_ids": list(members), "evidence_ids": list(candidate["evidence_ids"]),
@@ -2391,7 +2618,7 @@ def _empty_global_closure(reason: str) -> dict[str, Any]:
     }
 
 
-def _empty_retrieval_coverage(source: Mapping[str, Any]) -> dict[str, Any]:
+def _empty_retrieval_coverage(source: Mapping[str, Any], *, retrieval_version: str = RETRIEVAL_VERSION) -> dict[str, Any]:
     return {
         "source_document_id": source["source_document_id"], "source_sha256": source["source_sha256"],
         "scope": "not_started", "requested_sections": [], "examined_sections": [], "total_pages": 0,
@@ -2400,7 +2627,7 @@ def _empty_retrieval_coverage(source: Mapping[str, Any]) -> dict[str, Any]:
         "unselected_issue_block_pairs": 0, "scanned_chars": 0, "selected_excerpt_chars": 0,
         "selected_unique_source_chars": 0,
         "unread_pages": [], "unread_blocks": 0, "omitted_chars": 0, "complete": False,
-        "selection_algorithm_version": "section_filter_then_ngram_overlap_v1", "max_terms_per_issue": 40,
+        "selection_algorithm_version": retrieval_version, "max_terms_per_issue": 40,
         "max_matches_per_issue": 4, "max_excerpt_chars": 500, "max_role_assignments": MAX_SUPPLEMENT_PAIRS,
         "role_assignments_total": 0, "role_assignments_requested": 0, "role_assignments_pending": 0,
         "reason": "supplement_not_started",

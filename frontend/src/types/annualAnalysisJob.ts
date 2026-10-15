@@ -110,7 +110,7 @@ export interface AnnualAnalysisProviderAttemptLimits {
   shared_goal_remaining_at_start: number | null;
 }
 
-export interface AnnualAnalysisBudget {
+export interface AnnualAnalysisBudgetV1 {
   schema_version: "annual_analysis_budget_v1";
   scope: AnnualAnalysisBudgetScope;
   main_report_limit_seconds: number;
@@ -128,6 +128,57 @@ export interface AnnualAnalysisBudget {
     annual_review: AnnualAnalysisStageBudget;
   };
 }
+
+export interface AnnualAnalysisBudgetV2 {
+  schema_version: "annual_analysis_budget_v2";
+  scope: AnnualAnalysisBudgetScope;
+  main_report_limit_seconds: number;
+  work_deadline_seconds: number;
+  finalization_reserve_seconds: 15;
+  review_request_limit_chars: 40000;
+  model_call_timeout_seconds: 60;
+  elapsed_running_seconds: number;
+  queue_seconds: number;
+  provider_attempt_limits: AnnualAnalysisProviderAttemptLimits;
+  provider_admission_count: number;
+  provider_attempts_remaining: number;
+  stages: {
+    annual_discovery: AnnualAnalysisStageBudget;
+    annual_investigation: AnnualAnalysisStageBudget;
+    annual_issue_grouping: AnnualAnalysisStageBudget;
+    annual_review: AnnualAnalysisStageBudget;
+  };
+}
+
+export interface AnnualAnalysisBudgetV3 {
+  schema_version: "annual_analysis_budget_v3";
+  scope: AnnualAnalysisBudgetScope;
+  main_report_limit_seconds: number;
+  work_deadline_seconds: number;
+  finalization_reserve_seconds: 15;
+  review_request_limit_chars: 40000;
+  model_call_timeout_seconds: 90;
+  elapsed_running_seconds: number;
+  queue_seconds: number;
+  provider_attempt_limits: AnnualAnalysisProviderAttemptLimits;
+  provider_admission_count: number;
+  provider_attempts_remaining: number;
+  stages: {
+    annual_discovery: AnnualAnalysisStageBudget;
+    annual_investigation: AnnualAnalysisStageBudget;
+    annual_issue_grouping: AnnualAnalysisStageBudget;
+    annual_review: AnnualAnalysisStageBudget;
+  };
+}
+
+export interface AnnualAnalysisBudgetV4 extends Omit<AnnualAnalysisBudgetV3, "schema_version" | "review_request_limit_chars"> {
+  schema_version: "annual_analysis_budget_v4";
+  global_request_limit_chars: 96000;
+  review_request_limit_chars: 128000;
+}
+
+export type AnnualAnalysisBudget = AnnualAnalysisBudgetV1 | AnnualAnalysisBudgetV2 | AnnualAnalysisBudgetV3 | AnnualAnalysisBudgetV4;
+
 
 export interface AnnualAnalysisDiscoveryProgress {
   event: "planned" | "batch_started" | "batch_finished" | "budget_exhausted";

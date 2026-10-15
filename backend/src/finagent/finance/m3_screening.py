@@ -119,7 +119,7 @@ def screen_m3_annual_rules(
     """计算 M3 四条规则；缺事实、独立核验或可比性 proof 时失败关闭。
 
     ``parent_profit_mapping`` 必须由
-    ``verify_parent_profit_semantic_mapping`` 从原 PDF 第 7 页签发，且绑定
+    ``verify_parent_profit_semantic_mapping`` 从同源 PDF 唯一主要会计数据表签发，且绑定
     两年 key-data 与合并利润表归母净利润。一般 ``scope=unknown`` 不会通过。
     """
 
@@ -165,7 +165,7 @@ def screen_m3_annual_rules(
         rules=rules,
         limitations=(
             "试行阈值尚待隔离评测验证并冻结；当前分数只用于进一步核查。",
-            "规则二语义映射仅支持海天味业 603288 的 2024 年报第 7 页已核验版式；其他公司或期间必须弃权。",
+            "规则二语义映射要求当前进程从同源 PDF 唯一主要会计数据表重读并签发专属 proof；序列化副本或其他公司/页码捷径不能授权计算。",
             "筛查入口要求同一进程中 verify_financial_fact 的直接结果；序列化或反序列化核验 JSON 仅供审计。",
             "异常线索不构成确认舞弊的结论。",
         ),
@@ -288,7 +288,7 @@ def _evaluate_deducted_parent(
         issues.append(
             M3RuleIssue(
                 "semantic_mapping",
-                "缺少本进程从原始 PDF 第 7 页签发的规则二专属跨表语义映射 proof。",
+                "缺少本进程从原始 PDF 唯一主要会计数据表签发的规则二专属跨表语义映射 proof。",
             )
         )
     elif parent_pair[0] is not None and parent_pair[1] is not None and deducted_pair[0] is not None and deducted_pair[1] is not None:

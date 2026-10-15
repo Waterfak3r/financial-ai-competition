@@ -203,6 +203,19 @@ export interface AnnualAnalysisModelReview {
   prompt_version?: string;
 }
 
+export type AnnualIssueExecutionBinding =
+  | { kind: "fintrace_annual_execution_binding_v5"; execution_version: "execution_v5" }
+  | { kind: "fintrace_annual_execution_binding_v6"; execution_version: "execution_v6"; budget_contract_version: "annual_analysis_budget_v2"; review_request_limit_chars: 40000; model_call_timeout_seconds: 60 }
+  | { kind: "fintrace_annual_execution_binding_v7"; execution_version: "execution_v7"; budget_contract_version: "annual_analysis_budget_v3"; review_request_limit_chars: 40000; model_call_timeout_seconds: 90 }
+  | { kind: "fintrace_annual_execution_binding_v8"; execution_version: "execution_v8"; budget_contract_version: "annual_analysis_budget_v3"; review_request_limit_chars: 40000; model_call_timeout_seconds: 90; supplement_retrieval_version: "source_anchor_then_ngram_v2" }
+  | { kind: "fintrace_annual_execution_binding_v9"; execution_version: "execution_v9"; budget_contract_version: "annual_analysis_budget_v4"; global_request_limit_chars: 96000; review_request_limit_chars: 128000; model_call_timeout_seconds: 90; supplement_retrieval_version: "source_anchor_then_ngram_v2" }
+  | { kind: "fintrace_annual_execution_binding_v10"; execution_version: "execution_v10"; budget_contract_version: "annual_analysis_budget_v4"; global_request_limit_chars: 96000; review_request_limit_chars: 128000; model_call_timeout_seconds: 90; supplement_retrieval_version: "source_anchor_then_ngram_v2"; grouping_shard_plan_version: "member_bounded_v2"; grouping_shard_max_members: 3 }
+  | { kind: "fintrace_annual_execution_binding_v11"; execution_version: "execution_v11"; budget_contract_version: "annual_analysis_budget_v4"; global_request_limit_chars: 96000; review_request_limit_chars: 128000; model_call_timeout_seconds: 90; supplement_retrieval_version: "source_anchor_then_ngram_v2"; grouping_shard_plan_version: "member_bounded_v2"; grouping_shard_max_members: 3 };
+
+export type AnnualIssueSupplementSection = "unknown" | "management_discussion" | "financial_statements" | "notes";
+export type AnnualIssueSupplementSelectionReason = "same_source_keyword_context_match" | "source_anchor_context" | "adjacent_source_context" | "same_source_ngram_context_match";
+export type AnnualIssueSupplement = AnnualReportRecord & { section: AnnualIssueSupplementSection; selection_reason: AnnualIssueSupplementSelectionReason };
+
 export interface AnnualIssuePipeline {
   kind: "annual_issue_pipeline_v1";
   status: string;
@@ -212,7 +225,7 @@ export interface AnnualIssuePipeline {
   candidates: AnnualReportRecord[];
   issues: AnnualReportRecord[];
   member_decisions: AnnualReportRecord[];
-  supplements: AnnualReportRecord[];
+  supplements: AnnualIssueSupplement[];
   global_closure: AnnualReportRecord;
   presentation_order: {
     schema_version: "annual_issue_display_order_v1";
@@ -223,6 +236,7 @@ export interface AnnualIssuePipeline {
   shards?: AnnualReportRecord[];
   audit_summary?: AnnualReportRecord;
   verification_notice?: string;
+  execution_binding?: AnnualIssueExecutionBinding;
 }
 
 export interface AnnualIssueSupplementEvidence {
@@ -235,7 +249,7 @@ export interface AnnualIssueSupplementEvidence {
   end_char: number;
   bbox: PdfBox;
   raw_text: string;
-  section: string;
+  section: AnnualIssueSupplementSection;
   role_status: "pending" | "accepted";
   issue_roles: Array<{ issue_id: string; role: "context" | "possible_explanation" | "unknown"; reason_code: string }>;
   preview_url: string;

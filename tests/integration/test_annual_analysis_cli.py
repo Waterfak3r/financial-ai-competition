@@ -12,6 +12,11 @@ import sys
 from types import SimpleNamespace
 from pathlib import Path
 
+from finagent.core.annual_work_budget import (
+    BUDGET_CONTRACT_VERSION,
+    MAIN_REPORT_BUDGET_SECONDS,
+    runtime_stage_time_limits,
+)
 import pytest
 from scripts import analyze_annual as annual_cli
 from finagent.core.annual_checkpoints import load_current_annual_checkpoint
@@ -116,6 +121,105 @@ def test_api_managed_cli_validates_and_preserves_parent_gate(
     ):
         assert os.environ["FINTRACE_CALL_GATE_DB"] == str(database)
         assert not database.exists()
+
+
+_BUDGET_ENV_KEYS = (
+    "FINTRACE_ANNUAL_MAIN_SOFT_DEADLINE_MONOTONIC",
+    "FINTRACE_ANNUAL_MAIN_HARD_DEADLINE_MONOTONIC",
+    "FINTRACE_ANNUAL_MAIN_LIMIT_SECONDS",
+    "FINTRACE_ANNUAL_STAGE_TIME_LIMITS_SECONDS",
+    "FINTRACE_ANNUAL_BUDGET_CONTRACT_VERSION",
+)
+
+
+def _clear_annual_budget_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in _BUDGET_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+
+def _complete_annual_budget_env(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    now: float,
+    main_limit: int,
+    hard_remaining: float | None = None,
+    stages: dict[str, int] | None = None,
+    version: str = BUDGET_CONTRACT_VERSION,
+) -> None:
+    remaining = float(main_limit if hard_remaining is None else hard_remaining)
+    monkeypatch.setenv("FINTRACE_ANNUAL_MAIN_SOFT_DEADLINE_MONOTONIC", str(now + remaining - 15.0))
+    monkeypatch.setenv("FINTRACE_ANNUAL_MAIN_HARD_DEADLINE_MONOTONIC", str(now + remaining))
+    monkeypatch.setenv("FINTRACE_ANNUAL_MAIN_LIMIT_SECONDS", str(main_limit))
+    monkeypatch.setenv(
+        "FINTRACE_ANNUAL_STAGE_TIME_LIMITS_SECONDS",
+        json.dumps(stages if stages is not None else runtime_stage_time_limits(main_limit)),
+    )
+    monkeypatch.setenv("FINTRACE_ANNUAL_BUDGET_CONTRACT_VERSION", version)
+
+
+def test_cli_runtime_budget_all_or_none_versioned_env_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_annual_budget_env(monkeypatch)
+    monkeypatch.setenv("FINTRACE_ANNUAL_MAIN_LIMIT_SECONDS", "90")
+    with pytest.raises(ValueError, match="不完整"):
+        annual_cli._annual_runtime_budget(True)
+
+    now = 20_000.0
+    monkeypatch.setattr(annual_cli.time, "monotonic", lambda: now)
+    main_limit = MAIN_REPORT_BUDGET_SECONDS
+    _complete_annual_budget_env(monkeypatch, now=now, main_limit=main_limit)
+    accepted = annual_cli._annual_runtime_budget(True)
+    assert accepted is not None
+    assert accepted["budget_contract_version"] == BUDGET_CONTRACT_VERSION
+    assert accepted["stage_time_limits_seconds"] == runtime_stage_time_limits(main_limit)
+
+    _complete_annual_budget_env(
+        monkeypatch, now=now, main_limit=main_limit, version="annual_analysis_budget_v1",
+    )
+    with pytest.raises(ValueError, match="超出受控范围"):
+        annual_cli._annual_runtime_budget(True)
+
+    _complete_annual_budget_env(
+        monkeypatch, now=now, main_limit=main_limit, version="annual_analysis_budget_v2",
+    )
+    with pytest.raises(ValueError, match="超出受控范围"):
+        annual_cli._annual_runtime_budget(True)
+
+    stages = dict(runtime_stage_time_limits(main_limit))
+    review_limit = stages["annual_review"]
+    stages["annual_review"] = review_limit - 1 if review_limit > 1 else review_limit + 1
+    _complete_annual_budget_env(monkeypatch, now=now, main_limit=main_limit, stages=stages)
+    with pytest.raises(ValueError, match="超出受控范围"):
+        annual_cli._annual_runtime_budget(True)
+
+    short_main = 60
+    _complete_annual_budget_env(monkeypatch, now=now, main_limit=short_main)
+    short = annual_cli._annual_runtime_budget(True)
+    assert short is not None
+    assert short["stage_time_limits_seconds"] == runtime_stage_time_limits(short_main)
+
+    shorter = max(16, main_limit - 20)
+    _complete_annual_budget_env(monkeypatch, now=now, main_limit=main_limit, hard_remaining=shorter)
+    shortened = annual_cli._annual_runtime_budget(True)
+    assert shortened is not None
+    assert shortened["main_hard_deadline"] == now + shorter
+
+    _complete_annual_budget_env(
+        monkeypatch, now=now, main_limit=main_limit, hard_remaining=main_limit + 50,
+    )
+    with pytest.raises(ValueError, match="超出受控范围"):
+        annual_cli._annual_runtime_budget(True)
+
+    monkeypatch.setenv("FINTRACE_ANNUAL_MAIN_LIMIT_SECONDS", str(main_limit + 1))
+    monkeypatch.setenv("FINTRACE_ANNUAL_MAIN_SOFT_DEADLINE_MONOTONIC", str(now + main_limit + 1 - 15))
+    monkeypatch.setenv("FINTRACE_ANNUAL_MAIN_HARD_DEADLINE_MONOTONIC", str(now + main_limit + 1))
+    monkeypatch.setenv(
+        "FINTRACE_ANNUAL_STAGE_TIME_LIMITS_SECONDS",
+        json.dumps(runtime_stage_time_limits(main_limit)),
+    )
+    monkeypatch.setenv("FINTRACE_ANNUAL_BUDGET_CONTRACT_VERSION", BUDGET_CONTRACT_VERSION)
+    with pytest.raises(ValueError, match="超出受控范围"):
+        annual_cli._annual_runtime_budget(True)
+
 
 
 
@@ -527,10 +631,15 @@ def test_unexpected_investigation_exception_keeps_call_audit_unknown(
     monkeypatch.setattr(
         annual_cli,
         "analyze_annual_pdf",
-        lambda *_args, **_kwargs: SimpleNamespace(
+        lambda *_args, **kwargs: SimpleNamespace(
             parsed_pdf=SimpleNamespace(source_sha256=source_sha256, to_dict=lambda: {}),
             archive_dict=lambda: {"facts": []},
-            report={"confirmed": {"metrics": [], "analyses": []}},
+            report={
+                "kind": "fintrace_annual_analysis_report", "run_id": kwargs["run_id"],
+                "company_id": "603288", "report_year": 2024,
+                "source_document_id": "doc-1", "source_sha256": source_sha256,
+                "confirmed": {"metrics": [], "analyses": []},
+            },
             markdown="# standard report",
         ),
     )
@@ -571,7 +680,7 @@ def test_unexpected_investigation_exception_keeps_call_audit_unknown(
     assert investigation["call_audit_status"] == "unknown"
     assert "model_called" not in investigation
     assert "model_call_count" not in investigation
-    assert "不得据此断言未发起调用" in investigation["limitations"][0]
+    assert investigation["reason"] == "model_investigation_interrupted_with_unknown_call_audit"
 
 
 @pytest.mark.parametrize("failed_layer", [None, "m3_screening", "model_investigation"])

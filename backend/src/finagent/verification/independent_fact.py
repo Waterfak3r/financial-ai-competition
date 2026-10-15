@@ -353,25 +353,29 @@ def _key_financial_data_context(lines: list[_Line], report_year: int) -> _KeyFin
         return None
     header, centers = headers[0]
 
-    percentage_lines = [
-        line
-        for line in window
-        if line.page == header.page
-        and abs(line.y0 - header.y0) <= 24
-        and ("本期比上年同期" in _compact(line.text) or ("增减" in _compact(line.text) and "%" in _compact(line.text)))
-    ]
-    percentage_text = _compact("".join(line.text for line in percentage_lines))
+    header_words = _key_data_header_words(header)
+    percentage_left = header_words[report_year - 1][2]
+    percentage_right = header_words[report_year - 2][0]
+    percentage_words = tuple(
+        sorted(
+            (
+                word
+                for line in window
+                if line.page == header.page and abs(line.y0 - header.y0) <= 24
+                for word in line.words
+                if percentage_left <= (word[0] + word[2]) / 2 <= percentage_right
+            ),
+            key=lambda word: (word[1], word[0]),
+        )
+    )
+    percentage_text = _compact("".join(str(word[4]) for word in percentage_words))
     if (
-        not percentage_lines
+        not percentage_words
         or "本期比上年同期" not in percentage_text
         or "增减" not in percentage_text
         or "%" not in percentage_text
     ):
         return None
-    percentage_words = tuple(word for line in percentage_lines for word in line.words)
-    header_words = _key_data_header_words(header)
-    percentage_left = header_words[report_year - 1][2]
-    percentage_right = header_words[report_year - 2][0]
     visible_percent_left = min(word[0] for word in percentage_words)
     visible_percent_right = max(word[2] for word in percentage_words)
     if visible_percent_left < percentage_left or visible_percent_right > percentage_right:

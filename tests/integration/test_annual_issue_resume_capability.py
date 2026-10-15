@@ -657,7 +657,6 @@ def _assert_durable_tail_false(outcome: Mapping[str, Any]) -> None:
     assert requested_pairs == all_pairs[:32]
     assert len(all_pairs[32:]) == 8 and not set(all_pairs[32:]) & set(requested_pairs)
     assert report["model_discovery"]["status"] == "completed"
-    assert outcome["review_request_limit_chars"] == 24_000
     review_events = [item for item in outcome["provider_events"] if item.get("stage") == "review"]
     if report["model_review"]["status"] == "completed":
         _assert_review_v4_audit_roundtrip(outcome)
@@ -706,7 +705,6 @@ def _assert_durable_review_budget_boundary(outcome: Mapping[str, Any]) -> None:
     review_events = [item for item in outcome["provider_events"] if item.get("stage") == "review"]
     review_admissions = outcome["call_gate_stage_admissions"].get("annual_review", 0)
     assert outcome["strict_reader"]["loaded"] is True
-    assert outcome["review_request_limit_chars"] == 24_000
     assert outcome["core_capability"] == {"can_resume": False, "reason": "recovery_nothing_to_resume"}
     assert outcome["public_capability"]["can_resume"] is False
     assert outcome["public_direct_capability"] == {"can_resume": False, "reason": "recovery_not_available"}
@@ -1463,7 +1461,7 @@ except Exception as exc:
 (case_dir / "supplement-index-read.json").write_text(json.dumps(supplement_index_probe, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 normalized = job_module.validate_job_request(root, request)
 settings = resolve_model_settings(root)
-core = validate_annual_recovery_parent(root, run_id, normalized, settings=settings, archive=archive, require_issue_pipeline_v5=True)
+core = validate_annual_recovery_parent(root, run_id, normalized, settings=settings, archive=archive, require_issue_pipeline=True)
 raw_state = json.loads((service_dir / job_id / "job.json").read_text(encoding="utf-8"))
 public_direct = service._recovery_capability_projection(raw_state, final["result_availability"])
 report = archive.report
@@ -1505,7 +1503,8 @@ else:
         runtime_identity_errors.append("actual_cli_loaded_identity_not_frozen_source")
     if len(argv_rows) == 1 and actual_cli_capture.get("process_id") != argv_rows[0].get("pid"):
         runtime_identity_errors.append("actual_cli_identity_pid_does_not_match_popen_child")
-from finagent.agents.annual_review import _build_review_input_v3, build_annual_review_v3_request, V3_MAX_REQUEST_CHARS
+from finagent.agents.annual_review import _build_review_input_v3, build_annual_review_v3_request
+review_limit = report["model_issue_pipeline"]["execution_binding"]["review_request_limit_chars"]
 from finagent.agents.annual_review_wire import decode_annual_review_v3_wire, V3_WIRE_SCHEMA, V3_INPUT_PROJECTION_VERSION
 from finagent.llm.chat_completion import ChatMessage, serialize_chat_body
 actual_review = report.get("model_review")
@@ -1670,7 +1669,7 @@ else:
     elif actual_review.get("status") == "abstained" and actual_review.get("reason") == "annual_review_v3_request_budget_exceeded":
         if actual_review.get("audit_artifacts") != []:
             raise RuntimeError("budget_abstained_review_has_audit")
-        if review_chars <= V3_MAX_REQUEST_CHARS or actual_review.get("model_called") is not False:
+        if review_chars <= review_limit or actual_review.get("model_called") is not False:
             raise RuntimeError("budget_abstention_does_not_match_reconstructed_request_size")
         review_audit_roundtrip.update({"mode": "honest_budget_abstention", "limitations_required_preserved": None})
     else:
@@ -1752,7 +1751,7 @@ result = {
     "result_availability": final["result_availability"],
     "resume_rejection": resume_rejection,
     "review_request_chars": review_chars,
-    "review_request_limit_chars": V3_MAX_REQUEST_CHARS,
+    "review_request_limit_chars": review_limit,
     "review_request_body_sha256": review_body_sha256,
     "review_audit_roundtrip": review_audit_roundtrip,
     "cancel_checkpoint": cancel_checkpoint,
@@ -1857,7 +1856,7 @@ def strict_and_core():
         checked = validate_job_request(root, state["request"])
         settings = resolve_model_settings(root)
         capability = validate_annual_recovery_parent(
-            root, run_id, checked, settings=settings, archive=archive, require_issue_pipeline_v5=True,
+            root, run_id, checked, settings=settings, archive=archive, require_issue_pipeline=True,
         )
         core = {key: capability.get(key) for key in ("can_resume", "reason")}
     except Exception as exc:

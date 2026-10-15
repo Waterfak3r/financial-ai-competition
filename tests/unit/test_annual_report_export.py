@@ -792,3 +792,40 @@ def test_encoded_path_like_route_segment_cannot_export_another_archive(tmp_path:
     client = TestClient(create_app(tmp_path))
     response = client.get("/v1/annual-analyses/" + quote("../safe-http-export", safe="") + "/export?format=json")
     assert response.status_code >= 400
+
+
+@pytest.mark.parametrize("policy", [1, 2, 3])
+@pytest.mark.parametrize("format", ["json", "markdown", "html"])
+def test_strict_budget_export_retains_archive_policy_not_active_defaults(
+    tmp_path: Path, policy: int, format: str,
+) -> None:
+    from tests.integration.test_annual_analysis_jobs_api import _write_strict_v3_recovery_fixture
+
+    run, _request, _settings = _write_strict_v3_recovery_fixture(
+        tmp_path, suffix=302, state="completed_with_issues", is_partial=False,
+        include_issue_pipeline=policy != 1, historical_v6=policy == 2,
+    )
+    archive = load_annual_report(tmp_path, str(run["run_id"]))
+    original = (run["report_dir"] / "report.json").read_bytes()
+    budget = archive.report["model_discovery"]["execution_contract"]["phase_budget"]
+    exported = export_annual_report(tmp_path, str(run["run_id"]), format).content.decode("utf-8")
+    if format == "json":
+        report = json.loads(exported)["report"]
+        execution = report["model_discovery"]["execution_contract"]
+        assert execution["phase_budget"] == budget
+        assert execution["phase_budget_basis"] == "version_default_not_owner_actual"
+        if policy != 1:
+            binding = report["model_issue_pipeline"]["execution_binding"]
+            assert binding["budget_contract_version"] == budget["schema_version"]
+            assert binding["review_request_limit_chars"] == budget["review_request_limit_chars"]
+            assert binding["model_call_timeout_seconds"] == budget["model_call_timeout_seconds"]
+    else:
+        assert budget["schema_version"] in exported
+        assert str(budget["main_report_limit_seconds"]) in exported
+        assert str(budget["work_deadline_seconds"]) in exported
+        for seconds in budget["stage_time_limits_seconds"].values():
+            assert str(seconds) in exported
+        if policy != 1:
+            assert str(budget["review_request_limit_chars"]) in exported
+            assert str(budget["model_call_timeout_seconds"]) in exported
+    assert (run["report_dir"] / "report.json").read_bytes() == original

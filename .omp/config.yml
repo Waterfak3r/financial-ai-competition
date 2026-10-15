@@ -5,22 +5,12 @@ modelRoles:
   polish: "@default"
   review: "@default"
   scout: "@default"
-  default: null
+  default: openai-codex/gpt-6.1-sol:xhigh
 retry:
-  modelFallback: true
-  fallbackChains:
-    default:
-      - naapi/gpt-6.1-sol
-    implement:
-      - naapi/gpt-6.1-sol
-    draft:
-      - naapi/gpt-6.1-sol
-    polish:
-      - naapi/gpt-6.1-sol
-    review:
-      - naapi/gpt-6.1-sol
-    scout:
-      - naapi/gpt-6.1-sol
+  modelFallback: false
+  waitForUsageReset: true
+  usageAwareFallback: false
+  fallbackChains: {}
 async:
   enabled: true
 task:

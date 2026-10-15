@@ -367,6 +367,42 @@ def read_gate_stage_admission_counts(database_path: Path, gate_key: str) -> dict
         raise ModelCallLedgerReadError("ledger database is unreadable") from None
 
 
+def read_shared_goal_budget() -> tuple[int | None, int | None]:
+    """Snapshot the configured cumulative policy without admitting or repairing calls."""
+
+    config = _read_ledger_config()
+    if config is None:
+        return None, None
+    database = config["database_path"]
+    if not database.is_file():
+        raise ModelCallLedgerReadError("ledger database is missing")
+    try:
+        with closing(
+            sqlite3.connect(f"file:{_sqlite_uri_path(database)}?mode=ro", uri=True, timeout=1.0)
+        ) as connection:
+            connection.execute("BEGIN")
+            _require_schema(connection)
+            row = connection.execute(
+                "SELECT version, quota_limit, provider_model_fingerprint, authorized_source_sha256s "
+                "FROM provider_policy WHERE singleton = 1"
+            ).fetchone()
+            if row is not None and tuple(row) != _policy_values(config):
+                raise ModelCallAdmissionError("ledger_policy_mismatch")
+            if row is not None and config["limit"] is None:
+                return None, None
+            used = connection.execute(
+                "SELECT COUNT(*) FROM provider_attempts WHERE goal_counted = 1"
+            ).fetchone()[0]
+            if type(used) is not int or used < 0 or row is None and used > 0:
+                raise ModelCallLedgerReadError("ledger policy or count is invalid")
+            limit = config["limit"]
+            return limit, None if limit is None else max(0, limit - used)
+    except (ModelCallAdmissionError, ModelCallLedgerReadError):
+        raise
+    except (OSError, sqlite3.Error, ValueError):
+        raise ModelCallLedgerReadError("ledger database is unreadable") from None
+
+
 def _read_ledger_config() -> dict[str, Any] | None:
     raw_path = os.environ.get(_CONFIG_ENV)
     if not raw_path:
@@ -388,8 +424,9 @@ def _read_ledger_config() -> dict[str, Any] | None:
     if (
         type(config.get("version")) is not int
         or config["version"] != 1
-        or type(config.get("limit")) is not int
-        or not 1 <= config["limit"] <= 1_000_000
+        or (config["limit"] is not None and (
+            type(config["limit"]) is not int or not 1 <= config["limit"] <= 1_000_000
+        ))
     ):
         raise ModelCallAdmissionError("ledger_config_invalid")
     fingerprint = config.get("provider_model_fingerprint")
@@ -521,7 +558,7 @@ def _reserve_in_transaction(
                 ).fetchone()[0])
                 if stage_count >= stage_limit:
                     raise ModelCallAdmissionError("stage_budget_exhausted")
-    if config is not None:
+    if config is not None and config["limit"] is not None:
         count = int(
             connection.execute(
                 "SELECT COUNT(*) FROM provider_attempts WHERE goal_counted = 1"
@@ -549,18 +586,23 @@ def _reserve_in_transaction(
     )
 
 
+def _policy_values(config: Mapping[str, Any]) -> tuple[int, int, str, str]:
+    return (
+        config["version"],
+        0 if config["limit"] is None else config["limit"],
+        config["provider_model_fingerprint"],
+        json.dumps(config["authorized_source_sha256s"], separators=(",", ":")),
+    )
+
+
 def _pin_and_check_policy(connection: sqlite3.Connection, config: Mapping[str, Any]) -> None:
-    sources_json = json.dumps(config["authorized_source_sha256s"], separators=(",", ":"))
+    # Zero is the persisted unlimited marker; config uses explicit JSON null.
+    # Existing finite policies still require an explicit authorized update.
     row = connection.execute(
         "SELECT version, quota_limit, provider_model_fingerprint, authorized_source_sha256s "
         "FROM provider_policy WHERE singleton = 1"
     ).fetchone()
-    expected = (
-        config["version"],
-        config["limit"],
-        config["provider_model_fingerprint"],
-        sources_json,
-    )
+    expected = _policy_values(config)
     if row is None:
         connection.execute(
             "INSERT INTO provider_policy(singleton, version, quota_limit, provider_model_fingerprint, "

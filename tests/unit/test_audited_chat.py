@@ -47,7 +47,7 @@ def _run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch | None = None) -> tuple
 def _patch_chat(monkeypatch: pytest.MonkeyPatch, behavior):
     calls = {"n": 0}
 
-    def fake(messages, settings, *, timeout_seconds=None, call_context=None):
+    def fake(messages, settings, *, timeout_seconds=None, call_context=None, abort_event=None):
         calls["n"] += 1
         result = behavior(messages, settings, timeout_seconds)
         if isinstance(result, ChatCompletion) and result.admission_id is None:
@@ -489,45 +489,61 @@ def test_rejects_invalid_evidence_before_network(
     assert list(run_dir.iterdir()) == []
 
 
+def test_expired_deadline_persists_zero_admission_attempt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _runs_root, run_dir = _run(tmp_path, monkeypatch)
+    monkeypatch.setattr(audit_module.time, "monotonic", lambda: 100.0)
+
+    def forbidden_connector(*_args, **_kwargs):
+        raise AssertionError("expired calls cannot enter the connector")
+
+    monkeypatch.setattr(audit_module, "complete_chat", forbidden_connector)
+    with pytest.raises(ModelResponseError):
+        audited_complete_chat(
+            [ChatMessage("user", "constructed deadline fixture")], _settings(),
+            run_dir=run_dir, evidence_refs=_refs(), prompt_version="prompt-v1", timeout_seconds=0.0,
+        )
+    audit_dir = next(path for path in run_dir.iterdir() if path.is_dir())
+    failure = _read(audit_dir / "failure.json")
+    assert failure["category"] == "timeout"
+    assert failure["provider_admission_count"] == failure["response_count"] == 0
+    assert failure["attempt_records"][0]["status"] == "rejected"
+    assert failure["attempt_records"][0]["reason"] == "call_deadline_exhausted"
+    assert _read(audit_dir / "request.json")["timeout_seconds"] == 0.0
+    assert _read(audit_dir / "attempt-01" / "request.json")["timeout_seconds"] == 0.0
+    _assert_no_secret(audit_dir)
+
+
 def test_timeout_records_category_without_secret(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from tests.unit.test_chat_completion import _serve
-
     _runs_root, run_dir = _run(tmp_path, monkeypatch)
     hits = {"n": 0}
+    clock = {"now": 100.0}
 
-    def behavior(_path: str):
+    def timeout_connector(*_args, **_kwargs):
         hits["n"] += 1
-        import time
+        clock["now"] = 102.0
+        raise ModelResponseError(
+            f"provider timed out {_SECRET}", category="timeout",
+            provider_admitted=True, admission_id="7f11c9d2-1f63-4f11-8bc8-63c87837c4ab",
+        )
 
-        time.sleep(2)
-        return 200, {"id": "late", "model": "m", "choices": [{"message": {"content": "晚了"}}]}
-
-    server, thread = _serve(behavior)
-    settings = ModelSettings(
-        base_url=f"http://127.0.0.1:{server.server_port}/v1",
-        api_key=_SECRET,
-        model="example-model",
-        timeout_seconds=0.2,
-    )
-    try:
-        with pytest.raises(ModelResponseError):
-            audited_complete_chat(
-                [ChatMessage("user", f"含密钥 {_SECRET}")],
-                settings,
-                run_dir=run_dir,
-                evidence_refs=_refs(),
-                prompt_version="prompt-v1",
-            )
-    finally:
-        server.shutdown()
-        thread.join(timeout=3)
+    monkeypatch.setattr(audit_module.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(audit_module, "complete_chat", timeout_connector)
+    settings = ModelSettings("http://127.0.0.1:9/v1", _SECRET, "example-model", 1.0)
+    with pytest.raises(ModelResponseError):
+        audited_complete_chat(
+            [ChatMessage("user", f"含密钥 {_SECRET}")],
+            settings, run_dir=run_dir, evidence_refs=_refs(), prompt_version="prompt-v1",
+        )
     audit_dir = next(path for path in run_dir.iterdir() if path.is_dir())
     failure = _read(audit_dir / "failure.json")
     assert hits["n"] == 1
     assert failure["category"] == "timeout"
     assert failure["status"] == "failed"
+    assert failure["provider_admission_count"] == 1
+    assert failure["response_count"] == 0
+    assert failure["attempt_records"][0]["provider_admitted"] is True
     assert not (audit_dir / "response.json").exists()
     _assert_no_secret(audit_dir)
 

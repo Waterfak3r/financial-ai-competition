@@ -204,6 +204,8 @@ def _run(
     *,
     report: dict[str, Any] = REPORT,
     checkpoint_callback: Any | None = None,
+    reusable_items: tuple[dict[str, Any], ...] = (),
+    reusable_narrative_evidences: tuple[NarrativeSnippet, ...] = (),
 ) -> tuple[annual_investigation.AnnualInvestigationResult, Path]:
     for name in (
         "FINTRACE_MODEL_CALL_LEDGER_CONFIG",
@@ -231,9 +233,86 @@ def _run(
         SOURCE_RECORD,
         settings,
         run_dir=run_dir,
+        reusable_items=reusable_items,
+        reusable_narrative_evidences=reusable_narrative_evidences,
         checkpoint_callback=checkpoint_callback,
     )
     return result, run_dir
+
+
+def test_resume_preserves_parent_supplement_citations_through_multiple_generations(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_retrieval(monkeypatch)
+    parent_snippet = _snippet(
+        "nctx-profit-p172", "profit_up_cash_down", 172,
+        "将净利润调节为经营活动现金流量。",
+    )
+    parent_item = annual_investigation.InvestigationItem(
+        signal_id="profit_up_cash_down", status="interpretation",
+        explanation="原因仍需核查。", alternative_explanations=(),
+        limitations=("未核验模型观点。",),
+        narrative_evidence_ids=(parent_snippet.evidence_id,),
+    ).to_dict()
+    checkpoints: list[dict[str, Any]] = []
+    with _MockServer([(200, _answer_from_request)]) as server:
+        first, _ = _run(
+            monkeypatch, tmp_path / "child", server,
+            reusable_items=(parent_item,),
+            reusable_narrative_evidences=(parent_snippet,),
+            checkpoint_callback=checkpoints.append,
+        )
+        payload = first.to_dict()
+        assert payload["model_call_attempt_count"] == 1
+        assert [item["signal_id"] for item in payload["items"]] == [
+            "profit_up_cash_down", "revenue_up_cash_down",
+        ]
+        assert json.loads(server.requests[0]["messages"][1]["content"])["candidate"]["signal_id"] == "revenue_up_cash_down"
+        for snapshot in [*checkpoints, payload]:
+            pool = {item["evidence_id"]: item for item in snapshot["narrative_evidences"]}
+            for item in snapshot["items"]:
+                for evidence_id in item.get("narrative_evidence_ids", []):
+                    assert item["signal_id"] in pool[evidence_id]["signal_ids"]
+            assert pool[parent_snippet.evidence_id]["raw_text"] == parent_snippet.raw_text
+        second, _ = _run(
+            monkeypatch, tmp_path / "grandchild", server,
+            reusable_items=tuple(payload["items"]),
+            reusable_narrative_evidences=first.narrative_evidences,
+        )
+        assert second.model_call_attempt_count == 0
+        assert second.to_dict()["items"] == payload["items"]
+        assert second.to_dict()["narrative_evidences"] == payload["narrative_evidences"]
+        assert len(server.requests) == 1
+
+
+@pytest.mark.parametrize("mutation", ["missing", "wrong_source", "wrong_signal"])
+def test_resume_rejects_unbound_parent_citation_before_provider_admission(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    from dataclasses import replace
+
+    _install_retrieval(monkeypatch)
+    evidence = _snippet("nctx-profit-p172", "profit_up_cash_down", 172, "经营现金流说明。")
+    item = annual_investigation.InvestigationItem(
+        signal_id="profit_up_cash_down", status="interpretation",
+        explanation="原因仍需核查。", alternative_explanations=(),
+        limitations=("未核验模型观点。",),
+        narrative_evidence_ids=(evidence.evidence_id,),
+    ).to_dict()
+    evidences = () if mutation == "missing" else (
+        replace(evidence, source_sha256="b" * 64) if mutation == "wrong_source"
+        else replace(evidence, signal_ids=("revenue_up_cash_down",)),
+    )
+    with _MockServer([]) as server:
+        with pytest.raises(ValueError, match="annual_investigation_reusable_evidence_missing"):
+            _run(
+                monkeypatch, tmp_path, server,
+                reusable_items=(item,), reusable_narrative_evidences=evidences,
+            )
+        assert server.requests == []
 
 
 def test_graph_uses_local_http_and_audits_two_candidate_interpretations(

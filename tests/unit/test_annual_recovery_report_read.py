@@ -18,6 +18,8 @@ from finagent.api.annual_report_read import (
     _validate_discovery_coverage,
     _validate_v3_execution_contract,
     _validate_v4_execution_contract,
+    _validate_v6_execution_contract,
+    _validate_v7_execution_contract,
     load_annual_report,
 )
 from finagent.core.annual_recovery import _m3_semantic_binding_sha256 as _execution_m3_semantic_binding_sha256
@@ -25,7 +27,7 @@ from finagent.core.annual_recovery import (
     recovery_identity_sha256,
     validate_annual_recovery_parent,
 )
-from finagent.core.annual_work_budget import archived_budget_contract_v1
+from finagent.core.annual_work_budget import archived_budget_contract_v1, archived_budget_contract_v2, archived_budget_contract_v3, archived_budget_contract_v4
 import finagent.core.annual_work_budget as live_annual_work_budget
 from finagent.core.annual_checkpoints import AnnualCheckpointError, save_annual_checkpoint
 from finagent.core.model_settings import ModelSettings
@@ -435,8 +437,8 @@ def _discovery(
     attempts = [attempt for row in contract_rows for attempt in row["attempts"]]
     current_admissions = sum(attempt["provider_admitted"] is True for attempt in attempts)
     response_count = sum(attempt["response_accepted"] is True for attempt in attempts)
-    model_status = "not_called" if not attempts else "partial"
-    model_reason = "awaiting_model" if not attempts else "recovery_pending"
+    model_status = "not_called" if coverage["processed_batches"] == 0 else "partial"
+    model_reason = "awaiting_model" if model_status == "not_called" else "recovery_pending"
     if coverage["complete"] and coverage["failed_batches"] == 0 and coverage["partial_batches"] == 0:
         model_status = "completed"
         model_reason = None
@@ -521,6 +523,55 @@ def _as_v4_contract(discovery: MappingLike) -> dict[str, Any]:
         },
     })
     return contract
+
+
+def _as_v6_contract(discovery: MappingLike) -> dict[str, Any]:
+    contract = _as_v4_contract(discovery)
+    contract["kind"] = "fintrace_annual_discovery_execution_v6"
+    contract["phase_budget"] = archived_budget_contract_v2(
+        scope="resume" if contract.get("parent_run_id") is not None else "new_run"
+    )
+    return contract
+
+
+def _as_v7_contract(discovery: MappingLike) -> dict[str, Any]:
+    contract = _as_v4_contract(discovery)
+    contract["kind"] = "fintrace_annual_discovery_execution_v7"
+    contract["phase_budget"] = archived_budget_contract_v3(
+        scope="resume" if contract.get("parent_run_id") is not None else "new_run"
+    )
+    return contract
+
+
+def _as_v8_contract(discovery: MappingLike) -> dict[str, Any]:
+    from finagent.core.annual_recovery import _prompts_sha256
+
+    contract = _as_v7_contract(discovery)
+    contract["kind"] = "fintrace_annual_discovery_execution_v8"
+    prompt_path = Path(__file__).resolve().parents[2] / "config" / "prompts" / "annual_discovery_v4.md"
+    contract["binding"].update(
+        prompt_version="annual_discovery_v4",
+        prompt_sha256=hashlib.sha256(prompt_path.read_bytes()).hexdigest(),
+        prompts_sha256=_prompts_sha256(prompt_version="annual_discovery_v4"),
+    )
+    contract["identity_sha256"] = _canonical_sha(contract["binding"])
+    return contract
+
+
+def _as_v9_contract(discovery: MappingLike) -> dict[str, Any]:
+    contract = _as_v8_contract(discovery)
+    contract["kind"] = "fintrace_annual_discovery_execution_v9"
+    contract["phase_budget"] = archived_budget_contract_v4(
+        scope="resume" if contract.get("parent_run_id") is not None else "new_run"
+    )
+    return contract
+
+
+def _as_v10_contract(discovery: MappingLike) -> dict[str, Any]:
+    contract = _as_v9_contract(discovery)
+    contract["kind"] = "fintrace_annual_discovery_execution_v10"
+    return contract
+
 
 
 def _v4_discovery(
@@ -685,6 +736,202 @@ def test_v4_budget_scope_must_match_parent_run_presence(tmp_path: Path) -> None:
     with pytest.raises(AnnualReportReadError) as error:
         _validate_test_v4(run, discovery, contract)
     assert error.value.code == "annual_discovery_invalid"
+
+
+
+def test_v6_envelope_uses_archived_budget_v2_and_rejects_v1_or_unknown_kind(tmp_path: Path) -> None:
+    run = _write_run(tmp_path, 193)
+    discovery = _discovery(run, batch_modes={1: "success_parent"})
+    v6 = _as_v6_contract(discovery)
+    _validate_v6_execution_contract(
+        v6,
+        expected_run_id=run["run_id"],
+        expected_company_id=_COMPANY,
+        expected_report_year=_YEAR,
+        expected_document_id=_DOCUMENT,
+        expected_sha256=run["source_sha"],
+        expected_analysis_mode=run["mode"],
+        m3_screening=None,
+        coverage=discovery["coverage"],
+    )
+
+    mixed_v4 = _as_v4_contract(discovery)
+    mixed_v4["phase_budget"] = archived_budget_contract_v2(scope="new_run")
+    with pytest.raises(AnnualReportReadError) as v4_with_v2:
+        _validate_v4_execution_contract(
+            mixed_v4,
+            expected_run_id=run["run_id"],
+            expected_company_id=_COMPANY,
+            expected_report_year=_YEAR,
+            expected_document_id=_DOCUMENT,
+            expected_sha256=run["source_sha"],
+            expected_analysis_mode=run["mode"],
+            m3_screening=None,
+            coverage=discovery["coverage"],
+        )
+    assert v4_with_v2.value.code == "annual_discovery_invalid"
+
+    mixed_v6 = copy.deepcopy(v6)
+    mixed_v6["phase_budget"] = archived_budget_contract_v1(scope="new_run")
+    with pytest.raises(AnnualReportReadError) as v6_with_v1:
+        _validate_v6_execution_contract(
+            mixed_v6,
+            expected_run_id=run["run_id"],
+            expected_company_id=_COMPANY,
+            expected_report_year=_YEAR,
+            expected_document_id=_DOCUMENT,
+            expected_sha256=run["source_sha"],
+            expected_analysis_mode=run["mode"],
+            m3_screening=None,
+            coverage=discovery["coverage"],
+        )
+    assert v6_with_v1.value.code == "annual_discovery_invalid"
+
+    unknown = copy.deepcopy(v6)
+    unknown["kind"] = "fintrace_annual_discovery_execution_v7"
+    with pytest.raises(AnnualReportReadError) as unknown_kind:
+        _validate_v6_execution_contract(
+            unknown,
+            expected_run_id=run["run_id"],
+            expected_company_id=_COMPANY,
+            expected_report_year=_YEAR,
+            expected_document_id=_DOCUMENT,
+            expected_sha256=run["source_sha"],
+            expected_analysis_mode=run["mode"],
+            m3_screening=None,
+            coverage=discovery["coverage"],
+        )
+    assert unknown_kind.value.code == "annual_discovery_invalid"
+
+
+def test_v6_archive_budget_v2_reader_is_independent_of_live_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = _write_run(tmp_path, 194)
+    discovery = _discovery(run, batch_modes={1: "success_parent"})
+    contract = _as_v6_contract(discovery)
+    frozen_archive = copy.deepcopy(contract["phase_budget"])
+
+    monkeypatch.setattr(live_annual_work_budget, "MAIN_REPORT_BUDGET_SECONDS", 90)
+    monkeypatch.setattr(live_annual_work_budget, "FINALIZATION_RESERVE_SECONDS", 5)
+    monkeypatch.setattr(live_annual_work_budget, "WORK_DEADLINE_OFFSET_SECONDS", 85)
+    monkeypatch.setattr(live_annual_work_budget, "DISCOVERY_BUDGET_SECONDS", 30)
+    monkeypatch.setattr(live_annual_work_budget, "FIXED_INVESTIGATION_BUDGET_SECONDS", 20)
+    monkeypatch.setattr(live_annual_work_budget, "ISSUE_GROUPING_RESERVED_SECONDS", 15)
+    monkeypatch.setattr(live_annual_work_budget, "FINAL_REVIEW_BUDGET_SECONDS", 15)
+    monkeypatch.setattr(live_annual_work_budget, "MODEL_CALL_TIMEOUT_SECONDS", 12.0)
+    monkeypatch.setattr(live_annual_work_budget, "BUDGET_CONTRACT_VERSION", "annual_analysis_budget_v9")
+
+    assert archived_budget_contract_v2(scope="new_run") == frozen_archive
+    _validate_v6_execution_contract(
+        contract,
+        expected_run_id=run["run_id"],
+        expected_company_id=_COMPANY,
+        expected_report_year=_YEAR,
+        expected_document_id=_DOCUMENT,
+        expected_sha256=run["source_sha"],
+        expected_analysis_mode=run["mode"],
+        m3_screening=None,
+        coverage=discovery["coverage"],
+    )
+
+
+def test_v7_envelope_uses_archived_budget_v3_and_rejects_cross_policy(tmp_path: Path) -> None:
+    run = _write_run(tmp_path, 195)
+    discovery = _discovery(run, batch_modes={1: "success_parent"})
+    v7 = _as_v7_contract(discovery)
+    _validate_v7_execution_contract(
+        v7,
+        expected_run_id=run["run_id"],
+        expected_company_id=_COMPANY,
+        expected_report_year=_YEAR,
+        expected_document_id=_DOCUMENT,
+        expected_sha256=run["source_sha"],
+        expected_analysis_mode=run["mode"],
+        m3_screening=None,
+        coverage=discovery["coverage"],
+    )
+
+    mixed_v7 = copy.deepcopy(v7)
+    mixed_v7["phase_budget"] = archived_budget_contract_v2(scope="new_run")
+    with pytest.raises(AnnualReportReadError) as v7_with_v2:
+        _validate_v7_execution_contract(
+            mixed_v7,
+            expected_run_id=run["run_id"],
+            expected_company_id=_COMPANY,
+            expected_report_year=_YEAR,
+            expected_document_id=_DOCUMENT,
+            expected_sha256=run["source_sha"],
+            expected_analysis_mode=run["mode"],
+            m3_screening=None,
+            coverage=discovery["coverage"],
+        )
+    assert v7_with_v2.value.code == "annual_discovery_invalid"
+
+    mixed_v6 = _as_v6_contract(discovery)
+    mixed_v6["phase_budget"] = archived_budget_contract_v3(scope="new_run")
+    with pytest.raises(AnnualReportReadError) as v6_with_v3:
+        _validate_v6_execution_contract(
+            mixed_v6,
+            expected_run_id=run["run_id"],
+            expected_company_id=_COMPANY,
+            expected_report_year=_YEAR,
+            expected_document_id=_DOCUMENT,
+            expected_sha256=run["source_sha"],
+            expected_analysis_mode=run["mode"],
+            m3_screening=None,
+            coverage=discovery["coverage"],
+        )
+    assert v6_with_v3.value.code == "annual_discovery_invalid"
+
+    unknown = copy.deepcopy(v7)
+    unknown["kind"] = "fintrace_annual_discovery_execution_v8"
+    with pytest.raises(AnnualReportReadError) as unknown_kind:
+        _validate_v7_execution_contract(
+            unknown,
+            expected_run_id=run["run_id"],
+            expected_company_id=_COMPANY,
+            expected_report_year=_YEAR,
+            expected_document_id=_DOCUMENT,
+            expected_sha256=run["source_sha"],
+            expected_analysis_mode=run["mode"],
+            m3_screening=None,
+            coverage=discovery["coverage"],
+        )
+    assert unknown_kind.value.code == "annual_discovery_invalid"
+
+
+@pytest.mark.parametrize("version", [6, 7])
+@pytest.mark.parametrize("mutation", ["scope", "source"])
+def test_phased_envelope_rejects_changed_scope_and_source(
+    tmp_path: Path, version: int, mutation: str,
+) -> None:
+    run = _write_run(tmp_path, 196)
+    discovery = _discovery(run, batch_modes={1: "success_parent"})
+    contract = (_as_v7_contract if version == 7 else _as_v6_contract)(discovery)
+    if mutation == "scope":
+        contract["phase_budget"] = (
+            archived_budget_contract_v3 if version == 7 else archived_budget_contract_v2
+        )(scope="resume")
+    else:
+        contract["binding"]["source_sha256"] = "0" * 64
+        contract["identity_sha256"] = _canonical_sha(contract["binding"])
+    validator = _validate_v7_execution_contract if version == 7 else _validate_v6_execution_contract
+    with pytest.raises(AnnualReportReadError) as invalid:
+        validator(
+            contract,
+            expected_run_id=run["run_id"],
+            expected_company_id=_COMPANY,
+            expected_report_year=_YEAR,
+            expected_document_id=_DOCUMENT,
+            expected_sha256=run["source_sha"],
+            expected_analysis_mode=run["mode"],
+            m3_screening=None,
+            coverage=discovery["coverage"],
+        )
+    assert invalid.value.code == (
+        "annual_discovery_invalid" if mutation == "scope" else "annual_discovery_binding_mismatch"
+    )
 
 
 def _save_checkpoint(
@@ -1447,7 +1694,7 @@ def test_legacy_v3_checkpoint_remains_readable_but_cannot_resume_under_v4_identi
         tmp_path, run["run_id"], request, settings=settings, archive=first_archive,
     )
     assert resume_check["can_resume"] is False
-    assert resume_check["reason"] == "recovery_binding_mismatch"
+    assert resume_check["reason"] == "recovery_pipeline_binding_mismatch"
 
     interrupted = save_annual_checkpoint(tmp_path, run["run_id"], {
         "state": "interrupted", "is_partial": True, "parent_run_id": None,
@@ -1463,7 +1710,7 @@ def test_legacy_v3_checkpoint_remains_readable_but_cannot_resume_under_v4_identi
         tmp_path, run["run_id"], request, settings=settings, archive=second_archive,
     )
     assert resume_check["can_resume"] is False
-    assert resume_check["reason"] == "recovery_binding_mismatch"
+    assert resume_check["reason"] == "recovery_pipeline_binding_mismatch"
     assert running.sequence + 1 == interrupted.sequence
 
 

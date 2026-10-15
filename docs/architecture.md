@@ -1,6 +1,6 @@
 # 架构与模块边界
 
-本文描述当前模块与行为契约，不保存逐次测试流水。能力摘要、启动与配置见 [README](../README.md)，实现里程碑见 [roadmap.md](roadmap.md)，既往结果见 [验收记录](verification-history.md)。年度是主要 Web/API 分析路径；季度目前是独立 CLI 切片，不复用或改写年度事实契约。
+本文描述当前模块与行为契约，不保存逐次测试流水。能力摘要、启动与配置见 [README](../README.md)，实现里程碑见 [roadmap.md](roadmap.md)，既往结果见 [验收记录](verification-history.md)。活动年度执行/预算/恢复合同以本文[专节](#annual-execution-budget)为准；R6 首次真实失败与语义限制见[R6 验收](verification-history.md#annual-analysis-recovery-r6)，落地已观测检查见[落地验收](verification-history.md#annual-analysis-recovery-r6-landing)。年度是主要 Web/API 分析路径；季度目前是独立 CLI 切片，不复用或改写年度事实契约。
 
 ## 1. 系统与流程
 
@@ -33,7 +33,7 @@ flowchart TD
     Q2 --> Q3["analysis.json 与 Markdown 归档"]
 ```
 
-四种模式为 deterministic、m3_screening、model_investigation 与 integrated_analysis。两个 AI 模式均包含既有固定候选调查、独立的原 PDF 全文发现和最终评审；全文发现从来源 PDF 的全部可提取文字按原文顺序规划批次，不依赖固定候选、已核验指标或 M3。LangGraph 是唯一智能体编排层。标准 Web/CLI 使用新的 execution_v5 年度流程，内部全文发现仍为 R3 的 execution_v4/plan_v3/discovery_v3：最多三个在途请求滚动调度，引用检查和检查点发布由单协调者执行。旧 v3/v4 归档按原版本读取，不跨年度流程续跑。最终 findings 按批次号及 finding ID 稳定归并，批次结果按原计划排列。新流程将全部合格发现形成事项与成员处理账，完成有界语义归并及同源补证后交给独立 review_v3；完整输入超过上限时保留全部候选及未完成状态，不读取任意新来源。旧 review_v2 按其原有界输入重建。集成模式在同一 run/report 中另行归档 M3 规则审计，M3 不进入 AI 输入。任一附加层失败或有缺口时，其他成功层和基础报告仍保留并分别记录；硬中断时不保证存在最终报告，严格读取器可读取已正式发布的部分快照。deterministic 与独立 M3 模式不调用模型；两个 AI 模式会调用模型。调度、预算、覆盖和超时边界见[全文发现契约](annual-discovery.md)。
+四种模式为 deterministic、m3_screening、model_investigation 与 integrated_analysis。两个 AI 模式均包含固定候选调查、独立原 PDF 全文发现和最终评审；发现按原文顺序规划全部可提取文字，不依赖固定候选、已核验指标或 M3。LangGraph 是唯一智能体编排层。标准 Web/CLI 活动外层与发现信封为 v10，内层业务绑定仍为 v4 / plan_v3 / discovery_v3 解析器，提示词为 annual_discovery_v4；最多三个在途请求，引用检查和检查点发布由单协调者执行。事项算法、review_v3 与 wire/projection 不变。全部合格发现形成完整事项成员账，有界归并及同源补证后进入评审；尺寸或预算不足保留全量候选及未完成状态，不读取任意新来源。旧 review_v2 按原有界输入重建。integrated_analysis 另行归档独立 M3，不进入 AI 输入。附加层失败或缺口不抹去基础报告及其他成功层；硬中断不保证最终报告，严格读取器可读取正式部分快照。deterministic 与独立 M3 不调用模型。版本、调度和覆盖见[年度执行合同](#annual-execution-budget)与[全文发现契约](annual-discovery.md)。
 
 年度归档读取支持 JSON、Markdown 与离线 HTML 白名单导出：先校验归档 manifest、报告身份和来源 PDF SHA，再输出受控字段；不导出整份 PDF、整页图、原始模型请求/响应或密钥。新全文发现层不导出自己的 `raw_text` 和 `quote`；既有叙述层仍有受控原文片段投影。PDF 由用户在浏览器打印离线 HTML 产生，服务端没有 PDF 导出端点。导出具体边界见[年度报告下载](annual-report-export.md)。
 
@@ -63,7 +63,7 @@ flowchart TD
 | quarterly | `ingestion/quarterly.py`、`finance/quarterly.py`、`verification/quarterly.py` 与 `reports/quarterly_analysis.py` 承载季度层，不改变年度 FinancialFactV2 |
 | core | 公共路径、配置与异常；`annual_checkpoints` 管不可变快照、原子指针和最终封存，`annual_recovery` 管恢复绑定及能力，`annual_work_budget` 管版本固定默认合同和 live 阶段分配，`model_call_ledger` 管跨进程原子请求准入、计数与关闭门控 |
 
-前端 `pages` 组织年度分析、设置和旧预检；`components` 承载公共组件及 `AnnualReportOverview` 重点概览；`api` 处理请求及错误；`types` 定义读取类型；`styles` 管展示。财务计算和模型调用不在浏览器执行。普通入口以显式 AI 复选框及高级 M3 选项映射既有四 mode，不改变后端请求或历史模式。报告按“标题与状态 → 重点概览 → 基础财务对照 → 完整线索与处理账”阅读；概览选择和来源限制见[全文发现页面契约](annual-discovery.md#页面旧归档与任务阶段)。
+前端 `pages` 组织年度分析、设置和旧预检；`components` 承载公共组件及 `AnnualReportOverview` 重点概览；`api` 处理请求及错误；`types` 定义读取类型；`styles` 管展示。财务计算和模型调用不在浏览器执行。普通入口以显式 AI 复选框及高级 M3 选项映射既有四 mode，不改变后端请求或历史模式。报告按“标题与状态 → 重点概览 → 基础财务对照 → 完整线索与处理账”阅读；概览选择和来源限制见[全文发现页面契约](annual-discovery.md#页面旧归档与任务阶段)。比较输入诊断把可比性身份/期间绑定失败与可比性证据不足分开说明，不改变资格判定或事实核验本身。
 
 新建入口与历史列表采用可键盘操作的原生折叠。显式选择报告后收起导航并聚焦报告标题；报告轮询不反复聚焦，不收起用户已打开的入口，也不打断正在输入的新任务。补跑和重新全量分析使用被选中归档/任务的原来源与完整模式，不读取新建表单当前选项；重新读取只走 GET。旧预检作为独立旧流程保留。
 
@@ -101,21 +101,45 @@ flowchart TD
 
 API 在应用创建时捕获实际加载函数代码、对应源码清单与协议身份，同时用只读 CLI 探针记录启动身份。诊断分别返回不可变的启动快照和当前磁盘指纹。创建任务和开始执行时核对两者及当前 CLI；Web CLI 必须携带预期指纹，并在读取来源或模型设置前验证。前端提交前也要求该协议，旧 API 缺少端点时拒绝提交。启动脚本仅在监听 PID、项目命令行和无活跃任务均确认时重启本项目旧 API；未知进程或无法确认的状态拒绝处理。
 
+ASGI 启动入口为 `finagent.api.app:create_app --factory`。仅导入 API 模块不构造项目服务、不触发遗留任务恢复；服务在显式调用应用工厂时建立。Windows 开发启动、手动命令和受控运行均使用工厂；便携入口已显式调用 `create_app(project_root=ROOT)`，保持该行为。真实归档测试先复制指定运行/报告与提示词到隔离项目，不对开发工作区初始化服务。
+
 job 的 GET 可附带 `result_availability` 只读投影，状态为 available/unavailable，含安全类别、报告 URL 和快照状态、序号、是否部分结果及父 run_id。available 要求严格年度读取器通过，并与原请求公司、报告期、文档和 SHA 一致；只读查询不把历史失败改成成功。结构不兼容与来源校验失败分别表达，恢复读取不触发 CLI 或模型调用。`recovery_capability` 给出能否续跑及安全原因；`recovery_progress` 分开报告本次、父链与累计的全部模型阶段准入，扫描层只计自身批次，两者均不代表整个 goal 的共同额度。
 
-新 AI job 的 `analysis_budget`（annual_analysis_budget_v1）给出该 job 实际运行时限、工作/发布余量、阶段尝试上限及当前准入、剩余额度、排队与运行时间。运行从实际 running 起点开始计时；终态 elapsed 冻结为实际耗时，不能裁到预算上限。API 将绝对单调时钟软/硬截止、阶段时限和原子 gate 传给 CLI，CLI 核对完整契约。归档执行层的 `phase_budget` 是版本固定默认合同，不代表较短 API owner 的实际有效值；参数及独立 CLI 边界统一见全文发现契约。
+新 AI job 的 `analysis_budget`（`annual_analysis_budget_v4`）给出该 job 实际运行时限、工作/发布余量、阶段尝试上限及当前准入、剩余额度、排队与运行时间。运行从实际 running 起点开始计时；终态 elapsed 冻结为实际耗时，不能裁到预算上限。API 将绝对单调时钟软/硬截止、阶段时限和原子 gate 传给 CLI，CLI 核对完整契约。历史 job 的 v1/v2/v3 投影按各自固定政策校验，不套用活动默认。归档执行层的 `phase_budget` 是版本固定默认合同，不代表本次 API owner 的实际有效值；三轴版本、归档默认与 owner 实际、CLI 截止及单次上限见[年度执行合同](#annual-execution-budget)。
 
 CLI 先发布正式基础快照；显式 AI 流程在首个模型请求前建立完整恢复绑定与待处理计划，先做全文发现，再做固定候选调查、事项归并及同源补证，最后执行新评审。基础、逐批与阶段结果使用 `artifacts/reports/<run_id>/checkpoints/` 下的不可变快照及运行目录中的 `checkpoint-current.json` 原子指针；最终封存后禁止追加。发布中断时，只读取通过来源和结构检查的已发布快照，未封存结果仍是部分结果。恢复绑定包含源 SHA、原完整 mode、模型与供应方指纹、提示词、解析器、计划及稳定 M3 语义输入；旧归档缺少绑定时只能只读，不能推定可续跑。子任务复用成功批次和独立完成的调查，失败批次重试返回空或再失败时仍保留父运行合格发现；父记录不回写。
 
+固定调查结论续跑时，只有父归档中每个引用 ID 均存在且关联相同 signal 的解释才可复用；缺失证据的历史解释重新调查，不伪造引用。父叙述证据先经严格读取器对本次 PDF 原文与坐标复核，再随复用结论进入 LangGraph 初始上下文。保留父引用优先，新增检索复用原有 8 段/4000 字符总预算，不裁掉已继承引用；全部候选已复用时不重复检索或调用模型。检查点、最终报告、评审输入与预览使用同一完整引用池，父归档不回写。
+
+任务终态结算承认严格读取器已接受的旧终态归档：`snapshot` 为 None 时沿用 manifest 的 `completed` / `completed_with_issues`。现行流程缺少最终快照封存仍拒绝把任务标为完成。取消、所属写入者确认和准入门关闭保护不变。
+
 正式报告、检查点指针和 manifest 的原子替换仅对 Windows 指定占用错误做有界重试。报告或最终指针持续发布失败时写失败记录与 failed manifest，保留最后可信部分快照；最终 seal 已发布后，若终态 manifest 替换失败，则保留旧 manifest 和 sealed 指针，CLI 退出失败但不损坏已封存结果的严格读取窗口。模型阶段完成不能替代最终耐久发布确认。
+
+检查点序号分配与指针发布使用有界跨进程文件锁。锁文件不保存业务数据，按普通文件类型及设备/文件 ID 确认同一对象，不把另一写入者初始化导致的长度/mtime 变化误判为文件替换。Windows/POSIX 均可锁定 EOF 之后的区间，无需并发截长初始化；原文、manifest、快照与指针的完整内容身份校验不因此放宽。
 
 正常完成及早期失败也由 API owner 关闭该 job 的准入门后才公布终态；共享账本中的其他 job 不受影响。关门失败时保留可信报告只读，job 暂为 interrupted，错误为 `call_gate_unavailable`，续跑待关门与所属写入者退出确认；后续收束可保留已经封存的最终报告。取消、超时和执行异常收尾先关闭准入，再确认所属 CLI 停止，才追加终态快照；无法确认时保留可信报告只读并暂缓续跑。心跳更新通过普通文件身份检查和 Windows 文件句柄或 POSIX 文件描述符完成，失败会停止后续准入。已封存报告不被取消收尾降级。
 
 已完成评审仅在完整投影前业务输入与恢复绑定一致时复用，使用明确原因 `review_reused_for_matching_inputs`，本次响应与尝试均为零。子运行保留原成功审计索引；严格读取沿有界父链检查原请求、逐次准入、耐久响应及解析结果，不凭复用标记放行。旧评审输入不含核验时间；当前评审用途投影省略 Claim 核验时间，完整本地记录仍保留。复用签名仅对显式 Claim 核验池中的有效 ISO 时间作归一化，区分有效时间存在、字段缺失及非 ISO 值，并保留无效或 null 原值。事实、发现、调查解释、覆盖或缺口变化会使复用失效，不能因模型投影省略字段而忽略完整业务变动。对应实测与阶段状态仍以恢复任务书及验收记录为准。
 
-模型连接器在每次实际联网前持久化准入，自动重试分别计数；耐久响应、合格发现及复用批次分别记录。普通任务使用隔离 gate，启用 `FINTRACE_MODEL_CALL_LEDGER_CONFIG` 时所有调用入口共用指定账本及已核对来源策略。共同账本仅首次显式初始化；已使用账本缺失、损坏或表结构不全时拒绝外发，不修复成零计数。策略文件、进程确认与计账不含密钥。更细执行契约见[全文发现说明](annual-discovery.md)，阶段验收状态见[恢复任务书](annual-analysis-recovery-plan.md)。
+模型连接器在每次实际联网前持久化准入，自动重试分别计数；耐久响应、合格发现及复用批次分别记录。普通任务使用隔离 gate，启用 `FINTRACE_MODEL_CALL_LEDGER_CONFIG` 时所有调用入口共用指定账本及已核对来源策略。策略的 `limit` 为正整数时施加共享累计上限，为显式 JSON `null` 时只取消该总上限，仍完整计账；SQLite `provider_policy.quota_limit=0` 表达无限额，不是零次准入。已有有限策略不会因配置改成 null 自动放行，须依据新增授权显式更新原策略行，保留全部历史尝试。任务/阶段尝试预算、有限截止、取消、来源及供应方绑定不因此取消。共同账本仅首次显式初始化；已使用账本缺失、损坏或表结构不全时拒绝外发，不修复成零计数。策略文件、进程确认与计账不含密钥。发现覆盖契约见[全文发现说明](annual-discovery.md)，活动执行/预算/恢复合同见[下文](#annual-execution-budget)，阶段验收状态见[恢复任务书](annual-analysis-recovery-plan.md)。
 
-Web 模型任务（model_investigation 与 integrated_analysis）按 README 的本机文件优先/环境回退规则注入配置；deterministic 与独立 M3 子进程移除 MODEL_*。集成模式的 M3 计算不使用模型配置；固定候选调查、全文发现与最终评审均属于显式 AI 流程。Web job 超时和全文发现内部预算见[全文发现契约](annual-discovery.md)。CLI 仍只读环境。设置读取 API 不回显密钥并禁止缓存；设置路由检查 loopback Host，修改与测试还检查本机 Origin。这些是设置路由的约束，不代表所有 API 有相同防护。应用不全局强制 host，按启动命令绑定 127.0.0.1。
+<a id="annual-execution-budget"></a>
+
+**年度执行、预算与恢复合同**
+
+预算第二档及两家真实运行保留 v7 历史身份；v8 更新发现提示词及来源引文优先补证，仍有覆盖、归并/评审及语义缺口。v9 根据完整真实请求体积另立容量合同；活动 v10 继承该容量和时间政策，只另立更小局部归并分片身份。不截断输入，不增加时间、尝试预算或并发。软件与受控运行、各历史真实结果及新版在线关卡分别记账，不据软件验证推定金融语义通过，见[落地验收](verification-history.md#annual-analysis-recovery-r6-landing)。
+
+**三轴版本。** 活动外层年度绑定为 `fintrace_annual_execution_binding_v10` / `execution_v10`，发现信封为 `fintrace_annual_discovery_execution_v10`。内层业务绑定仍为 `fintrace_annual_discovery_execution_v4` / `annual_discovery_plan_v3`，使用 `annual_discovery_v4` 提示词和 discovery_v3 解析器；事项算法仍为 pipeline_v1 / review_v3 及既有 wire/projection。v10 继承 `supplement_retrieval_version=source_anchor_then_ngram_v2`、提示词原始字节身份及全局/补证和评审容量绑定，新增 `grouping_shard_plan_version=member_bounded_v2` 与严格整数 `grouping_shard_max_members=3`。新执行与合法续跑只接受 v10 exact；旧 v5/v6/v7/v8/v9 归档只读，不跨外层、提示词、归并分片计划、补证版本或预算政策复用。
+
+**活动预算与只读预算。** 活动投影为 `annual_analysis_budget_v4`：整份硬截止 375 秒、工作软截止 360 秒、收尾 15 秒；阶段上限为扫描 150 秒、固定调查 60 秒、归并/补证 90 秒、最终评审 45 秒。完整全局归并/补证 Chat Completions 请求上限 96000 字符，完整评审请求上限 128000 字符；调用方 override 不得放大，不截原文或完整成员。字符数不是 token 数，应用容量不证明供应方上下文接受能力。年度单次 HTTP/worker 上限仍为 90.0 秒，并被共享阶段截止与工作截止 clamp；归并阶段不为各子调用重置公共时间。已保存模型配置的 60 秒不改写。默认尝试次数不变：首次 30（扫描/固定调查/归并补证/评审 18/2/8/2）、续跑 20（14/2/2/2）；扫描并发默认 3。`archived_budget_contract_v4(*, scope)` 固定 v9/v10 共用归档政策，`public_budget_contract` 活动投影使用 v4。历史 v7/v8 的 v3 冻结为 375/360/15 秒、阶段 150/60/90/45 秒、评审 body 40000/cap 90；历史 v6/v2 冻结为 345/330/15 秒、阶段 150/60/60/45 秒、body 40000/cap 60；历史 v5/v1 冻结为 300/285/15 秒、阶段 150/60/35/25 秒、body 24000。严格读取及评审输入/审计按归档自身政策重构，不以活动常量改旧合同。
+
+**共享累计策略显示。** 新 v4 job 在接受和实际 running 时分别通过只读账本快照保存共同上限及当时余额：有限策略显示实际正整数与余额，无共享累计上限显示 null。只读快照不准入、不初始化或修复账本，缺失/损坏的已用账本及配置与持久策略不匹配时拒绝创建或执行。旧 job 的 null 仅表示当时未记录，不追溯解释成无限；归档 `phase_budget` 的 null 也是未记录实际共享策略，页面明确区别于本次任务预算。共享策略本身及累计计账规则见[上文](#3-http-与任务契约)。
+
+**归档默认与 owner 实际。** 归档 `phase_budget` 是版本固定默认合同，不是本次 API owner 实际时限；JSON `phase_budget_basis=version_default_not_owner_actual`，Markdown/HTML 同义说明。来源、业务输入、模型、提示词、计划和政策均相同时，owner 从 60 秒改为 375 秒可以复用；实际 owner 时间不参与归档身份，不得写成 archive default。v6 的 60→345、v7 的 60→375 受控动态证明各自保留历史版本范围，不替代当前活动合同或真实语义验收；当前证据见[落地验收](verification-history.md#annual-analysis-recovery-r6-landing)。
+
+**CLI 截止与单次上限。** API owner/watchdog 使用 375 秒硬截止并传递 360 秒软截止；解析与核验消耗同一整份时间，排队另记，不在 AI 开始后重置。有限 deadline 与五类环境覆盖采用 all-or-none，owner 范围 60–375 秒、硬软间隔严格 15 秒，并拒绝远未来截止。活动阶段按整数 largest-remainder 适配 owner 工作时间；历史 v2/v1 runtime 分配使用各自冻结权重。独立 CLI 从入口创建同一软工作预算，调用受阶段和软截止限制，但没有 API 父进程 hard-kill。未绑定恢复的独立发现调用也使用新提示词和紧凑 plan_v3 / discovery_v3 解析器；自定义目录调用不因此获得正式续跑身份。
+
+Web 模型任务（model_investigation 与 integrated_analysis）按 README 的本机文件优先/环境回退规则注入配置；deterministic 与独立 M3 子进程移除 MODEL_*。集成模式的 M3 计算不使用模型配置；固定候选调查、全文发现与最终评审均属于显式 AI 流程。Web job 超时、阶段分配、单次上限与恢复政策见[年度执行合同](#annual-execution-budget)。CLI 仍只读环境。设置读取 API 不回显密钥并禁止缓存；设置路由检查 loopback Host，修改与测试还检查本机 Origin。这些是设置路由的约束，不代表所有 API 有相同防护。应用不全局强制 host，按启动命令绑定 127.0.0.1。
 
 `GET /v1/annual-analysis-history` 的 `limit` 默认 20、允许 1–50；`offset` 默认 0、须为非负整数。HTTP 查询值越界或无法解析返回 422。响应顶层为 `{items, total, limit, offset}`；每项主要包含 `item_id`、公司代码/年报年份/类型、来源文档编号和文件名、总状态、独立的 `job_status` 与 `run_status`、任务 `mode` 与归档 `run_mode`、`created_at`、`job_id`/`run_id`、`replay`、`result_available` 和 `{code, message}` 形式的 `issues`。缺失或无效的创建时间排在有效时间之后；有效时间按新到旧排序，同时间以条目标识稳定排序。
 
@@ -131,9 +155,9 @@ Web 模型任务（model_investigation 与 integrated_analysis）按 README 的�
 
 解析保留文档标识、原始 SHA256、PDF 的 1-based 物理页序号、文字块和未旋转坐标；坐标原点左上，单位为 PDF point。旋转后 page.rect 的宽高不能直接套用未旋转块坐标。无文字页明确为空，不猜 OCR 结果；加密/损坏 PDF 报错。
 
-v2 事实核验重新打开原 PDF，检查金额、年度列、期间角色、币种、单位与报表口径；不能把提取器自带坐标或重复使用同一提取值当作独立证据。事实状态为 verified、conflict、insufficient_evidence。财务事实字段与来源要求详见 [数据规则](data-policy.md)。
+v2 事实核验重新打开原 PDF，检查金额、年度列、期间角色、币种、单位与报表口径；不能把提取器自带坐标或重复使用同一提取值当作独立证据。事实状态为 verified、conflict、insufficient_evidence。财务事实字段与来源要求详见 [数据规则](data-policy.md)。候选提取支持同一 `PdfTextBlock` 内的多行精确标签与两年金额；独立核验重读 PDF 字词，核对换行百分比表头及按横坐标分离的比较列。不从利润行派生现金或资产金额。公司代码或页码不是通用放行条件；版式不满足时弃权。
 
-年度计算需要可比性依据；unknown 不默认可比。当前海天 proof 基于同一 2024 年报第 116、163、197 页，未与单独披露的 2023 年报独立勾稽。proof 绑定来源与期间，由当前进程签发；序列化副本仅供审计，不能在后续进程重建授权。若两个输入均通过核验且可比性成立，才计算差额；在此基础上，比较基数非正时保留差额并对增长率弃权。若可比性不足或任一输入未核验通过，则差额与增长率都弃权。
+年度计算需要可比性依据；unknown 不默认可比。当前海天 proof 基于同一 2024 年报第 116、163、197 页，未与单独披露的 2023 年报独立勾稽。proof 绑定来源与期间，由当前进程签发；序列化副本仅供审计，不能在后续进程重建授权。可比性区分摘要/情况说明与重要会计政策等正文标题：即使勾选不适用或没有复选框，仍读取正文。有限的无条件“无影响”句式可以确认无影响；明确存在的比较期影响导致 conflict，无法判定的比较期影响导致 insufficient_evidence，不把两者混为一类。期初未分配利润调整金额空白不得当作零；无法按年度列解释的非零合计会阻断确认。若两个输入均通过核验且可比性成立，才计算差额；在此基础上，比较基数非正时保留差额并对增长率弃权。若可比性不足或任一输入未核验通过，则差额与增长率都弃权。
 
 M3 使用应收账款净额、存货净额、合并净利润、营业成本、扣非归母净利润等扩展事实。四条试行规则为：
 
@@ -150,29 +174,41 @@ M3 使用应收账款净额、存货净额、合并净利润、营业成本、�
 
 输入必须唯一、同公司同源、单位/币种/期间角色及口径相容，逐条独立核验；提取与核验 evidence ID 不重叠。筛查接收同一进程 verify_financial_fact 的直接结果。VerificationResult 本身不是签名 proof，手工重建对象或反序列化 JSON 不能用来证明已核验。
 
-扣非归母净利润来自“主要会计数据”，保持 statement_type=key_financial_data、scope=unknown，排除同比百分比栏。规则二只对海天 603288 的 2024 年报第 7 页版式建立专属映射：核验器重定位“归属于上市公司股东的净利润”，与合并利润表归母净利润逐年对值后签发 proof；绑定源哈希、document_id、报告年、两年相关 fact ID/值与重定位区域。其他公司/期间不套用此证明。non_recurring_total 是披露合计，不是扣非归母净利润；其显式单位副本只供审计，不输入规则。
+扣非归母净利润来自“主要会计数据”，保持 statement_type=key_financial_data、scope=unknown，排除同比百分比栏。规则二语义映射要求：同源 PDF 存在唯一“主要会计数据”标题、明确人民币单位，扣非事实与合并利润表归母净利润均有唯一独立 verified 结果，再从该表重读“归属于上市公司股东的净利润”并与利润表两年值精确对值。本进程对 source+IDs+values 签发 HMAC proof；JSON 副本、手工对象或其他公司/页码捷径不能授权。定位必须发现实际页、年份、币种、单位和直接归母行。non_recurring_total 是披露合计，不是扣非归母净利润；其显式单位副本只供审计，不输入规则。映射成功只证明跨表对值成立，不等于财务语义真人正确率；当前对照与弃权边界见[R6 验收](verification-history.md#annual-analysis-recovery-r6)。
 
 Claim 类型为 fact、calculation、inference、hypothesis；同比属于 calculation。确定性 Claim 检查只覆盖已实现类型与支持依据，不泛化为模型自由文本语义核验。原文出处和引用 ID 存在，也不证明因果关系。
 
 ## 5. 模型、报告与展示
 
-固定候选调查仍使用受限同源检索与单次补充检索，不开放任意互联网检索或读取评测标签。独立全文发现会把原 PDF 全部可提取文字按预算分批发送，不以候选、财务指标或 M3 作为触发条件；新发现观点均未核验。当前 review_v3 接收基础报告、全部合格发现的事项/候选、成员去向、原引用、补证角色及完整范围缺口，不按模型 priority 截取前十二条。完整 Chat Completions 请求上限为 24000 字符；不能容纳时保留全量候选和明确的未评审原因。旧 review_v2 的有界输入、审计重建及 16000 字符上限保持旧版本语义。详细预算和覆盖状态见[全文发现契约](annual-discovery.md)。
+固定候选调查保持受限同源检索与单次补充检索，不开放任意互联网或评测标签。独立全文发现分批发送原 PDF 全部可提取文字，不以候选、指标或 M3 作为触发条件；发现观点均未核验。review_v3 接收基础报告、全部合格发现事项/候选、成员去向、原引用、补证角色及完整缺口，不按 priority 截前十二条。活动 v10 与旧 v9/v8/v7/v6/v5 的请求上限按自身归档政策重构，不能容纳则保留全量和未评审原因；旧 review_v2 有界输入及 16000 字符上限不变。见[年度执行合同](#annual-execution-budget)与[全文发现契约](annual-discovery.md)。
 
 新评审由同一请求 helper 执行 `annual_review_v3_purpose_projection_v1`、typed 编码与官方 Chat body 序列化，预算、实际调用、审计和严格读取共用它。完整基础报告、核验记录及定位留在本地；投影仅省略 `claim_evidence_pool[*]` 的列明抽取/坐标机械字段及其五类 region 的 bbox，空值的 printed_page/legacy_text_region/surrounding_text，以及 comparability.evidence、narrative_evidences、investigation_items.citations、issue_hierarchy.candidate_pool.citations、issue_hierarchy.supplement_pool 中的 bbox 和 claim_verification_pool.record.verified_at。非空原文、表头/行列/单位文本、来源标识、SHA、PDF 页、数值口径、检查/冲突/限制、完整成员及范围账保留；白名单外同名字段不递归删除。核验池内部指针可同步替换为无碰撞短别名，输出允许的业务 ID 保持原值。
 
-评审外层 `annual_model_review_v3_compact_v4` 精确含 schema_version/key_pool/string_pool/object_pool/data，使用非布尔整数节点标记、完整对象/列表包装、列向量和精确重复列表；解码精确还原投影对象，不承诺恢复已省略元数据。禁止子串替换、私用区、压缩载荷或截断。事项外层 `annual_issue_input_compact_v1` 保持完整语义输入及其独立字符串节点协议。v5 绑定独立保存 review_wire_version、review_input_projection_version 和提示词原始字节哈希；评审审计另保存完整语义、投影及请求正文哈希，缺失或未知版本拒绝读取/复用。旧 v3/v4 与 review_v2 不套用新投影，历史未提交候选按其捕获源码身份保留。上述实现仍须按恢复任务书验收。
+评审外层 `annual_model_review_v3_compact_v4` 精确含 schema_version/key_pool/string_pool/object_pool/data，使用非布尔整数节点标记、完整对象/列表包装、列向量和精确重复列表；解码还原投影对象，不恢复已省略元数据，禁止子串替换、私用区、压缩或截断。事项外层 `annual_issue_input_compact_v1` 保持完整语义输入及独立字符串节点协议。v10 继承 review_wire_version、review_input_projection_version、提示词字节哈希和补证版本绑定；评审审计保存完整语义、投影及请求正文哈希。缺失或未知身份拒绝读取/复用；旧 v9/v8/v7/v6/v5/v3/v4 与 review_v2 按自身政策读取，不套活动身份。
 
-`config/prompts/annual_investigation_v1.md`、`annual_discovery_v3.md`、`annual_issue_grouping_v1.md`、`annual_issue_global_v1.md`、`annual_issue_supplement_v1.md` 与 `annual_review_v3.md` 对应当前流程的调查、发现、归并、跨片关系、补证角色及评审。旧 `annual_review_v2.md` 仍用于原版本读取与兼容路径，不套用新评审输入。v3 发现输入使用批内短别名和共享来源头，解析器严格最多三条；别名还原后执行原引用检查。旧 v1/v2 归档仍按原规则读取，未绑定恢复的兼容路径使用 v2，未知版本拒绝。v2 保留六条解析安全上限，不能套到 v3；旧执行和新计划不能跨版本续跑。逐条 finding 校验允许部分保留有效项，但不放宽字段、数字、舞弊断言、来源 ID 或精确引用约束。相同批内片段可被不同 quote 多次引用，finding 的 `evidence_ids` 是按出现顺序去重的 ID；仅唯一 Unicode 空白差异可在同片段内恢复为精确连续子串，并通过 `restored_quotes` 计数。完整契约见[全文发现契约](annual-discovery.md)。输入 PDF 文本按不可信待分析数据处理。全文发现观点不得冒充核实结果；最终评审解析器拒绝模型观点字段中的阿拉伯数字，并只允许引用实际输入的 ID。页面需要展示数值时应从已核验结构化记录取值。改变这些限制须同时修改并验证输出契约，不能仅改 Markdown 措辞。
+当前流程加载 `annual_investigation_v1.md`、`annual_discovery_v4.md`、`annual_issue_grouping_v1.md`、`annual_issue_global_v1.md`、`annual_issue_supplement_v1.md` 与 `annual_review_v3.md`。新发现提示词要求纳入已披露原因，区分主体、报告期、资产/负债方向和比较基准；允许一条发现分别引用多个相关片段，不拼接 quote。紧凑输入仍使用批内短别名与共享来源头，discovery_v3 解析器每批最多三条，别名还原后执行原引用检查；旧提示词文件和 v1/v2 解析规则只用于各自历史身份。v2 六条上限不能套用到 v3；不跨版本续跑。逐 finding 部分接受不放宽字段、数字、断言或精确引用；仅唯一 Unicode 空白差异可恢复为同片段内连续原文，并计入 restored_quotes。输入文本是不可信数据；提示词遵守、引用绑定及最终评审均不是独立语义核验。评审观点仍拒绝阿拉伯数字且只引用输入 ID。完整规则见[全文发现契约](annual-discovery.md)。
+
+发现解析保留原模型观点文字，仅在确定性断言检查的副本上识别局部疑问：紧邻“是否”、可选紧邻“确认”的完整禁止断言片段不视为确认结论，且作为局部边界，不让其中的“不/没有”豁免后面的独立断言。确认或排除舞弊仍拒绝；字段之间不共享疑问或否定范围。合法疑问不降低数字、来源、别名或精确引用要求，也不补写旧失败批次为成功。
 
 新 `model_issue_pipeline` 使用 `annual_issue_pipeline_v1`。每个合格 finding 保留完整观察、关注理由、核查动作、引文和定位；成员处理账逐项表达保留、合并、排除或待处理。仅完整业务描述及引用等价的明确重复可本地合并，共用引文不能证明同一事项。语义分片须完整回答本片成员，多个分片再处理全部已知事项的跨片关系。排除须引用该成员的原证据和精确原文；非法、遗漏、预算或尺寸不足均保留待处理账。已知事项关系闭合与发现文字覆盖分别表达，局部完成不能推断全文无重点。
 
-补证模块从同源提取块扫描并按章节标识和文本重合选片；它不承诺识别所有相关解释。`retrieval_coverage` 分开记录扫描、命中、选片、未选配对及角色完成；`selected_excerpt_chars` 是所选片段字符总量，`selected_unique_source_chars` 按同页同块的字符区间并集计量，`omitted_chars` 是未进入定向补证片段的原文字符，不是发现层遗漏。补证 ID 绑定来源 SHA、页、块及起点，严格读取仍重核终点、原文与坐标。原发现自带引文为固定 `primary_finding_quote`；检索片段只可标为 context、possible_explanation 或 unknown，全部保持未核验，不能充当独立事实反证。定向检索上限及其未处理项留在覆盖账，不以关键词命中补记核验通过。
+活动 `member_bounded_v2` 按原始 finding 成员数分片，每片至多 3 人，完整请求仍受 22000 字符上限；超过三人的精确重复组确定性拆分，每个子组的代表必须属于其成员。旧 v9 及更早计划按历史最多 12 人重建。每次局部 checkpoint 同步当前 provisional issues、排除成员和全局待处理账，局部接纳不等于全局闭合。任务或调用额度耗尽停止新准入并保存 partial 与全部 pending；鉴权、账本配置或审计故障不因此改成成功。更小分片可能需要多次合法续跑，不能按初始或续跑阶段额度保证一轮完成全部局部、全局和补证。
+
+活动补证使用 `source_anchor_then_ngram_v2`：先从验证过的引文位置提取原文指标、主体和数值锚点，再处理同块、相邻说明及同源注释；模型措辞仅作后续 ngram 回退。远端具体附注优先于重复报表数字；同处非指标锚与同页编号表题用于区分相关金额附注和仅共享主体的其他科目，通用计提/减值措辞不充当主体锚。摘录是原块连续区间，围绕实际引文位置而非一律截块首；不拼接原文，不承诺检出全部解释。未知章节保持 unknown，选片原因区分来源锚点、相邻上下文和关键词回退，不把几何相邻伪写成关键词匹配。上限不变：40 检索词、每事项 4 片、每片 500 字符、32 角色任务。旧 `section_filter_then_ngram_overlap_v1` 及归档语义冻结。retrieval_coverage 区分扫描、命中、选片、未选配对及角色完成；selected_excerpt_chars 为摘录总量，selected_unique_source_chars 为同块区间并集，omitted_chars 不是发现层遗漏。补证 ID 绑定来源 SHA、页块起点，严格读取重核终点、原文及坐标。发现引文固定 primary_finding_quote；补证角色仅 context、possible_explanation 或 unknown，全部未核验，不补记核验通过。
+
+补证重建仅在一次检索调用内复用 block 的紧凑文本与非空期间/主体集合，以及每个 issue 的来源参照集合；不跨请求缓存，不改变选片、评分、顺序、原文区间、ID 或覆盖账。空集合不持续分配到每个 block。额外峰值内存和性能验证范围见[落地验收](verification-history.md#annual-analysis-recovery-r6-landing)，不据两份原件的观测承诺任意压缩 PDF 的最大内存表现。
 
 合法 `role_status=pending` 的补证可在原报告中缺省 issue_roles，而受控原文索引将其规范为空数组；前端仅兼容这一缺省与空数组的对应关系。索引和抽屉仍须通过同源/同 SHA、报告快照哈希、页块字符范围、坐标、数量顺序及预览路由检查，明确角色尚待标注。accepted 状态须有有效非空逐问题角色并精确匹配，不能将缺省或空角色伪造为已完成标注。
 
-新 v5 绑定包含精确原 v4 发现绑定、新提示词哈希、事项解析与评审版本，不接受跨 v3/v4 的续跑。归并、跨片关系、补证角色和新评审仅在业务输入、来源、配置及原成功审计均匹配时零新请求复用；父归档不改写，易变 run/调用/耗时元数据不代替业务输入。常规 API 与三格式导出对新事项层移除原文，保留引用 ID、位置、成员路径、角色、缺口及审计计数；原文由受控索引和页图读取。`presentation_order` 是独立展示投影，依据完成评审的理由/跟进引用、定位完整性、明确核查动作及候选账稳定顺序排序，不按 raw priority 排序，也不回写评审的业务输入。
+活动 v10 保存精确内层发现绑定、提示词字节身份、归并分片计划、补证算法版本及事项/评审契约；发现检查点也须具有匹配的事项待处理绑定，缺失或伪造身份拒绝。归并、跨片关系、补证角色及评审只在业务输入、来源、配置、政策和原成功审计均匹配时零请求复用；父归档不改写。常规 API 与三格式导出使用按版本列明字段的最小 execution_binding 展示投影，v10 另展示两个分片计划字段，不暴露原恢复绑定或供应方指纹；严格归档读取、审计和续跑仍使用完整绑定。事项投影移除原文，保留引用 ID、位置、成员路径、角色、缺口及计数；原文由受控索引和页图读取。presentation_order 是独立显示投影，依据已完成评审引用、定位、动作及成员账稳定排序，不按 raw priority，不回写评审输入。
 
-事项层可附带 `annual_issue_pipeline_phase_timings_v1`：记录当前运行归并公共阶段及已进入子阶段的 monotonic 耗时，包含本地规划与本次请求/重试，不继承父运行耗时。旧记录缺字段时保持缺省，不补零；job 的事项阶段耗时只投影已严格读取的本次计时，任务总时长单独计量。阶段预算与计数仍沿用既定合同，见[全文发现说明](annual-discovery.md)。上述契约的当前验收范围见[恢复任务书](annual-analysis-recovery-plan.md)，源码实现不代表新版在线或浏览器验收已经通过。
+一次任务状态 GET 在释放服务锁后严格读取一次报告，结果或本次失败用于全部状态投影，避免重复重建 PDF、父恢复链和审计。失败不能升级为可读或可续跑；下一次 GET 重新核验，不使用跨请求缓存，也不延长 HTTP 观察时限。
+
+严格读取中的 `SourceReadContext` 仅在一次读取调用及其父链内保留最近一份已解析 PDF；历史列表一次分页读取共用同一上下文。每份归档仍独立读取原件字节并重算 SHA，来源哈希、文档 ID 或文件名变化即重新解析；复用的仅是匹配原件快照的解析结果，不缓存报告、审计、来源验证或可恢复资格。父链循环与最多 32 层限制不变；发现、补证及父链核验消费同一份已经本次验证的字节快照。
+
+前端默认折叠历史，仅展开“已有分析”才请求分页列表；高级按编号回看不依赖列表。折叠或切换分页使旧请求失效并撤销客户端 fetch，旧响应及错误不覆盖新状态；这不取消后端已经开始的同步严格核验。任务终止及恢复等变化仍登记列表失效，下次展开重读。已保存报告尚在校验时说明资格待判定，不把暂缺报告响应误写成来源校验失败，也不提前允许续跑。
+
+事项层可附带 `annual_issue_pipeline_phase_timings_v1`：记录当前运行归并公共阶段及已进入子阶段的 monotonic 耗时，包含本地规划与本次请求/重试，不继承父运行耗时。旧记录缺字段时保持缺省，不补零；job 的事项阶段耗时只投影已严格读取的本次计时，任务总时长单独计量。阶段预算、次数与 `phase_budget_basis` 见[年度执行合同](#annual-execution-budget)。上述契约的当前验收范围见[恢复任务书](annual-analysis-recovery-plan.md)、[R6 验收](verification-history.md#annual-analysis-recovery-r6)和[落地验收](verification-history.md#annual-analysis-recovery-r6-landing)，源码实现不代表新版在线主流程或浏览器金融验收已经通过。
 
 审计目录为 `artifacts/runs/<run_id>/` 的 UUID 子目录，联网前写 request.json/started，成功写 response.json，失败写安全类别；凭据须脱敏，不记录请求头、base_url 或异常原文。响应审计写入失败抛 AuditPersistError，不返回审计成功；输出归档仍需独立检查是否可能夹带敏感信息，不能据一个脱敏环节推定整条链路安全。
 

@@ -420,3 +420,84 @@ def test_history_http_route_shows_manager_recovered_interrupted_job(tmp_path: Pa
         (tmp_path / "artifacts" / "annual-analysis-jobs" / job_id / "job.json").read_text(encoding="utf-8")
     )
     assert saved_state["status"] == "interrupted"
+
+
+def _write_discovery_history_run(
+    root: Path, number: int, *, same_source_run_id: str | None = None,
+) -> tuple[str, str]:
+    from finagent.core.annual_checkpoints import save_annual_checkpoint
+    from tests.unit.test_annual_report_read_api import _attach_valid_discovery, _make_archive
+
+    run_id = _run_id(number)
+    created = _make_archive(root, run_id, source_text=f"constructed history source {number}")
+    run_dir = root / "artifacts" / "runs" / run_id
+    report_path = root / "artifacts" / "reports" / run_id / "report.json"
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if same_source_run_id is None:
+        _attach_valid_discovery(root, run_id, created)
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    else:
+        source_bytes = (root / "artifacts" / "runs" / same_source_run_id / "source.pdf").read_bytes()
+        (run_dir / "source.pdf").write_bytes(source_bytes)
+        report = json.loads((root / "artifacts" / "reports" / same_source_run_id / "report.json").read_text(encoding="utf-8"))
+        report["run_id"] = run_id
+        report["model_discovery"]["run_id"] = run_id
+        manifest["inputs"]["source_pdf_sha256"] = hashlib.sha256(source_bytes).hexdigest()
+    manifest["created_at"] = f"2026-10-14T12:00:{number % 60:02d}+00:00"
+    manifest["mode"] = "deterministic"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    save_annual_checkpoint(root, run_id, {
+        "state": "completed", "is_partial": False, "parent_run_id": None,
+        "source_sha256": report["source_sha256"], "report": report,
+    })
+    return run_id, report["source_sha256"]
+
+
+@pytest.mark.parametrize("tamper", ["source", "manifest", "report"])
+def test_history_rechecks_each_archive_with_shared_original_and_preserves_failed_job(
+    tmp_path: Path, tamper: str,
+) -> None:
+    first_id, _ = _write_discovery_history_run(tmp_path, 901)
+    second_id, source_sha = _write_discovery_history_run(tmp_path, 902, same_source_run_id=first_id)
+    different_id, _ = _write_discovery_history_run(tmp_path, 903)
+    job_id = "annual-job-" + "9" * 32
+    _write_job(tmp_path, job_id, status="failed", run_id=second_id, source_sha256=source_sha)
+    client = TestClient(create_app(tmp_path))
+
+    before = client.get("/v1/annual-analysis-history")
+    assert before.status_code == 200
+    rows = {row["run_id"]: row for row in before.json()["items"]}
+    assert set(rows) == {first_id, second_id, different_id}
+    assert all(row["result_available"] is True for row in rows.values())
+    assert rows[second_id]["job_status"] == "failed"
+    assert "failed_job_archive_readable" in {issue["code"] for issue in rows[second_id]["issues"]}
+    if tamper == "source":
+        source_path = tmp_path / "artifacts" / "runs" / second_id / "source.pdf"
+        source_path.write_bytes(source_path.read_bytes() + b"\n% changed history original\n")
+    elif tamper == "manifest":
+        manifest_path = tmp_path / "artifacts" / "runs" / second_id / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["outputs"]["report_json"] = f"reports/{first_id}/report.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    else:
+        report_path = tmp_path / "artifacts" / "reports" / second_id / "report.json"
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        report["metadata_note"] = "changed outside sealed checkpoint"
+        report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    after = client.get("/v1/annual-analysis-history")
+
+    assert after.status_code == 200
+    rows = {row["run_id"]: row for row in after.json()["items"]}
+    assert rows[first_id]["result_available"] is True
+    assert rows[different_id]["result_available"] is True
+    assert rows[second_id]["result_available"] is False
+    assert rows[second_id]["job_status"] == "failed"
+    expected_issue = {
+        "source": "failed_result_source_validation_failed",
+        "manifest": "run_archive_unavailable",
+        "report": "failed_result_archive_incompatible",
+    }[tamper]
+    assert expected_issue in {issue["code"] for issue in rows[second_id]["issues"]}

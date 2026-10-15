@@ -742,4 +742,3 @@ def _settings_test_result(success: bool, code: str, message: str) -> JSONRespons
     )
 
 
-app = create_app()

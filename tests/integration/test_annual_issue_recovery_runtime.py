@@ -37,9 +37,9 @@ import pytest
 
 
 _ROOT = Path(__file__).resolve().parents[2]
-_ATTEMPT_ENV = "FINTRACE_R4_RUNTIME_ATTEMPT_DIR"
-_FREEZE_ENV = "FINTRACE_R4_RUNTIME_SOURCE_FREEZE_SHA256"
-_STABLE_ENV = "FINTRACE_R4_RUNTIME_SOURCE_STABLE"
+_ATTEMPT_ENV = "FINTRACE_V11_RUNTIME_ATTEMPT_DIR"
+_FREEZE_ENV = "FINTRACE_V11_RUNTIME_SOURCE_FREEZE_SHA256"
+_STABLE_ENV = "FINTRACE_V11_RUNTIME_SOURCE_STABLE"
 _MODEL = "fintrace-r4-runtime-fault-reuse-loopback"
 _DUMMY_KEY = "r4-runtime-fault-reuse-synthetic-loopback-key"
 _SEMANTIC_DRIFT_SOURCE_TEXT = "附注说明，合同回款的后续结算时点需要与账龄分类逐项对照。"
@@ -158,7 +158,7 @@ def test_r4_issue_reuse_and_shared_gate_faults_use_standard_api(tmp_path: Path) 
         api_port = _free_loopback_port()
         base_url = f"http://127.0.0.1:{api_port}"
         api_argv = [
-            sys.executable, "-m", "uvicorn", "finagent.api.app:app",
+            sys.executable, "-m", "uvicorn", "finagent.api.app:create_app", "--factory",
             "--host", "127.0.0.1", "--port", str(api_port),
             "--log-level", "warning", "--no-access-log",
         ]
@@ -205,14 +205,19 @@ def test_r4_issue_reuse_and_shared_gate_faults_use_standard_api(tmp_path: Path) 
         # First exercise the real phases to prove each controlled response is
         # reachable before we target a fault at its admission boundary.
         provider.configure(fixtures["preflight"]["document_id"], {"mode": "retry_grouping_many"})
-        preflight = _run_new_job(base_url, fixtures["preflight"], evidence_root / "preflight", provider, snapshot_root, ledger_path)
-        outcome["cases"]["preflight"] = preflight
+        preflight_initial = _run_new_job(base_url, fixtures["preflight"], evidence_root / "preflight", provider, snapshot_root, ledger_path)
+        outcome["cases"]["preflight"] = preflight_initial
+        _assert_retry_attempts(preflight_initial, "grouping")
+        provider.configure(fixtures["preflight"]["document_id"], {"mode": "success_many"})
+        preflight = _complete_issue_resume_chain(
+            base_url, preflight_initial, evidence_root / "preflight-resume",
+            provider, snapshot_root, ledger_path, outcome["cases"], "preflight_resume",
+        )
         _assert_completed_issue_stages(preflight)
         _assert_preflight_semantic_pressure(preflight, fixtures["preflight"], provider)
-        preflight_stage_events = _events_by_stage(provider.events_for(fixtures["preflight"]["document_id"]))
+        preflight_stage_events = _events_by_stage(preflight_initial["resume_chain"]["all_provider_http_events"])
         if not all(preflight_stage_events.get(stage) for stage in _REQUIRED_STAGE_COUNTS):
             raise AssertionError("r4_phase_preflight_not_reachable")
-        _assert_retry_attempts(preflight, "grouping")
 
         if os.environ.get("FINTRACE_R4_RUNTIME_PREFLIGHT_ONLY") == "1":
             all_provider_events = provider.events()
@@ -290,14 +295,15 @@ def test_r4_issue_reuse_and_shared_gate_faults_use_standard_api(tmp_path: Path) 
         if drift_parent_hashes_after != parent_hashes:
             raise AssertionError("original_parent_run_changed_after_business_progress")
 
-        # Continue the now valid discovery result through the genuine pending
-        # grouping work. Its resumed issue gate has two admissions, so one new
-        # grouping shard and global reconciliation may proceed while later
-        # supplement work remains pending for a subsequent legal resume.
+        # The same pending-input contract may require several legal children:
+        # every child keeps the production two-admission issue gate.
         provider.configure(resume_fixture["document_id"], {"mode": "resolve_batch_2_many"})
-        drift_continuation = _resume_job(base_url, drift_child, evidence_root / "business-input-drift-continuation", provider, snapshot_root, ledger_path)
-        outcome["cases"]["business_input_drift_continuation"] = drift_continuation
-        _assert_changed_issue_inputs_continued(drift_child, drift_continuation)
+        drift_continuation = _complete_issue_resume_chain(
+            base_url, drift_child, evidence_root / "business-input-drift-continuation",
+            provider, snapshot_root, ledger_path, outcome["cases"], "business_input_drift_continuation",
+            ancestor_hashes={resume_parent["run_id"]: parent_hashes, reuse_child["run_id"]: reuse_child["artifact_hashes"]},
+        )
+        _assert_changed_issue_inputs_continued(reuse_child, drift_child, drift_continuation)
 
         # The API-owned process cancellation closes the common R4 gate while a
         # grouping request is already in flight. Its late reply cannot alter
@@ -311,7 +317,6 @@ def test_r4_issue_reuse_and_shared_gate_faults_use_standard_api(tmp_path: Path) 
         # proved global is reachable. The fake server releases a valid late
         # response after the copied CLI reaches its bounded phase cutoff.
         global_fixture = fixtures["deadline_global"]
-        provider.configure(global_fixture["document_id"], {"mode": "delay_global_many", "delay_seconds": 9.0})
         global_cutoff = _run_delayed_phase_cutoff(base_url, global_fixture, evidence_root / "deadline-global", provider, snapshot_root, ledger_path, "global")
         outcome["cases"]["deadline_global"] = global_cutoff
 
@@ -463,6 +468,142 @@ def _resume_job(base_url: str, parent: Mapping[str, Any], case_dir: Path, provid
     return _wait_for_job(base_url, str(value["job_id"]), case_dir, fixture, provider, root, ledger_path, created=value, parent=parent, provider_sequence_start=provider_sequence_start)
 
 
+def _complete_issue_resume_chain(
+    base_url: str, initial: dict[str, Any], case_prefix: Path,
+    provider: "_LoopbackProvider", root: Path, ledger_path: Path,
+    cases: dict[str, Any], case_name: str, *,
+    ancestor_hashes: Mapping[str, dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    """Finish the full member plan using bounded, independently audited API children."""
+    report = initial["strict_reader"]["report"]
+    pipeline = report["model_issue_pipeline"]
+    shards = pipeline["shards"]
+    grouping_count = sum(item.get("kind") == "grouping" for item in shards)
+    pending_shard_count = sum(item.get("status") != "accepted" for item in shards)
+    pending_member_count = sum(item.get("disposition") == "pending" for item in pipeline["member_decisions"])
+    pending_role_count = pipeline["retrieval_coverage"]["role_assignments_pending"]
+    # One round per existing shard/group/pending item is conservative even
+    # when global and supplement have not yet been materialized. The final
+    # three units cover global, supplement and review; no budget is enlarged.
+    max_rounds = grouping_count + len(shards) + pending_shard_count + pending_member_count + pending_role_count + 3
+    archived_hashes = dict(ancestor_hashes or {})
+    archived_hashes[initial["run_id"]] = _hash_run_and_report(root, initial["run_id"])
+    chain: dict[str, Any] = {
+        "initial": {"run_id": initial["run_id"], "job_id": initial["job_id"], "case_directory": initial["case_directory"]},
+        "round_bound_basis": {
+            "grouping_count": grouping_count, "shard_count": len(shards),
+            "pending_shard_count": pending_shard_count, "pending_member_count": pending_member_count,
+            "pending_role_count": pending_role_count, "unmaterialized_stage_allowance": 3,
+        },
+        "max_resume_rounds": max_rounds,
+        "children": [],
+        "all_provider_http_events": list(initial["provider_http_events"]),
+        "current_run_id": initial["run_id"],
+    }
+    initial["resume_chain"] = chain
+    current = initial
+    run_ids = {initial["run_id"]}
+    job_ids = {initial["job_id"]}
+    for round_index in range(1, max_rounds + 1):
+        current_report = current["strict_reader"]["report"]
+        if current_report["model_issue_pipeline"].get("status") == "completed" and current_report.get("model_review", {}).get("status") == "completed":
+            break
+        if current["terminal_job"].get("recovery_capability", {}).get("can_resume") is not True:
+            raise AssertionError("pending_issue_chain_not_legally_resumable")
+        before = {run_id: _hash_run_and_report(root, run_id) for run_id in archived_hashes}
+        if before != archived_hashes:
+            raise AssertionError("issue_chain_ancestor_changed_before_resume")
+        child = _resume_job(
+            base_url, current, case_prefix.with_name(f"{case_prefix.name}-{round_index:03d}"),
+            provider, root, ledger_path,
+        )
+        cases[f"{case_name}_{round_index:03d}"] = child
+        chain["children"].append(child)
+        chain["all_provider_http_events"].extend(child["provider_http_events"])
+        chain["current_run_id"] = child["run_id"]
+        if child["run_id"] in run_ids or child["job_id"] in job_ids:
+            raise AssertionError("issue_chain_repeated_run_or_job_identity")
+        run_ids.add(child["run_id"])
+        job_ids.add(child["job_id"])
+        if (
+            child["parent_run_id"] != current["run_id"]
+            or child["parent"] != {"run_id": current["run_id"], "job_id": current["job_id"]}
+            or child["terminal_job"].get("recovery", {}).get("parent_run_id") != current["run_id"]
+            or child["strict_reader"].get("loaded") is not True
+            or child["strict_reader"].get("snapshot", {}).get("parent_run_id") != current["run_id"]
+            or child["document_id"] != initial["document_id"]
+            or child["source_pdf_sha256"] != initial["source_pdf_sha256"]
+            or child["source_manifest"] != initial["source_manifest"]
+        ):
+            raise AssertionError("issue_chain_exact_source_or_parent_identity_changed")
+        budget = child["terminal_job"]["analysis_budget"]
+        rows = child["sqlite_read_only"]["attempt_rows"]
+        issue_rows = [item for item in rows if item.get("stage") == "annual_issue_grouping"]
+        issue_events = [item for item in child["provider_http_events"] if item.get("stage") in {"grouping", "global", "supplement"}]
+        if (
+            budget["scope"] != "resume"
+            or budget["provider_attempt_limits"]["task_effective"] != 20
+            or budget["stages"]["annual_issue_grouping"]["attempt_limit"] != 2
+            or len(rows) > 20
+            or len(issue_rows) != len(issue_events)
+            or len(issue_rows) > 2
+        ):
+            raise AssertionError("issue_chain_resume_exceeded_production_admission_contract")
+        if issue_rows:
+            _assert_terminal_issue_gate_closed(child, issue_rows)
+        child_report = child["strict_reader"]["report"]
+        child_pipeline = child_report["model_issue_pipeline"]
+        if (
+            child_pipeline["execution_binding"] != pipeline["execution_binding"]
+            or child_report["model_discovery"]["execution_contract"]["binding"] != report["model_discovery"]["execution_contract"]["binding"]
+            or child_report["model_discovery"]["findings"] != report["model_discovery"]["findings"]
+            or child_pipeline["candidates"] != pipeline["candidates"]
+            or child_pipeline["input"] != pipeline["input"]
+        ):
+            raise AssertionError("issue_chain_changed_original_members_quotes_or_execution_binding")
+        input_ids = child_pipeline["input"]["finding_ids"]
+        decisions = child_pipeline["member_decisions"]
+        decision_ids = [item.get("finding_id") for item in decisions]
+        if len(decision_ids) != len(set(decision_ids)) or set(decision_ids) != set(input_ids):
+            raise AssertionError("issue_chain_dropped_or_duplicated_member_decision")
+        grouped_ids = [
+            finding_id for shard in child_pipeline["shards"] if shard.get("kind") == "grouping"
+            for finding_id in shard["input_finding_ids"]
+        ]
+        if len(grouped_ids) != len(set(grouped_ids)) or set(grouped_ids) != set(input_ids):
+            raise AssertionError("issue_chain_group_plan_dropped_or_duplicated_member")
+        candidate_by_id = {item["finding_id"]: item for item in child_pipeline["candidates"]}
+        for shard in child_pipeline["shards"]:
+            if shard.get("kind") != "grouping":
+                continue
+            if not 1 <= len(shard["input_finding_ids"]) <= 3 or shard["input"]["candidate_pool"] != [
+                candidate_by_id[finding_id] for finding_id in sorted(shard["input_finding_ids"])
+            ]:
+                raise AssertionError("issue_chain_group_shard_changed_raw_members_or_exceeded_three")
+        after = {run_id: _hash_run_and_report(root, run_id) for run_id in archived_hashes}
+        hash_check = {"before": before, "after": after, "unchanged": before == after}
+        child["ancestor_archive_hash_check"] = hash_check
+        _write_json_new(Path(child["case_directory"]) / "ancestor-archive-hash-check.json", hash_check)
+        _write_json_new(Path(initial["case_directory"]) / f"resume-chain-round-{round_index:03d}.json", chain)
+        if before != after:
+            raise AssertionError("issue_chain_resume_mutated_ancestor_archive_bytes")
+        archived_hashes[child["run_id"]] = _hash_run_and_report(root, child["run_id"])
+        current = child
+    _assert_completed_issue_stages(current)
+    chain["current_final_result"] = current if current is not initial else {
+        "run_id": current["run_id"], "strict_reader": current["strict_reader"],
+        "terminal_job": current["terminal_job"], "case_directory": current["case_directory"],
+    }
+    chain["stage_http_counts"] = dict(Counter(item["stage"] for item in chain["all_provider_http_events"]))
+    chain["http_ledger_admission_count"] = sum(
+        len(run["sqlite_read_only"]["attempt_rows"]) for run in [initial, *chain["children"]]
+    )
+    if chain["http_ledger_admission_count"] != len(chain["all_provider_http_events"]):
+        raise AssertionError("issue_chain_aggregate_http_not_equal_to_ledger_admissions")
+    _write_json_new(Path(initial["case_directory"]) / "resume-chain.json", chain)
+    return current
+
+
 def _run_cancel_at_stage(base_url: str, fixture: Mapping[str, Any], case_dir: Path, provider: "_LoopbackProvider", root: Path, ledger_path: Path, stage: str) -> dict[str, Any]:
     case_dir.mkdir(parents=True, exist_ok=False)
     provider_sequence_start = provider.last_sequence()
@@ -491,18 +632,61 @@ def _run_cancel_at_stage(base_url: str, fixture: Mapping[str, Any], case_dir: Pa
 def _run_delayed_phase_cutoff(base_url: str, fixture: Mapping[str, Any], case_dir: Path, provider: "_LoopbackProvider", root: Path, ledger_path: Path, stage: str) -> dict[str, Any]:
     case_dir.mkdir(parents=True, exist_ok=False)
     provider_sequence_start = provider.last_sequence()
+    # A fast worker may reach global before POST returns its owner budget.
+    # Hold only that response's configuration lookup until the budget is known.
+    delay_ready = threading.Event()
+    provider.configure(fixture["document_id"], {"mode": "delay_global_many", "delay_ready": delay_ready})
     created = _request_json(base_url, "POST", "/v1/annual-analysis-jobs", _job_request(fixture), case_dir / "api-create")
     job_id = str(created["json"]["job_id"])
+    # Read the actual API owner's runtime-fit budget, not the policy defaults:
+    # global reconciliation shares the annual_issue_grouping phase deadline.
+    owner_budget = created["json"]["analysis_budget"]
+    phase_limit_seconds = float(owner_budget["stages"]["annual_issue_grouping"]["time_limit_seconds"])
+    owner_limit_seconds = float(owner_budget["main_report_limit_seconds"])
+    delay_seconds = phase_limit_seconds + 15.0
+    fault_configuration = {
+        "mode": "delay_global_many",
+        "delay_seconds": delay_seconds,
+        "budget_schema_version": owner_budget["schema_version"],
+        "budget_stage": "annual_issue_grouping",
+        "phase_time_limit_seconds": phase_limit_seconds,
+        "main_report_limit_seconds": owner_limit_seconds,
+        "late_response_margin_seconds": 15.0,
+    }
+    provider.configure(fixture["document_id"], fault_configuration)
+    _write_json_new(case_dir / "deadline-fault-configuration.json", fault_configuration)
+    delay_ready.set()
     started = _wait_job_stage_running(base_url, job_id, case_dir, timeout=20)
-    event = provider.wait_received(fixture["document_id"], stage, timeout=50)
-    terminal = _wait_for_job_terminal(base_url, job_id, case_dir, timeout=22)
+    event = provider.wait_received(fixture["document_id"], stage, timeout=owner_limit_seconds + 15.0)
+    terminal = _wait_for_job_terminal(base_url, job_id, case_dir, timeout=owner_limit_seconds + 15.0)
     report_before_late = _strict_read_job(root, terminal, case_dir, ledger_path)
     hash_before = _hash_run_and_report(root, terminal["run_id"])
-    late = provider.wait_response_finished(int(event["sequence"]), timeout=15)
+    archive_seal_observed_monotonic = time.monotonic()
+    late = provider.wait_response_finished(int(event["sequence"]), timeout=delay_seconds + 15.0)
     hash_after = _hash_run_and_report(root, terminal["run_id"])
     ledger = _capture_job_ledger(ledger_path, str(terminal.get("run_id", "")), case_dir / "ledger-after")
     result = _case_result(fixture, terminal, report_before_late, provider, job_id, case_dir, ledger, created=created["json"], provider_sequence_start=provider_sequence_start)
-    result["deadline_boundary"] = {"stage": stage, "job_running_state": started, "blocked_phase_http_request": event, "late_response": late, "parent_archive_unchanged_after_late_response": hash_before == hash_after}
+    result["deadline_boundary"] = {
+        "stage": stage,
+        "job_running_state": started,
+        "fault_configuration": fault_configuration,
+        "blocked_phase_http_request": event,
+        # The shared phase began before global HTTP admission. Even this
+        # conservative latest possible cutoff must precede the late response.
+        "latest_possible_phase_cutoff_monotonic": float(event["request_monotonic"]) + phase_limit_seconds,
+        "late_response": late,
+        "actual_http_delay_seconds": float(late["response_finished_monotonic"]) - float(event["request_monotonic"]),
+        "terminal_observed_monotonic": terminal["test_harness_terminal_observed_monotonic"],
+        "parent_archive_unchanged_after_late_response": hash_before == hash_after,
+        "archive_seal_observed_monotonic": archive_seal_observed_monotonic,
+    }
+    _write_json_new(case_dir / "deadline-boundary.json", result["deadline_boundary"])
+    if float(late["response_finished_monotonic"]) <= max(
+        result["deadline_boundary"]["latest_possible_phase_cutoff_monotonic"],
+        float(terminal["test_harness_terminal_observed_monotonic"]),
+        archive_seal_observed_monotonic,
+    ):
+        raise AssertionError("injected_global_response_did_not_cross_phase_cutoff_and_terminal_seal")
     if not result["deadline_boundary"]["parent_archive_unchanged_after_late_response"]:
         raise AssertionError("late_phase_response_changed_sealed_archive")
     if terminal.get("status") not in {"completed_with_issues", "failed", "interrupted", "cancelled"}:
@@ -1446,6 +1630,20 @@ def _assert_completed_issue_stages(result: Mapping[str, Any]) -> None:
     pipeline = report.get("model_issue_pipeline")
     if not isinstance(pipeline, Mapping) or pipeline.get("status") != "completed":
         raise AssertionError(f"preflight_issue_pipeline_incomplete:{pipeline.get('reason') if isinstance(pipeline, Mapping) else 'missing'}")
+    binding = pipeline.get("execution_binding")
+    discovery = report.get("model_discovery")
+    contract = discovery.get("execution_contract") if isinstance(discovery, Mapping) else None
+    if (
+        not isinstance(binding, Mapping)
+        or binding.get("kind") != "fintrace_annual_execution_binding_v11"
+        or binding.get("execution_version") != "execution_v11"
+        or binding.get("grouping_shard_plan_version") != "member_bounded_v2"
+        or type(binding.get("grouping_shard_max_members")) is not int
+        or binding.get("grouping_shard_max_members") != 3
+        or not isinstance(contract, Mapping)
+        or contract.get("kind") != "fintrace_annual_discovery_execution_v11"
+    ):
+        raise AssertionError("preflight_did_not_use_active_v11_member_bounded_identity")
     shard_kinds = {item.get("kind") for item in pipeline.get("shards", []) if isinstance(item, Mapping) and item.get("status") == "accepted"}
     if not {"grouping", "global", "supplement"}.issubset(shard_kinds):
         raise AssertionError(f"preflight_missing_durable_phase:{sorted(shard_kinds)}")
@@ -1459,6 +1657,27 @@ def _assert_completed_issue_stages(result: Mapping[str, Any]) -> None:
         raise AssertionError("preflight_strict_reader_not_loaded")
     if result["terminal_job"].get("recovery_capability", {}).get("can_resume") is not False:
         raise AssertionError("completed_full_report_must_not_offer_resume")
+    input_ids = pipeline["input"]["finding_ids"]
+    closure = pipeline["global_closure"]
+    decisions = pipeline["member_decisions"]
+    if (
+        closure.get("closed") is not True
+        or closure.get("pending_finding_ids") != []
+        or closure.get("pending_issue_ids") != []
+        or sorted(closure.get("retained_finding_ids", [])) != sorted(input_ids)
+        or sorted(item["finding_id"] for item in decisions) != sorted(input_ids)
+        or any(item.get("disposition") == "pending" for item in decisions)
+    ):
+        raise AssertionError("completed_issue_chain_lost_or_left_pending_original_member")
+    candidate_by_id = {item["finding_id"]: item for item in pipeline["candidates"]}
+    issue_members = []
+    for issue in pipeline["issues"]:
+        issue_members.extend(issue["member_finding_ids"])
+        for finding_id in issue["member_finding_ids"]:
+            if any(citation not in issue["citations"] for citation in candidate_by_id[finding_id]["citations"]):
+                raise AssertionError("completed_issue_chain_dropped_original_member_citation")
+    if sorted(issue_members) != sorted(input_ids):
+        raise AssertionError("completed_issue_chain_member_issue_assignment_not_exact")
 
 
 def _assert_preflight_semantic_pressure(
@@ -1512,6 +1731,22 @@ def _assert_preflight_semantic_pressure(
     observed_grouping_merge = False
     for shard in grouping_shards:
         shard_input_ids = shard.get("input_finding_ids")
+        if not isinstance(shard_input_ids, list) or not 1 <= len(shard_input_ids) <= 3:
+            raise AssertionError("preflight_v10_grouping_exceeded_three_original_members")
+        shard_input = shard.get("input")
+        if not isinstance(shard_input, Mapping):
+            raise AssertionError("preflight_v10_grouping_input_missing")
+        raw_candidates = shard_input.get("candidate_pool")
+        if not isinstance(raw_candidates, list) or {item.get("finding_id") for item in raw_candidates if isinstance(item, Mapping)} != set(shard_input_ids):
+            raise AssertionError("preflight_v10_grouping_dropped_raw_candidates")
+        if any(
+            not isinstance(group, Mapping)
+            or group.get("representative_finding_id") not in group.get("member_finding_ids", [])
+            for group in shard_input.get("groups", [])
+        ):
+            raise AssertionError("preflight_v10_group_representative_not_contained")
+        if any(item != candidate_by_id.get(str(item.get("finding_id"))) for item in raw_candidates):
+            raise AssertionError("preflight_v10_grouping_changed_member_fields_or_quotes")
         shard_result = shard.get("result")
         shard_decisions = shard_result.get("decisions") if isinstance(shard_result, Mapping) else None
         result_ids = [item.get("finding_id") for item in shard_decisions if isinstance(item, Mapping)] if isinstance(shard_decisions, list) else []
@@ -1727,6 +1962,9 @@ def _assert_business_input_drift_not_reused(parent: Mapping[str, Any], child: Ma
     child_findings = child_report.get("model_discovery", {}).get("findings", [])
     if len(child_findings) <= len(parent_findings):
         raise AssertionError("business_drift_child_added_no_discovery_member")
+    child_findings_by_id = {item["finding_id"]: item for item in child_findings}
+    if any(child_findings_by_id.get(item["finding_id"]) != item for item in parent_findings):
+        raise AssertionError("business_drift_dropped_or_changed_original_finding_or_citation")
     if child_report.get("model_discovery", {}).get("coverage", {}).get("complete") is not True:
         raise AssertionError("business_drift_child_coverage_not_updated")
     parent_rows = [item for item in parent_pipeline.get("shards", []) if isinstance(item, Mapping) and item.get("status") == "accepted"]
@@ -1769,25 +2007,84 @@ def _assert_business_input_drift_not_reused(parent: Mapping[str, Any], child: Ma
         raise AssertionError("resumed_shared_issue_gate_did_not_count_both_retry_attempts")
     if len({item.get("gate_key") for item in rows}) != 1:
         raise AssertionError("resumed_issue_retries_did_not_share_one_gate_key")
+    budget = child["terminal_job"]["analysis_budget"]
+    if (
+        budget["scope"] != "resume"
+        or budget["provider_attempt_limits"]["task_effective"] != 20
+        or budget["stages"]["annual_issue_grouping"]["attempt_limit"] != 2
+        or len(child["sqlite_read_only"]["attempt_rows"]) > 20
+    ):
+        raise AssertionError("initial_business_drift_child_changed_resume_admission_budget")
 
 
-def _assert_changed_issue_inputs_continued(parent: Mapping[str, Any], child: Mapping[str, Any]) -> None:
-    if child.get("parent_run_id") != parent.get("run_id") or child.get("run_id") == parent.get("run_id"):
-        raise AssertionError("changed_issue_continuation_parent_run_binding_invalid")
-    events = child.get("provider_http_events", [])
-    stages = [item.get("stage") for item in events]
-    if stages.count("grouping") != 1 or stages.count("global") != 1 or "supplement" in stages:
-        raise AssertionError(f"changed_issue_continuation_did_not_use_two_shared_admissions:{stages}")
-    issue_rows = [item for item in child.get("sqlite_read_only", {}).get("attempt_rows", []) if item.get("stage") == "annual_issue_grouping"]
-    if len(issue_rows) != 2 or len({item.get("gate_key") for item in issue_rows}) != 1:
-        raise AssertionError("changed_issue_continuation_did_not_record_two_shared_gate_admissions")
-    report = child.get("strict_reader", {}).get("report", {})
-    pipeline = report.get("model_issue_pipeline", {}) if isinstance(report, Mapping) else {}
-    rows = [item for item in pipeline.get("shards", []) if isinstance(item, Mapping)]
-    if any(item.get("kind") in {"global", "supplement"} and item.get("reused") is True for item in rows):
-        raise AssertionError("changed_global_or_supplement_input_was_reused_during_continuation")
-    if not any(item.get("stage") == "global" for item in events):
-        raise AssertionError("changed_global_input_was_not_recomputed")
+def _assert_changed_issue_inputs_continued(
+    before_drift: Mapping[str, Any], initial_drift: Mapping[str, Any], child: Mapping[str, Any],
+) -> None:
+    chain = initial_drift["resume_chain"]
+    children = chain["children"]
+    if not children or chain["current_run_id"] != child["run_id"]:
+        raise AssertionError("changed_issue_continuation_chain_missing_final_child")
+    events = chain["all_provider_http_events"]
+    for stage in ("grouping", "global", "supplement", "review"):
+        if not any(item.get("stage") == stage and item.get("response_status") == 200 for item in events):
+            raise AssertionError(f"changed_issue_chain_did_not_recompute_{stage}")
+    old_report = before_drift["strict_reader"]["report"]
+    old_rows = [item for item in old_report["model_issue_pipeline"]["shards"] if item.get("status") == "accepted"]
+    old_review_paths = {item.get("request_path") for item in old_report["model_review"]["audit_artifacts"]}
+    unchanged_shard = next(item for item in old_rows if item.get("kind") == "grouping" and str(item.get("shard_id", "")).startswith("group:000:"))
+    prior = before_drift
+    for run in [initial_drift, *children]:
+        run_report = run["strict_reader"]["report"]
+        rows = run_report["model_issue_pipeline"]["shards"]
+        retained_shard = next((item for item in rows if item.get("shard_id") == unchanged_shard["shard_id"]), None)
+        if (
+            not isinstance(retained_shard, Mapping)
+            or retained_shard.get("status") != "accepted"
+            or retained_shard.get("reused") is not True
+            or retained_shard.get("audit") != unchanged_shard.get("audit")
+            or any(item.get("stage") == "grouping" and item.get("request_body_sha256") == unchanged_shard["request_body_sha256"] for item in run["provider_http_events"])
+        ):
+            raise AssertionError("changed_issue_chain_recalled_or_lost_unchanged_shard_zero")
+        prior_rows = prior["strict_reader"]["report"]["model_issue_pipeline"]["shards"]
+        for row in rows:
+            kind = row.get("kind")
+            if kind not in {"global", "supplement"} or row.get("status") != "accepted":
+                continue
+            if any(
+                old.get("kind") == kind and (
+                    row.get("semantic_input_sha256") == old.get("semantic_input_sha256")
+                    or row.get("audit") == old.get("audit")
+                )
+                for old in old_rows
+            ):
+                raise AssertionError(f"changed_{kind}_reused_before_drift_business_input_audit")
+            if row.get("reused") is True and not any(
+                previous.get("kind") == kind and previous.get("status") == "accepted"
+                and previous.get("semantic_input_sha256") == row.get("semantic_input_sha256")
+                and previous.get("audit") == row.get("audit")
+                and row.get("parent_run_id") == prior["run_id"]
+                for previous in prior_rows
+            ):
+                raise AssertionError(f"changed_{kind}_reuse_not_bound_to_recomputed_direct_parent")
+        review = run_report["model_review"]
+        if any(item.get("request_path") in old_review_paths for item in review.get("audit_artifacts", [])):
+            raise AssertionError("changed_review_reused_before_drift_business_input_audit")
+        if review.get("reason") == "review_reused_for_matching_inputs" and review.get("audit_artifacts") != prior["strict_reader"]["report"]["model_review"].get("audit_artifacts"):
+            raise AssertionError("changed_review_reuse_not_bound_to_recomputed_direct_parent")
+        prior = run
+    _assert_completed_issue_stages(child)
+    report = child["strict_reader"]["report"]
+    pipeline = report["model_issue_pipeline"]
+    retrieval = pipeline["retrieval_coverage"]
+    if (
+        retrieval.get("max_role_assignments") != 32
+        or retrieval.get("role_assignments_total", 33) > 32
+        or retrieval.get("role_assignments_pending") != 0
+        or retrieval.get("complete") is not True
+        or not pipeline["supplements"]
+        or any(item.get("role_status") != "accepted" for item in pipeline["supplements"])
+    ):
+        raise AssertionError("changed_issue_chain_supplement_roles_not_complete")
     findings = report.get("model_discovery", {}).get("findings", [])
     drift_findings = [
         item for item in findings
@@ -1826,18 +2123,104 @@ def _assert_supplement_401_closed_gate(result: Mapping[str, Any], provider: "_Lo
     supplement_events = [item for item in events if item.get("stage") == "supplement"]
     if not supplement_events or not any(item.get("response_status") == 401 for item in supplement_events):
         raise AssertionError("supplement_401_not_observed")
-    later = [item for item in events if item.get("stage") == "supplement" and item.get("request_monotonic", 0) > supplement_events[0].get("request_monotonic", 0)]
+    unauthorized = next(item for item in supplement_events if item.get("response_status") == 401)
+    later = [item for item in events if item["sequence"] > unauthorized["sequence"]]
     if later:
-        raise AssertionError("supplement_retried_after_401")
+        raise AssertionError("provider_http_dispatched_after_supplement_401")
     attempts = [item for item in result["sqlite_read_only"]["attempt_rows"] if item.get("stage") == "annual_issue_grouping"]
     if not attempts:
         raise AssertionError("issue_attempts_missing_from_shared_goal_ledger")
     issue_events = [item for item in result["provider_http_events"] if item.get("stage") in {"grouping", "global", "supplement"}]
-    if len(attempts) != len(issue_events) or len(attempts) > 8:
+    if len(attempts) != len(issue_events) or len(attempts) != 8:
         raise AssertionError("supplement_401_shared_issue_gate_missed_attempt_or_retry_charge")
     _assert_terminal_issue_gate_closed(result, attempts)
     if result["goal_ledger_goal_attempt_count"] != result["sqlite_read_only"]["goal_attempt_count"]:
         raise AssertionError("goal_ledger_count_projection_mismatch")
+    report = result["strict_reader"]["report"]
+    pipeline = report["model_issue_pipeline"]
+    if result["strict_reader"].get("loaded") is not True or pipeline.get("status") != "failed" or pipeline.get("reason") != "http_401":
+        raise AssertionError("supplement_401_not_exposed_as_durable_fatal_pipeline_failure")
+    review = report["model_review"]
+    # The existing authentication stop represents a not-called review as
+    # abstained; ordinary supplement_role_pending may still receive review.
+    if (
+        review.get("status") != "abstained" or review.get("reason") != "http_401"
+        or review.get("model_called") is not False
+        or review.get("call_count") != 0 or review.get("call_attempt_count") != 0
+        or review.get("audit_artifacts") != []
+        or any(item.get("stage") == "annual_review" for item in result["sqlite_read_only"]["attempt_rows"])
+    ):
+        raise AssertionError("supplement_401_did_not_abstain_without_review_http_or_admission")
+    shards = pipeline["shards"]
+    supplement_shards = [item for item in shards if item.get("kind") == "supplement"]
+    if len(supplement_shards) != 1:
+        raise AssertionError("supplement_401_pending_shard_missing_or_duplicated")
+    failed = supplement_shards[0]
+    audit = failed.get("audit", {})
+    linkage = result["http_audit_ledger_linkage"]
+    failed_attempts = [item for item in linkage["attempt_rows"] if item.get("kind") == "supplement"]
+    if (
+        failed.get("status") != "pending" or failed.get("reason") != "http_401"
+        or failed.get("attempt_count") != 1 or failed.get("response_count") != 0
+        or audit.get("status") != "failed" or not audit.get("failure_path")
+        or not audit.get("request_path") or audit.get("response_path") is not None
+        or audit.get("request_body_sha256") != unauthorized["request_body_sha256"]
+        or pipeline["audit_summary"].get("attempt_count") != 8
+        or linkage.get("status") != "linked"
+        or linkage.get("raw_http_bytes_validated") is not True
+        or linkage.get("loopback_and_dummy_authorization_validated") is not True
+        or linkage["http_request_count"] != linkage["sqlite_current_run_admission_count"]
+        or len(failed_attempts) != 1
+        or failed_attempts[0].get("reason") != "http_401"
+        or failed_attempts[0].get("status") != "failed"
+        or failed_attempts[0].get("provider_admitted") is not True
+        or failed_attempts[0].get("request_body_sha256") != unauthorized["request_body_sha256"]
+    ):
+        raise AssertionError("supplement_401_failure_audit_or_eight_admission_account_was_lost")
+    candidate_by_id = {item["finding_id"]: item for item in pipeline["candidates"]}
+    finding_ids = [item["finding_id"] for item in report["model_discovery"]["findings"]]
+    input_ids = pipeline["input"]["finding_ids"]
+    decision_ids = [item["finding_id"] for item in pipeline["member_decisions"]]
+    closure = pipeline["global_closure"]
+    if (
+        len(input_ids) <= 12 or len(input_ids) != len(set(input_ids))
+        or sorted(finding_ids) != sorted(input_ids) or sorted(candidate_by_id) != sorted(input_ids)
+        or len(pipeline["candidates"]) != len(input_ids)
+        or sorted(decision_ids) != sorted(input_ids)
+        or any(item.get("disposition") == "pending" for item in pipeline["member_decisions"])
+        or closure.get("closed") is not True
+        or sorted(closure.get("retained_finding_ids", [])) != sorted(input_ids)
+        or closure.get("pending_finding_ids") != [] or closure.get("pending_issue_ids") != []
+    ):
+        raise AssertionError("supplement_401_erased_previously_accepted_member_coverage")
+    grouping_shards = [item for item in shards if item.get("kind") == "grouping"]
+    if len([item for item in shards if item.get("kind") == "global"]) != 1:
+        raise AssertionError("supplement_401_erased_or_duplicated_successful_global_shard")
+    grouped_ids = [finding_id for item in grouping_shards for finding_id in item["input_finding_ids"]]
+    if sorted(grouped_ids) != sorted(input_ids):
+        raise AssertionError("supplement_401_erased_original_group_shard_members")
+    for shard in shards:
+        if shard.get("kind") not in {"grouping", "global"}:
+            continue
+        if shard.get("status") != "accepted" or not _successful_audits(shard):
+            raise AssertionError("supplement_401_erased_successful_group_or_global_audit")
+        if shard.get("kind") == "grouping" and (
+            not 1 <= len(shard["input_finding_ids"]) <= 3
+            or shard["input"]["candidate_pool"] != [candidate_by_id[key] for key in sorted(shard["input_finding_ids"])]
+        ):
+            raise AssertionError("supplement_401_changed_original_raw_group_member_fields")
+    issue_members = []
+    for issue in pipeline["issues"]:
+        issue_members.extend(issue["member_finding_ids"])
+        if any(citation not in issue["citations"] for key in issue["member_finding_ids"] for citation in candidate_by_id[key]["citations"]):
+            raise AssertionError("supplement_401_erased_original_member_citation")
+    if sorted(issue_members) != sorted(input_ids):
+        raise AssertionError("supplement_401_erased_accepted_member_issue_assignments")
+    supplements = pipeline["supplements"]
+    pending_pairs = sorted((issue_id, item["evidence_id"]) for item in supplements for issue_id in item["issue_ids"])
+    requested_pairs = sorted((item["issue_id"], item["evidence_id"]) for item in failed["input"]["evidence_assignments"])
+    if not supplements or any(item.get("role_status") != "pending" for item in supplements) or not pending_pairs or pending_pairs != requested_pairs:
+        raise AssertionError("supplement_401_erased_or_falsely_accepted_pending_role_assignments")
 
 
 def _assert_retry_attempts(result: Mapping[str, Any], stage: str) -> None:
@@ -1854,6 +2237,14 @@ def _assert_retry_attempts(result: Mapping[str, Any], stage: str) -> None:
     if len(rows) != 8:
         raise AssertionError("first_issue_gate_exceeded_eight_including_retries")
     _assert_terminal_issue_gate_closed(result, rows)
+    budget = result["terminal_job"]["analysis_budget"]
+    if (
+        budget["scope"] != "new_run"
+        or budget["provider_attempt_limits"]["task_effective"] != 30
+        or budget["stages"]["annual_issue_grouping"]["attempt_limit"] != 8
+        or len(result["sqlite_read_only"]["attempt_rows"]) > 30
+    ):
+        raise AssertionError("initial_preflight_changed_production_admission_budget")
     if len(events) < 3:
         raise AssertionError("retry_pair_did_not_reuse_same_provider_phase")
 
@@ -1966,10 +2357,13 @@ def _build_synthetic_pdf(*, page_count: int = 6, include_semantic_difference: bo
             page = document.new_page(width=595, height=842)
             page.insert_text((34, 28), f"管理层讨论与分析（虚构测试页{page_index + 1}）", fontsize=7, fontname="china-s")
             repeated = "本页为软件运行验收专用的虚构经营文字。合同回款台账和账龄核对只用于检验原文定位、成员归并与同源补证流程，不代表现实披露或财务结论。"
+            # Keep the duplicate right-column padding inside the physical
+            # page; implicit PDF clipping previously left a bbox beyond x595.
+            right_text = repeated[:int((page.rect.width - 310 - 4) / 5.5)]
             for line_index in range(36):
                 y = 45 + line_index * 21
                 page.insert_text((28, y), repeated, fontsize=5.5, fontname="china-s")
-                page.insert_text((310, y), repeated, fontsize=5.5, fontname="china-s")
+                page.insert_text((310, y), right_text, fontsize=5.5, fontname="china-s")
             if include_semantic_difference and page_index == 15:
                 page.insert_text((28, 812), _SEMANTIC_DRIFT_SOURCE_TEXT, fontsize=7, fontname="china-s")
         note_page = document.new_page(width=595, height=842)
@@ -3977,7 +4371,10 @@ class _LoopbackProvider:
         if mode == "block_grouping" and stage == "grouping":
             return 200, self._business_response(stage, payload), 0.0, "block"
         if mode.startswith("delay_global") and stage == "global":
-            return 200, self._business_response(stage, payload), float(self._behaviors[document_id].get("delay_seconds", 9)), None
+            delay_ready = self._behaviors[document_id].get("delay_ready")
+            if delay_ready is not None and not delay_ready.wait(timeout=20.0):
+                raise TimeoutError("global_delay_owner_budget_not_configured")
+            return 200, self._business_response(stage, payload), float(self._behaviors[document_id]["delay_seconds"]), None
         if mode.startswith("http401_supplement") and stage == "supplement":
             return 401, "", 0.0, None
         retry_stage = "grouping" if "retry_grouping" in mode else "global" if "retry_global" in mode else None

@@ -14,15 +14,15 @@ JSON 只投影年度报告、manifest 摘要、后端来源性质登记、引用
 
 若归档同时含顶层 `model_review` 与调查层嵌套的 `final_review`，导出以顶层评审的来源绑定和状态为准，并同步其受控投影；仅在没有顶层评审记录时，才回退到嵌套记录，兼容旧归档。错源的顶层记录不会被嵌套副本覆盖。
 
-含全文发现的旧归档中，`model_call_count` / `model_call_attempt_count` 是固定候选调查、全文发现和最终评审三层的总计；当前 v5 流程的总计还包含事项归并及补证，阶段归属见[架构契约](architecture.md#5-模型报告与展示)。`model_call_count` 计返回响应的调用，`model_call_attempt_count` 计实际调用尝试。JSON 投影在字段存在且有效时分别保留 `investigation_call_count` / `investigation_call_attempt_count`、`discovery_call_count` / `discovery_call_attempt_count`、`model_review_call_count` / `model_review_call_attempt_count` 三组分项；新问题层另保留自身的受控审计计数摘要。HTML 在 AI 调查区呈现总计与可用分项，并在全文发现区独立呈现该层状态、覆盖和调用数。旧归档只展示其实际含有的计数字段；缺失或类型不符的分项不会被补成 0。调用计数仅投影 0 到 JSON/JavaScript 安全整数上限内的整数。
+含全文发现的旧归档中，`model_call_count` / `model_call_attempt_count` 是固定候选调查、全文发现和最终评审三层的总计；当前流程的总计还包含事项归并及补证，阶段归属见[架构契约](architecture.md#5-模型报告与展示)。`model_call_count` 计返回响应的调用，`model_call_attempt_count` 计实际调用尝试。JSON 投影在字段存在且有效时分别保留 `investigation_call_count` / `investigation_call_attempt_count`、`discovery_call_count` / `discovery_call_attempt_count`、`model_review_call_count` / `model_review_call_attempt_count` 三组分项；新问题层另保留自身的受控审计计数摘要。HTML 在 AI 调查区呈现总计与可用分项，并在全文发现区独立呈现该层状态、覆盖和调用数。旧归档只展示其实际含有的计数字段；缺失或类型不符的分项不会被补成 0。调用计数仅投影 0 到 JSON/JavaScript 安全整数上限内的整数。
 
 导出列出来源文档 ID 与 PDF SHA256、金额、单位倍率、单位、币种、报告期间和范围口径、计算公式与独立重算状态、原文页码及证据 ID、候选状态、可比性记录及各层限制。M3 是未校准的规则试行分数，不是概率；AI 调查和最终评审是模型观点，不是独立核验或因果结论；候选线索不是确认舞弊。导出仅呈现已校验归档字段，不提升事实、计算或因果核验等级。
 
 新增 `model_discovery` 层在三种格式中仅呈现动态标题、观察、关注理由、后续核查建议、priority（核查顺序）、未核验状态、限制、覆盖摘要和引用位置 ID/页码；它不包含原文片段正文或 quote。来源身份、finding ID 或引用关系不匹配时，报告读取、发现索引、页图及三种导出都拒绝不可信层，不把坏层降格后继续投影。旧归档没有该字段时仍可读取和导出，并只表示旧归档未记录全文发现，不从旧模式名称推断是否扫描。
 
-v4 执行契约在 JSON 中另保留严格读取后的 scheduler、phase_budget 与 timing。归档默认合同与 live job 的实际 `analysis_budget` 分开，不能据归档默认值推断较短 owner 的实际运行时间，也不能据在途工作峰值声称实际 HTTP 并发。原始恢复绑定、供应方指纹及调用正文不进入导出；旧 v3 执行层继续按原结构投影。
+发现执行契约在 JSON 保留严格读取后的 scheduler、phase_budget 与 timing。活动 v8 的 `phase_budget_basis=version_default_not_owner_actual`，Markdown/HTML 同义说明；旧 v7/v3、v6/v2、v5/v1 按各自冻结政策只读重构，不重标历史运行或放大上限。原始恢复绑定、供应方指纹和调用正文不进入导出；旧 v3 层按原结构投影。合同见[架构](architecture.md#annual-execution-budget)，实际验收范围见[落地验收](verification-history.md#annual-analysis-recovery-r6-landing)。
 
-当前新增的 `model_issue_pipeline` 导出投影保留完整候选、问题成员去向、排除理由代码及证据 ID、全局关系闭合和待处理账，同源补证的定位与未核验角色，以及归并分片状态和复用计数。该层不导出 `quote`、`raw_text`、排除理由原文 `reason_quote` 或审计请求正文。展示排序由当前已校验报告派生，不改写归档成员账；问题关系闭合不等于全文覆盖完整，检索命中也不构成独立核验。旧报告没有问题层时不补记已归并。本文描述当前源码投影，R4 的完整请求、运行、浏览器与导出验收状态仍以[恢复任务书](annual-analysis-recovery-plan.md)和[验收记录](verification-history.md#annual-analysis-recovery-r4)为准。
+`model_issue_pipeline` 投影保留完整候选、成员去向、排除理由代码/证据 ID、全局闭合及待处理账、补证定位与未核验角色、分片状态及复用计数；execution_binding 仅包含该版本白名单展示字段，不是恢复凭据。quote、raw_text、reason_quote 及审计正文不导出。展示排序由校验报告派生，不回写归档；关系闭合不等于全文覆盖，检索命中不构成独立核验。旧报告没有问题层时不补记已归并。实际范围见[R4 记录](verification-history.md#annual-analysis-recovery-r4)、[R6 验收](verification-history.md#annual-analysis-recovery-r6)与[落地验收](verification-history.md#annual-analysis-recovery-r6-landing)。
 
 Markdown 复用正式年度报告 renderer，并先将归档文本按纯文本处理，避免不可信内容形成 HTML 标签或 Markdown 链接。HTML 将文本按上下文转义，使用内嵌样式、可读表格、章节和打印 CSS，不加载外网资源或脚本。事实和计算的“已核实”/“待核查”标签按其所在的 `confirmed` / `pending_review` 容器生成，不依赖可选的 `placement` 字段。下载 HTML 后可离线查看，也可用浏览器打印成 PDF。
 

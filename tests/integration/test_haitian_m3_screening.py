@@ -78,11 +78,13 @@ def test_haitian_real_pdf_all_m3_rules_are_calculable_and_do_not_trigger() -> No
         report_year=2024,
     )
     assert semantic_check.proof is not None, semantic_check.issues
+    # 海天这份源文件的直接归母披露在物理第 7 页；页码由原文定位得到，不是通用 API 条件。
     assert all(item.page == 7 for item in semantic_check.proof.evidence)
     assert semantic_check.proof.direct_disclosure_values == (
         "6344125969.00",
         "5626626091.97",
     )
+
 
     result = screen_m3_annual_rules(
         facts,

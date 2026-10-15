@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from urllib.parse import quote
 
@@ -17,9 +18,20 @@ _NARRATIVE_RUN_ID = "annual-analysis-8036d75c-6a13-432a-b602-5f869f9396ce"
 _NARRATIVE_EVIDENCE_ID = "nctx-5a97b1353443-p9-aaf639bcc7e460cd4dd4"
 
 
+def _isolated_archive_project(tmp_path: Path, run_id: str) -> Path:
+    # Creating an app recovers interrupted jobs; never run that lifecycle
+    # against the developer's live project merely to read a saved report.
+    for area in ("runs", "reports"):
+        source = _ROOT / "artifacts" / area / run_id
+        if source.is_dir():
+            shutil.copytree(source, tmp_path / "artifacts" / area / run_id)
+    shutil.copytree(_ROOT / "config" / "prompts", tmp_path / "config" / "prompts")
+    return tmp_path
+
+
 @pytest.mark.skipif(not _SOURCE.is_file(), reason="本地未归档海天 2024 正式年度分析运行")
-def test_read_and_preview_formal_haitian_archive() -> None:
-    client = TestClient(create_app(_ROOT))
+def test_read_and_preview_formal_haitian_archive(tmp_path: Path) -> None:
+    client = TestClient(create_app(_isolated_archive_project(tmp_path, _RUN_ID)))
 
     response = client.get(f"/v1/annual-analyses/{_RUN_ID}")
 
@@ -63,8 +75,8 @@ def test_read_and_preview_formal_haitian_archive() -> None:
     not (_ROOT / "artifacts" / "runs" / _NARRATIVE_RUN_ID / "source.pdf").is_file(),
     reason="本地未归档海天 2024 年报叙述阅读样例",
 )
-def test_narrative_reading_context_restores_page_nine_paragraph_without_changing_citation() -> None:
-    client = TestClient(create_app(_ROOT))
+def test_narrative_reading_context_restores_page_nine_paragraph_without_changing_citation(tmp_path: Path) -> None:
+    client = TestClient(create_app(_isolated_archive_project(tmp_path, _NARRATIVE_RUN_ID)))
 
     response = client.get(f"/v1/annual-analyses/{_NARRATIVE_RUN_ID}/narrative-evidences")
 

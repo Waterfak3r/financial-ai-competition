@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from finagent.ingestion import PdfFormatError, PdfInputError, parse_text_pdf
-from finagent.ingestion.parse_text_pdf import _extractor_version
+from finagent.ingestion.parse_text_pdf import _extractor_version, parse_text_pdf_bytes
 
 PNG_1X1 = bytes.fromhex(
     "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
@@ -40,9 +40,8 @@ def test_pages_text_coordinates_hash_and_json(tmp_path: Path) -> None:
     _save(document, path)
     original = path.read_bytes()
 
-    parsed = parse_text_pdf(path, "sample-pages")
+    parsed = parse_text_pdf_bytes(original, "sample-pages", path.name)
 
-    assert path.read_bytes() == original
     assert parsed.document_id == "sample-pages"
     assert parsed.source_filename == "pages.pdf"
     assert parsed.source_sha256 == hashlib.sha256(original).hexdigest()
@@ -100,8 +99,13 @@ def test_block_order_and_chinese_text(tmp_path: Path) -> None:
     cjk = document.new_page(width=300, height=200)
     cjk.insert_text((50, 60), "营业收入100", fontname="china-s", fontsize=12)
     _save(document, path)
+    original = path.read_bytes()
 
     parsed = parse_text_pdf(str(path), "样例-001")
+    assert path.read_bytes() == original
+    assert parsed.document_id == "样例-001"
+    assert parsed.source_filename == path.name
+    assert parsed.source_sha256 == hashlib.sha256(original).hexdigest()
 
     blocks = parsed.pages[0].blocks
     assert [block.text for block in blocks] == ["First", "Second"]
@@ -152,11 +156,15 @@ def test_whitespace_and_mixed_image_are_not_invented(tmp_path: Path) -> None:
 def test_rejects_invalid_document_id(tmp_path: Path, document_id: str, message: str) -> None:
     with pytest.raises(PdfInputError, match=message):
         parse_text_pdf(tmp_path / "unused.pdf", document_id)
+    with pytest.raises(PdfInputError, match=message):
+        parse_text_pdf_bytes(b"not a pdf", document_id, "source.pdf")
 
 
 def test_rejects_non_string_document_id(tmp_path: Path) -> None:
     with pytest.raises(PdfInputError, match="字符串"):
         parse_text_pdf(tmp_path / "unused.pdf", 12)  # type: ignore[arg-type]
+    with pytest.raises(PdfInputError, match="字符串"):
+        parse_text_pdf_bytes(b"not a pdf", 12, "source.pdf")  # type: ignore[arg-type]
 
 
 def test_rejects_missing_directory_empty_and_non_pdf(tmp_path: Path) -> None:
@@ -236,4 +244,34 @@ def test_rejects_encrypted_pdf_without_treating_it_as_blank(tmp_path: Path) -> N
 
     with pytest.raises(PdfFormatError, match="加密"):
         parse_text_pdf(path, "locked-001")
+    with pytest.raises(PdfFormatError, match="加密"):
+        parse_text_pdf_bytes(original, "locked-001", path.name)
     assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    ("data", "message"), [(b"", "为空"), (b"this is not a pdf", "不是 PDF")],
+)
+def test_bytes_entry_keeps_pdf_format_failures(data: bytes, message: str) -> None:
+    with pytest.raises(PdfFormatError, match=message):
+        parse_text_pdf_bytes(data, "doc-1", "source.pdf")
+
+
+def test_bytes_entry_preserves_snapshot_and_document_metadata(tmp_path: Path) -> None:
+    pymupdf = _pymupdf()
+    path = tmp_path / "original.pdf"
+    document = pymupdf.open()
+    page = document.new_page()
+    page.insert_text((72, 72), "Original snapshot")
+    _save(document, path)
+    original = path.read_bytes()
+    path.write_bytes(b"changed after source read")
+
+    first = parse_text_pdf_bytes(original, "doc-first", "original.pdf")
+    second = parse_text_pdf_bytes(original, "doc-second", "archived.pdf")
+
+    assert first.pages == second.pages
+    assert first.pages[0].blocks[0].text == "Original snapshot"
+    assert first.source_sha256 == second.source_sha256 == hashlib.sha256(original).hexdigest()
+    assert (first.document_id, first.source_filename) == ("doc-first", "original.pdf")
+    assert (second.document_id, second.source_filename) == ("doc-second", "archived.pdf")

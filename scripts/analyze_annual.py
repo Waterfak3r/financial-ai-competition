@@ -33,6 +33,9 @@ from finagent.core.annual_checkpoints import (  # noqa: E402
 )
 from finagent.core.annual_recovery import build_annual_recovery_binding  # noqa: E402
 from finagent.core.annual_work_budget import (  # noqa: E402
+    BUDGET_CONTRACT_VERSION,
+    FINALIZATION_RESERVE_SECONDS,
+    MAIN_REPORT_BUDGET_SECONDS,
     NEW_RUN_ATTEMPT_BUDGET,
     NEW_RUN_STAGE_ATTEMPT_BUDGETS,
     RESUME_ATTEMPT_BUDGET,
@@ -111,6 +114,8 @@ _PROVENANCE_FILES = (
     "config/prompts/annual_discovery_v1.md",
     "config/prompts/annual_discovery_v2.md",
     "config/prompts/annual_discovery_v3.md",
+    "config/prompts/annual_discovery_v4.md",
+    "config/prompts/annual_discovery_v5.md",
     "config/prompts/annual_issue_grouping_v1.md",
     "config/prompts/annual_issue_global_v1.md",
     "config/prompts/annual_issue_supplement_v1.md",
@@ -229,15 +234,17 @@ def _annual_runtime_budget(with_model: bool) -> dict[str, object] | None:
     hard_raw = os.environ.get("FINTRACE_ANNUAL_MAIN_HARD_DEADLINE_MONOTONIC")
     limit_raw = os.environ.get("FINTRACE_ANNUAL_MAIN_LIMIT_SECONDS")
     stages_raw = os.environ.get("FINTRACE_ANNUAL_STAGE_TIME_LIMITS_SECONDS")
-    supplied = (soft_raw, hard_raw, limit_raw, stages_raw)
+    version_raw = os.environ.get("FINTRACE_ANNUAL_BUDGET_CONTRACT_VERSION")
+    supplied = (soft_raw, hard_raw, limit_raw, stages_raw, version_raw)
     if all(value is None for value in supplied):
         started = time.monotonic()
-        main_limit = 300
+        main_limit = MAIN_REPORT_BUDGET_SECONDS
         return {
-            "main_soft_deadline": started + main_limit - 15,
+            "main_soft_deadline": started + main_limit - FINALIZATION_RESERVE_SECONDS,
             "main_hard_deadline": started + main_limit,
             "main_limit_seconds": main_limit,
             "stage_time_limits_seconds": runtime_stage_time_limits(main_limit),
+            "budget_contract_version": BUDGET_CONTRACT_VERSION,
         }
     if any(value is None for value in supplied):
         raise ValueError("年度分析 API 运行时限传递不完整。")
@@ -249,16 +256,15 @@ def _annual_runtime_budget(with_model: bool) -> dict[str, object] | None:
     except (TypeError, ValueError, json.JSONDecodeError):
         raise ValueError("年度分析 API 运行时限传递无效。") from None
     if (
-        not math.isfinite(soft_deadline)
+        version_raw != BUDGET_CONTRACT_VERSION
+        or not math.isfinite(soft_deadline)
         or not math.isfinite(hard_deadline)
-        or not 60 <= main_limit <= 300
-        or abs((hard_deadline - soft_deadline) - 15.0) > 1e-6
+        or type(main_limit) is not int
+        or not 60 <= main_limit <= MAIN_REPORT_BUDGET_SECONDS
+        or abs((hard_deadline - soft_deadline) - float(FINALIZATION_RESERVE_SECONDS)) > 1e-6
         or not isinstance(stage_time_limits, dict)
-        or set(stage_time_limits) != {
-            "annual_discovery", "annual_investigation", "annual_issue_grouping", "annual_review",
-        }
-        or any(type(value) is not int or value <= 0 for value in stage_time_limits.values())
-        or sum(stage_time_limits.values()) > main_limit - 15
+        or stage_time_limits != runtime_stage_time_limits(main_limit)
+        or (hard_deadline - time.monotonic()) - float(main_limit) > 1e-6
     ):
         raise ValueError("年度分析 API 运行时限超出受控范围。")
     return {
@@ -266,6 +272,7 @@ def _annual_runtime_budget(with_model: bool) -> dict[str, object] | None:
         "main_hard_deadline": hard_deadline,
         "main_limit_seconds": main_limit,
         "stage_time_limits_seconds": stage_time_limits,
+        "budget_contract_version": BUDGET_CONTRACT_VERSION,
     }
 
 
@@ -521,7 +528,7 @@ def _run(args: argparse.Namespace) -> int:
                         source_sha256=actual_copy_sha256,
                         job_id=progress_job_id,
                     ),
-                    request_mode=effective_request_mode if recovery_enabled else None,
+                    request_mode=effective_request_mode,
                     m3_screening=m3_screening,
                     resume_parent_run_id=(getattr(args, "resume_parent_run_id", None) if recovery_enabled else None),
                     request_identity=({
@@ -535,7 +542,7 @@ def _run(args: argparse.Namespace) -> int:
                     checkpoint_callback=(lambda report, state, parent: _save_cli_checkpoint(
                         report, state=state, parent_run_id=parent, run_id=run_id,
                         source_sha256=actual_copy_sha256, artifacts_root=artifacts_root,
-                    ) if recovery_enabled else None),
+                    )),
                     parsed_pdf=result.parsed_pdf,
                     main_soft_deadline=(runtime_budget["main_soft_deadline"] if runtime_budget is not None else None),
                     stage_time_limits_seconds=(runtime_budget["stage_time_limits_seconds"] if runtime_budget is not None else None),
@@ -992,12 +999,11 @@ def _save_checkpoint_if_repository_root(
     source_sha256: str,
     report: dict[str, object],
 ) -> None:
-    if artifacts_root.resolve() != (ROOT / "artifacts").resolve():
-        # Custom artifact roots are used by isolated CLI unit tests and are not
-        # project-root checkpoint stores.
+    if artifacts_root.name != "artifacts":
+        # A non-project archive root has no strict-reader namespace.
         return
     save_annual_checkpoint(
-        ROOT,
+        artifacts_root.parent,
         run_id,
         {
             "state": state,

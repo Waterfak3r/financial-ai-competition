@@ -804,8 +804,10 @@ function buildStatusNotes(
       notes.push("问题归并失败；下方仍保留已有合格发现与处理账。");
     } else if (pipeline.status === "abstained") {
       notes.push("问题归并已中止；下方仍保留已有候选账。");
-    } else if (pipeline.status === "pending" || pipeline.status === "running" || pipeline.status === "partial" || !closed) {
+    } else if (!closed) {
       notes.push("问题归并或跨片关系尚未闭合。本区不把未完成归并当作整份结果。");
+    } else if (pipeline.status === "pending" || pipeline.status === "running" || pipeline.status === "partial") {
+      notes.push("当前已知问题关系已闭合，但问题处理仍有覆盖或补证缺口。闭合不代表全文或全部处理已完成。");
     }
     if (selection.ledgerTrusted && selection.excludedFindingCount > 0) {
       notes.push(`已排除发现成员 ${selection.excludedFindingCount} 条${selection.excludedIssueCount > 0 ? `、已排除问题 ${selection.excludedIssueCount} 个` : ""}，仅保留在下方完整处理账，不作为首屏待核查候选。排除不是无风险。`);

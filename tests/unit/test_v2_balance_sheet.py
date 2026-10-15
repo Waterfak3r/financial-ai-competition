@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import hashlib
+import re
+
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
 import pymupdf
 
-from finagent.ingestion import extract_v2_balance_sheet_facts
+from finagent.ingestion import extract_v2_balance_sheet_facts, parse_text_pdf
 from finagent.schemas.text_pdf import (
     COORDINATE_NOTE,
     COORDINATE_SYSTEM,
@@ -225,3 +227,202 @@ def test_missing_amount_is_not_zero_and_independent_check_abstains(tmp_path: Pat
     )
     candidate = replace(expected, source_sha256=sha)
     assert verify_financial_fact(path, candidate).result.status == "insufficient_evidence"
+
+
+def _extract_pdf(
+    path: Path,
+    *,
+    report_year: int = 2024,
+    company_id: str = "603288",
+    document_id: str = "synthetic-603288-2024",
+):
+    parsed = parse_text_pdf(path, document_id=document_id)
+    return extract_v2_balance_sheet_facts(parsed, company_id=company_id, report_year=report_year)
+
+
+_AMOUNT_TOKEN_RE = re.compile(
+    r"[（(]\s*[-－−]?\d{1,3}(?:[,，]\d{3})+(?:\.\d+)?\s*[）)]"
+    r"|[（(]\s*[-－−]?\d+\.\d+\s*[）)]"
+    r"|\d{1,3}(?:[,，]\d{3})+(?:\.\d+)?"
+    r"|\d+\.\d+"
+)
+_BODY_FONTNAME = "china-s"
+_BODY_FONTSIZE = 7
+_BODY_ROW_GAP = 9
+_LABEL_X = 72
+_CURRENT_COLUMN_X = 245
+_COMPARATIVE_COLUMN_X = 410
+
+
+def _split_label_amounts(line: str) -> tuple[str, tuple[str, ...]]:
+    parts = line.split()
+    amounts: list[str] = []
+    while parts and _AMOUNT_TOKEN_RE.fullmatch(parts[-1]):
+        amounts.append(parts.pop())
+    amounts.reverse()
+    return " ".join(parts), tuple(amounts)
+
+
+def _insert_same_block_rows(
+    page,
+    body: str,
+    *,
+    origin_y: float,
+    current_x: float,
+    comparative_x: float,
+) -> None:
+    """Keep adjacent statement rows in one text block, with amounts under year columns."""
+    y = origin_y
+    last_y = origin_y
+    pending: list[str] = []
+
+    def flush(at_y: float) -> None:
+        nonlocal pending
+        if len(pending) >= 2:
+            page.insert_text((current_x, at_y), pending[0], fontname=_BODY_FONTNAME, fontsize=_BODY_FONTSIZE)
+            page.insert_text((comparative_x, at_y), pending[1], fontname=_BODY_FONTNAME, fontsize=_BODY_FONTSIZE)
+            pending = pending[2:]
+        if len(pending) == 1:
+            page.insert_text((current_x, at_y), pending[0], fontname=_BODY_FONTNAME, fontsize=_BODY_FONTSIZE)
+            pending = []
+
+    for raw in body.splitlines():
+        if raw.strip() == "":
+            continue
+        label, amounts = _split_label_amounts(raw)
+        if label:
+            flush(last_y)
+            page.insert_text((_LABEL_X, y), label, fontname=_BODY_FONTNAME, fontsize=_BODY_FONTSIZE)
+            last_y = y
+            if len(amounts) >= 2:
+                page.insert_text((current_x, y), amounts[0], fontname=_BODY_FONTNAME, fontsize=_BODY_FONTSIZE)
+                page.insert_text((comparative_x, y), amounts[1], fontname=_BODY_FONTNAME, fontsize=_BODY_FONTSIZE)
+            elif len(amounts) == 1:
+                page.insert_text((current_x, y), amounts[0], fontname=_BODY_FONTNAME, fontsize=_BODY_FONTSIZE)
+            y += _BODY_ROW_GAP
+        else:
+            pending.extend(amounts)
+    flush(last_y)
+
+
+def _balance_body_pdf(path: Path, body: str, *, years: tuple[int, int] = (2024, 2023)) -> str:
+    document = pymupdf.open()
+    page = document.new_page()
+    page.insert_text((72, 72), "合并资产负债表", fontname="china-s")
+    page.insert_text((72, 94), "单位：元  币种：人民币", fontname="china-s")
+    page.insert_text((72, 116), "项目", fontname="china-s")
+    page.insert_text((_CURRENT_COLUMN_X, 116), f"{years[0]}年12月31日", fontname="china-s")
+    page.insert_text((_COMPARATIVE_COLUMN_X, 116), f"{years[1]}年12月31日", fontname="china-s")
+    _insert_same_block_rows(
+        page,
+        body,
+        origin_y=140,
+        current_x=_CURRENT_COLUMN_X,
+        comparative_x=_COMPARATIVE_COLUMN_X,
+    )
+    document.save(path)
+    document.close()
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_multiline_same_block_locates_receivable_and_inventory_rows(tmp_path: Path) -> None:
+    path = tmp_path / "multiline-balance.pdf"
+    source_sha256 = _balance_body_pdf(
+        path,
+        "衍生金融资产\n应收票据  4  1,984,407,967.50  1,000,000.00\n"
+        "应收账款  5  242,260,969.75  223,149,082.18\n应收款项融资\n"
+        "买入返售金融资产  9  8,879,708,146.97  7,220,310,691.10\n"
+        "存货  七、10  2,525,273,760.73  2,618,773,147.00\n其中：数据资源",
+        years=(2025, 2024),
+    )
+    parsed = parse_text_pdf(path, document_id="synthetic-600519-2025")
+    assert any(
+        len(block.text.splitlines()) > 1
+        and all(token in block.text for token in (
+            "应收账款", "存货", "242,260,969.75", "223,149,082.18",
+            "2,525,273,760.73", "2,618,773,147.00",
+        ))
+        for block in parsed.pages[0].blocks
+    ), "fixture must contain both target rows and their two-year amounts in one multiline block"
+    extracted = _extract_pdf(
+        path, report_year=2025, company_id="600519", document_id="synthetic-600519-2025"
+    )
+    assert extracted.issues == ()
+    by_metric: dict[str, dict[int, object]] = {}
+    for fact, evidence in zip(extracted.facts, extracted.evidence, strict=True):
+        by_metric.setdefault(fact.metric_id, {})[fact.period_end.year] = fact
+        assert fact.source_sha256 == source_sha256
+        assert fact.raw_value in evidence.surrounding_text
+        if fact.metric_id == "accounts_receivable_net":
+            assert "应收账款" in evidence.surrounding_text
+            assert "应收票据" not in evidence.surrounding_text
+            assert "应收款项融资" not in evidence.surrounding_text
+        if fact.metric_id == "inventory_net":
+            assert "存货" in evidence.surrounding_text
+            assert "买入返售" not in evidence.surrounding_text
+            assert "数据资源" not in evidence.surrounding_text
+        checked = verify_financial_fact(path, fact)
+        assert checked.result.status == "verified", (fact.metric_id, fact.period_end.year, checked.result.limitations)
+    assert by_metric["accounts_receivable_net"][2025].raw_value == _VALUES["accounts_receivable_net"][0]
+    assert by_metric["accounts_receivable_net"][2024].raw_value == _VALUES["accounts_receivable_net"][1]
+    assert by_metric["inventory_net"][2025].raw_value == _VALUES["inventory_net"][0]
+    assert by_metric["inventory_net"][2024].raw_value == _VALUES["inventory_net"][1]
+    assert by_metric["accounts_receivable_net"][2025].currency == "人民币"
+    assert by_metric["inventory_net"][2025].company_id == "600519"
+
+
+def test_same_block_scanner_rejects_duplicate_and_does_not_steal_inventory(tmp_path: Path) -> None:
+    duplicate = tmp_path / "duplicate-receivable.pdf"
+    _balance_body_pdf(
+        duplicate,
+        "应收账款  5  242,260,969.75  223,149,082.18\n"
+        "应收账款  5  1.00  2.00\n"
+        "存货  七、10  2,525,273,760.73  2,618,773,147.00",
+    )
+    duplicated = _extract_pdf(duplicate)
+    assert not any(fact.metric_id == "accounts_receivable_net" for fact in duplicated.facts)
+    assert any(
+        issue.metric_id == "accounts_receivable_net" and issue.code == "ambiguous_row"
+        for issue in duplicated.issues
+    )
+    inventory = {
+        fact.period_end.year: fact
+        for fact in duplicated.facts
+        if fact.metric_id == "inventory_net"
+    }
+    assert inventory[2024].raw_value == _VALUES["inventory_net"][0]
+    assert inventory[2023].raw_value == _VALUES["inventory_net"][1]
+
+    stolen = tmp_path / "missing-receivable.pdf"
+    _balance_body_pdf(
+        stolen,
+        "应收账款  5\n存货  七、10  2,525,273,760.73  2,618,773,147.00",
+    )
+    missing = _extract_pdf(stolen)
+    assert not any(fact.metric_id == "accounts_receivable_net" for fact in missing.facts)
+    assert any(
+        issue.metric_id == "accounts_receivable_net" and issue.code in {"row_not_found", "amount_alignment"}
+        for issue in missing.issues
+    )
+    inventory = {
+        fact.period_end.year: fact
+        for fact in missing.facts
+        if fact.metric_id == "inventory_net"
+    }
+    assert inventory[2024].raw_value == _VALUES["inventory_net"][0]
+    assert inventory[2023].raw_value == _VALUES["inventory_net"][1]
+
+    spaced = tmp_path / "note-blank-inventory.pdf"
+    _balance_body_pdf(
+        spaced,
+        "存货\n七、10\n\n2,525,273,760.73\n2,618,773,147.00",
+    )
+    kept = _extract_pdf(spaced)
+    inventory = {
+        fact.period_end.year: fact
+        for fact in kept.facts
+        if fact.metric_id == "inventory_net"
+    }
+    assert set(inventory) == {2024, 2023}
+    assert inventory[2024].raw_value == _VALUES["inventory_net"][0]
+    assert inventory[2023].raw_value == _VALUES["inventory_net"][1]

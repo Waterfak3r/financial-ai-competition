@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from finagent.api.annual_report_read import AnnualReportReadError, load_annual_report
+from finagent.api.annual_report_read import AnnualReportReadError, SourceReadContext, load_annual_report
 
 _COMPANY_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,64}$")
 _DOCUMENT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -139,6 +139,7 @@ def list_annual_analysis_history(
     total = len(rows)
     page = rows[offset : offset + limit]
     result_cache: dict[str, tuple[bool, str | None, dict[str, Any] | None]] = {}
+    source_context = SourceReadContext()
     for item in page:
         record = item.pop("_run_record", None)
         if isinstance(record, Mapping):
@@ -152,6 +153,7 @@ def list_annual_analysis_history(
                         year=int(record["year"]),
                         document_id=str(record["source_document_id"]),
                         source_sha256=str(record["source_sha256"]),
+                        source_context=source_context,
                     )
                 else:
                     # Keep the pre-R2 read-only projection for legacy finals.
@@ -165,7 +167,7 @@ def list_annual_analysis_history(
                     )
                     category = None
                     if available and item["job_status"] in {"failed", "interrupted"}:
-                        available, category = _strict_failed_result_available(root, run_id, item)
+                        available, category = _strict_failed_result_available(root, run_id, item, source_context)
                     result_cache[run_id] = (available, category, None)
             available, category, snapshot = result_cache[run_id]
             item["result_available"] = available
@@ -208,9 +210,10 @@ def _strict_failed_result_available(
     root: Path,
     run_id: str,
     item: Mapping[str, Any],
+    source_context: SourceReadContext,
 ) -> tuple[bool, str | None]:
     try:
-        archive = load_annual_report(root, run_id)
+        archive = load_annual_report(root, run_id, _source_context=source_context)
     except AnnualReportReadError as exc:
         return False, _report_read_error_category(exc.code)
     summary = archive.manifest_summary
@@ -232,11 +235,12 @@ def _strict_archive_projection(
     year: int,
     document_id: str,
     source_sha256: str,
+    source_context: SourceReadContext,
 ) -> tuple[bool, str | None, dict[str, Any] | None]:
     """Project only strict-reader identity and checkpoint metadata into history."""
 
     try:
-        archive = load_annual_report(root, run_id)
+        archive = load_annual_report(root, run_id, _source_context=source_context)
     except AnnualReportReadError as exc:
         return False, _report_read_error_category(exc.code), None
     summary = archive.manifest_summary

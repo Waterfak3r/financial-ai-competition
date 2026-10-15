@@ -22,6 +22,15 @@ from finagent.core.model_call_ledger import (
     select_call_gate_database as _ledger_select_gate_database,
 )
 from finagent.core.model_settings import ModelConfigError, ModelSettings, load_model_settings
+from finagent.core.annual_work_budget import (
+    BUDGET_CONTRACT_VERSION,
+    GLOBAL_REQUEST_LIMIT_CHARS,
+    MODEL_CALL_TIMEOUT_SECONDS,
+    REVIEW_REQUEST_LIMIT_CHARS,
+    archived_budget_contract_v2,
+    archived_budget_contract_v3,
+    archived_budget_contract_v4,
+)
 from finagent.agents.annual_review_wire import (
     ISSUE_INPUT_WIRE_SCHEMA,
     V3_INPUT_PROJECTION_VERSION,
@@ -29,6 +38,8 @@ from finagent.agents.annual_review_wire import (
 )
 from finagent.retrieval.annual_discovery_context import (
     COMPACT_PLAN_VERSION,
+    PERIOD_HEADER_PLAN_VERSION,
+    AnnualDiscoveryContext,
     annual_discovery_plan_projection,
     build_annual_discovery_context,
 )
@@ -43,6 +54,7 @@ _PROMPTS = (
     "annual_review_v2.md",
 )
 _PARSER_VERSION = "annual-discovery-parser-v3-execution-v4"
+_PERIOD_HEADER_PARSER_VERSION = "annual-discovery-parser-v3-execution-v5"
 _ISSUE_PIPELINE_PROMPTS = (
     "annual_issue_grouping_v1.md",
     "annual_issue_global_v1.md",
@@ -71,11 +83,12 @@ def validate_annual_recovery_parent(
     settings: ModelSettings | None = None,
     archive: Any | None = None,
     parsed_pdf: object | None = None,
-    require_issue_pipeline_v5: bool = False,
+    require_issue_pipeline: bool = True,
 ) -> dict[str, Any]:
     """Strictly validate a saved parent and return its current binding.
 
     ``request`` is the already validated, normalized four-mode job request.
+    ``require_issue_pipeline`` requires the activity outer v11 binding.
     The returned reason codes contain no paths, prompts, or provider config.
     """
 
@@ -102,10 +115,10 @@ def validate_annual_recovery_parent(
             report=archive.report,
             parsed_pdf=parsed_pdf,
         )
-        pipeline_binding = build_annual_issue_pipeline_binding_v5(
+        pipeline_binding = build_annual_issue_pipeline_binding_v11(
             Path(project_root), request, settings=settings, report=archive.report, parsed_pdf=parsed_pdf,
         )
-        if require_issue_pipeline_v5:
+        if require_issue_pipeline:
             pipeline = archive.report.get("model_issue_pipeline")
             if not isinstance(pipeline, Mapping) or pipeline.get("kind") != "annual_issue_pipeline_v1" or pipeline.get("execution_binding") != pipeline_binding:
                 return {"can_resume": False, "reason": "recovery_pipeline_binding_mismatch", "binding": binding, "pipeline_binding": pipeline_binding}
@@ -117,6 +130,8 @@ def validate_annual_recovery_parent(
             return {"can_resume": False, "reason": "recovery_binding_missing", "binding": None}
         if contract.get("binding") != binding:
             return {"can_resume": False, "reason": "recovery_binding_mismatch", "binding": binding}
+        if require_issue_pipeline and contract.get("kind") != "fintrace_annual_discovery_execution_v11":
+            return {"can_resume": False, "reason": "recovery_pipeline_binding_mismatch", "binding": binding, "pipeline_binding": pipeline_binding}
         manifest_status = archive.manifest_summary.get("status")
         snapshot = getattr(archive, "snapshot", None)
         snapshot_is_partial = isinstance(snapshot, Mapping) and snapshot.get("is_partial") is True
@@ -153,7 +168,7 @@ def validate_annual_recovery_parent(
             # and prompt. A child with no other work cannot make it fit.
             review_unfinished = False
         unfinished = discovery_unfinished or review_unfinished
-        if not unfinished and require_issue_pipeline_v5:
+        if not unfinished and require_issue_pipeline:
             pipeline = archive.report.get("model_issue_pipeline")
             unfinished = _annual_issue_pipeline_has_executable_work(Path(project_root), pipeline)
         if not unfinished:
@@ -173,7 +188,7 @@ def validate_annual_recovery_parent(
 
 
 def _annual_issue_pipeline_has_executable_work(project_root: Path, pipeline: Any) -> bool:
-    """Return whether a v5 issue pipeline can make new progress on a child run.
+    """Return whether an issue pipeline can make new progress on a child run.
 
     A fixed supplement selection cap and a deterministic oversized wire body
     are terminal for the current unchanged source/plan. A pending in-cap shard
@@ -196,6 +211,14 @@ def _annual_issue_pipeline_has_executable_work(project_root: Path, pipeline: Any
     binding = pipeline.get("execution_binding")
     model = binding.get("model") if isinstance(binding, Mapping) else None
     if not isinstance(model, str) or not model:
+        return False
+    source_value = pipeline.get("source_identity")
+    if not isinstance(source_value, Mapping):
+        return False
+    try:
+        source = issue_pipeline._source_identity(source_value)
+        issue_pipeline._validate_execution_binding(binding, source)
+    except (KeyError, TypeError, ValueError):
         return False
     prompt_files = {
         "grouping": "annual_issue_grouping_v1.md",
@@ -232,13 +255,6 @@ def _annual_issue_pipeline_has_executable_work(project_root: Path, pipeline: Any
         # retried within the same ledger, deadline, and stage budget policies.
         return True
 
-    source_value = pipeline.get("source_identity")
-    if not isinstance(source_value, Mapping):
-        return False
-    try:
-        source = issue_pipeline._source_identity(source_value)
-    except (KeyError, TypeError, ValueError):
-        return False
     existing_shard_ids = {
         item.get("shard_id") for item in shards if isinstance(item, Mapping)
     }
@@ -249,6 +265,7 @@ def _annual_issue_pipeline_has_executable_work(project_root: Path, pipeline: Any
             group_prompt = (Path(project_root) / "config" / "prompts" / "annual_issue_grouping_v1.md").read_text(encoding="utf-8")
             planned_groups = issue_pipeline._build_group_shards(
                 issue_pipeline._local_exact_duplicate_groups(candidates), {}, source, model, group_prompt,
+                execution_binding=binding,
             )
             for index, planned in enumerate(planned_groups):
                 shard_id = f"group:{index:03d}:{planned['semantic_sha256'][:16]}"
@@ -338,6 +355,21 @@ def build_annual_recovery_binding(
     report: Mapping[str, Any],
     parsed_pdf: object | None = None,
 ) -> dict[str, Any]:
+    return _build_annual_recovery_binding(
+        project_root, request, settings=settings, report=report, parsed_pdf=parsed_pdf,
+        prompt_version="annual_discovery_v5",
+    )
+
+
+def _build_annual_recovery_binding(
+    project_root: Path,
+    request: Mapping[str, Any],
+    *,
+    settings: ModelSettings,
+    report: Mapping[str, Any],
+    parsed_pdf: object | None,
+    prompt_version: str,
+) -> dict[str, Any]:
     """Build the exact semantic identity used by CLI and job capability checks."""
 
     mode = request.get("mode")
@@ -347,7 +379,9 @@ def build_annual_recovery_binding(
     if _SHA256.fullmatch(source_sha) is None:
         raise ValueError("recovery_source_invalid")
     source_record = _source_record(Path(project_root), request)
-    prompt_path = Path(__file__).resolve().parents[4] / "config" / "prompts" / "annual_discovery_v3.md"
+    if prompt_version not in {"annual_discovery_v3", "annual_discovery_v4", "annual_discovery_v5"}:
+        raise ValueError("recovery_prompt_version_invalid")
+    prompt_path = Path(__file__).resolve().parents[4] / "config" / "prompts" / f"{prompt_version}.md"
     prompt = prompt_path.read_text(encoding="utf-8")
     context = build_annual_discovery_context(
         report,
@@ -355,47 +389,71 @@ def build_annual_recovery_binding(
         source_record,
         system_prompt=prompt,
         model_name=settings.model,
-        plan_version=COMPACT_PLAN_VERSION,
+        plan_version=PERIOD_HEADER_PLAN_VERSION if prompt_version == "annual_discovery_v5" else COMPACT_PLAN_VERSION,
         parsed_pdf=parsed_pdf,
     )
-    plan_projection = annual_discovery_plan_projection(context)
-    plan_sha256 = _sha256_json(plan_projection)
-    m3_binding_sha256 = (
-        _m3_semantic_binding_sha256(report.get("m3_screening"), request)
-        if mode == "integrated_analysis"
-        else None
+    return build_annual_discovery_binding_from_context(
+        context, settings=settings, report=report, analysis_mode=mode,
+        prompt_version=prompt_version,
     )
+
+
+def build_annual_discovery_binding_from_context(
+    context: AnnualDiscoveryContext, *, settings: ModelSettings,
+    report: Mapping[str, Any], analysis_mode: str,
+    prompt_version: str = "annual_discovery_v5",
+) -> dict[str, Any]:
+    """Bind an already validated source plan, independent of source directory layout."""
+    if analysis_mode not in _MODES or prompt_version not in {"annual_discovery_v3", "annual_discovery_v4", "annual_discovery_v5"}:
+        raise ValueError("recovery_mode_or_prompt_invalid")
+    current = prompt_version == "annual_discovery_v5"
+    plan_version = PERIOD_HEADER_PLAN_VERSION if current else COMPACT_PLAN_VERSION
+    if context.plan_version != plan_version:
+        raise ValueError("recovery_prompt_plan_mismatch")
+    identity = context.identity
+    prompt_path = Path(__file__).resolve().parents[4] / "config" / "prompts" / f"{prompt_version}.md"
     binding = {
-        "source_sha256": source_sha,
-        "company_id": request["company_id"],
-        "report_year": request["report_year"],
-        "source_document_id": request["document_id"],
-        "analysis_mode": mode,
+        "source_sha256": identity["source_sha256"],
+        "company_id": identity["company_id"],
+        "report_year": identity["report_year"],
+        "source_document_id": identity["source_document_id"],
+        "analysis_mode": analysis_mode,
         "provider_model_fingerprint": provider_model_fingerprint(settings.base_url, settings.model),
         "model": settings.model,
-        "prompts_sha256": _prompts_sha256(),
-        "parser_version": _PARSER_VERSION,
-        "plan_version": COMPACT_PLAN_VERSION,
-        "execution_version": "execution_v4",
-        "plan_sha256": plan_sha256,
-        "m3_binding_sha256": m3_binding_sha256,
+        "prompts_sha256": _prompts_sha256(prompt_version=prompt_version),
+        "parser_version": _PERIOD_HEADER_PARSER_VERSION if current else _PARSER_VERSION,
+        "plan_version": plan_version,
+        "execution_version": "execution_v5" if current else "execution_v4",
+        "plan_sha256": _sha256_json(annual_discovery_plan_projection(context)),
+        "m3_binding_sha256": _m3_semantic_binding_sha256(report.get("m3_screening"), {
+            **dict(identity), "sha256": identity["source_sha256"],
+            "document_id": identity["source_document_id"], "mode": analysis_mode,
+        }) if analysis_mode == "integrated_analysis" else None,
     }
+    if prompt_version in {"annual_discovery_v4", "annual_discovery_v5"}:
+        binding.update(prompt_version=prompt_version, prompt_sha256=hashlib.sha256(prompt_path.read_bytes()).hexdigest())
     return binding
 
 
-def build_annual_issue_pipeline_binding_v5(
+def _issue_pipeline_business_binding(
     project_root: Path,
     request: Mapping[str, Any],
     *,
     settings: ModelSettings,
     report: Mapping[str, Any],
     parsed_pdf: object | None = None,
+    prompt_version: str,
+    discovery_binding: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build an additive execution_v5 binding without changing v3/v4 digests."""
+    """Shared issue-pipeline business fields without kind, version, or budget policy."""
 
-    discovery_binding = build_annual_recovery_binding(
-        project_root, request, settings=settings, report=report, parsed_pdf=parsed_pdf,
-    )
+    if discovery_binding is not None:
+        discovery_binding = dict(discovery_binding)
+    else:
+        discovery_binding = _build_annual_recovery_binding(
+            project_root, request, settings=settings, report=report, parsed_pdf=parsed_pdf,
+            prompt_version=prompt_version,
+        )
     root = Path(__file__).resolve().parents[4]
     new_prompt_hashes: dict[str, str] = {}
     for name in _ISSUE_PIPELINE_PROMPTS:
@@ -405,11 +463,14 @@ def build_annual_issue_pipeline_binding_v5(
         "provider_model_fingerprint", "model", "prompts_sha256", "parser_version",
         "plan_version", "execution_version", "plan_sha256", "m3_binding_sha256",
     }
+    current = prompt_version == "annual_discovery_v5"
+    if prompt_version in {"annual_discovery_v4", "annual_discovery_v5"}:
+        required_v4_fields |= {"prompt_version", "prompt_sha256"}
     if (
         set(discovery_binding) != required_v4_fields
-        or discovery_binding.get("execution_version") != "execution_v4"
-        or discovery_binding.get("plan_version") != COMPACT_PLAN_VERSION
-        or discovery_binding.get("parser_version") != _PARSER_VERSION
+        or discovery_binding.get("execution_version") != ("execution_v5" if current else "execution_v4")
+        or discovery_binding.get("plan_version") != (PERIOD_HEADER_PLAN_VERSION if current else COMPACT_PLAN_VERSION)
+        or discovery_binding.get("parser_version") != (_PERIOD_HEADER_PARSER_VERSION if current else _PARSER_VERSION)
         or discovery_binding.get("analysis_mode") not in _MODES
         or discovery_binding.get("company_id") != request.get("company_id")
         or discovery_binding.get("report_year") != request.get("report_year")
@@ -435,8 +496,6 @@ def build_annual_issue_pipeline_binding_v5(
     ):
         raise ValueError("recovery_v4_binding_invalid")
     return {
-        "kind": "fintrace_annual_execution_binding_v5",
-        "execution_version": "execution_v5",
         "source_sha256": discovery_binding["source_sha256"],
         "company_id": discovery_binding["company_id"],
         "report_year": discovery_binding["report_year"],
@@ -446,7 +505,7 @@ def build_annual_issue_pipeline_binding_v5(
         "model": discovery_binding["model"],
         "discovery_binding": discovery_binding,
         "prompts_sha256": _sha256_json({
-            "unchanged_execution_v4_prompt_set_sha256": discovery_binding["prompts_sha256"],
+            ("unchanged_execution_v5_prompt_set_sha256" if current else "unchanged_execution_v4_prompt_set_sha256"): discovery_binding["prompts_sha256"],
             "issue_pipeline_prompt_sha256": new_prompt_hashes,
         }),
         "parser_version": "annual-issue-pipeline-parser-v1-execution-v5",
@@ -460,6 +519,186 @@ def build_annual_issue_pipeline_binding_v5(
         "plan_sha256": discovery_binding["plan_sha256"],
         "m3_binding_sha256": discovery_binding["m3_binding_sha256"],
     }
+
+
+def build_annual_issue_pipeline_binding_v5(
+    project_root: Path,
+    request: Mapping[str, Any],
+    *,
+    settings: ModelSettings,
+    report: Mapping[str, Any],
+    parsed_pdf: object | None = None,
+) -> dict[str, Any]:
+    """Legacy execution_v5 reconstruction binding. Activity must not call this."""
+
+    return {
+        "kind": "fintrace_annual_execution_binding_v5",
+        "execution_version": "execution_v5",
+        **_issue_pipeline_business_binding(
+            project_root, request, settings=settings, report=report, parsed_pdf=parsed_pdf,
+            prompt_version="annual_discovery_v3",
+        ),
+    }
+
+
+def build_annual_issue_pipeline_binding_v6(
+    project_root: Path,
+    request: Mapping[str, Any],
+    *,
+    settings: ModelSettings,
+    report: Mapping[str, Any],
+    parsed_pdf: object | None = None,
+) -> dict[str, Any]:
+    """Historical execution_v6 reconstruction. Activity must not call this."""
+
+    archived = archived_budget_contract_v2(scope="new_run")
+    return {
+        "kind": "fintrace_annual_execution_binding_v6",
+        "execution_version": "execution_v6",
+        **_issue_pipeline_business_binding(
+            project_root, request, settings=settings, report=report, parsed_pdf=parsed_pdf,
+            prompt_version="annual_discovery_v3",
+        ),
+        "budget_contract_version": archived["schema_version"],
+        "review_request_limit_chars": archived["review_request_limit_chars"],
+        "model_call_timeout_seconds": archived["model_call_timeout_seconds"],
+    }
+
+
+def build_annual_issue_pipeline_binding_v7(
+    project_root: Path,
+    request: Mapping[str, Any],
+    *,
+    settings: ModelSettings,
+    report: Mapping[str, Any],
+    parsed_pdf: object | None = None,
+) -> dict[str, Any]:
+    """Historical execution_v7 reconstruction. Activity must not call this."""
+
+    return {
+        "kind": "fintrace_annual_execution_binding_v7",
+        "execution_version": "execution_v7",
+        **_issue_pipeline_business_binding(
+            project_root, request, settings=settings, report=report, parsed_pdf=parsed_pdf,
+            prompt_version="annual_discovery_v3",
+        ),
+        "budget_contract_version": archived_budget_contract_v3(scope="new_run")["schema_version"],
+        "review_request_limit_chars": archived_budget_contract_v3(scope="new_run")["review_request_limit_chars"],
+        "model_call_timeout_seconds": archived_budget_contract_v3(scope="new_run")["model_call_timeout_seconds"],
+    }
+
+
+def build_annual_issue_pipeline_binding_v8(
+    project_root: Path,
+    request: Mapping[str, Any],
+    *,
+    settings: ModelSettings,
+    report: Mapping[str, Any],
+    parsed_pdf: object | None = None,
+    discovery_binding: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Historical v8 reconstruction; activity must not use its frozen v3 budget."""
+
+    archived = archived_budget_contract_v3(scope="new_run")
+    return {
+        "kind": "fintrace_annual_execution_binding_v8",
+        "execution_version": "execution_v8",
+        **_issue_pipeline_business_binding(
+            project_root, request, settings=settings, report=report, parsed_pdf=parsed_pdf,
+            prompt_version="annual_discovery_v4", discovery_binding=discovery_binding,
+        ),
+        "supplement_retrieval_version": "source_anchor_then_ngram_v2",
+        "budget_contract_version": archived["schema_version"],
+        "review_request_limit_chars": archived["review_request_limit_chars"],
+        "model_call_timeout_seconds": archived["model_call_timeout_seconds"],
+    }
+
+
+def build_annual_issue_pipeline_binding_v9(
+    project_root: Path,
+    request: Mapping[str, Any],
+    *,
+    settings: ModelSettings,
+    report: Mapping[str, Any],
+    parsed_pdf: object | None = None,
+    discovery_binding: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Historical v9 reconstruction with its unchanged frozen v4 capacity policy."""
+
+    archived = archived_budget_contract_v4(scope="new_run")
+    return {
+        "kind": "fintrace_annual_execution_binding_v9",
+        "execution_version": "execution_v9",
+        **_issue_pipeline_business_binding(
+            project_root, request, settings=settings, report=report, parsed_pdf=parsed_pdf,
+            prompt_version="annual_discovery_v4", discovery_binding=discovery_binding,
+        ),
+        "supplement_retrieval_version": "source_anchor_then_ngram_v2",
+        "budget_contract_version": archived["schema_version"],
+        "global_request_limit_chars": archived["global_request_limit_chars"],
+        "review_request_limit_chars": archived["review_request_limit_chars"],
+        "model_call_timeout_seconds": archived["model_call_timeout_seconds"],
+    }
+
+
+def build_annual_issue_pipeline_binding_v10(
+    project_root: Path,
+    request: Mapping[str, Any],
+    *,
+    settings: ModelSettings,
+    report: Mapping[str, Any],
+    parsed_pdf: object | None = None,
+    discovery_binding: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Historical v10 reconstruction; its original shards and budgets are frozen."""
+    archived = archived_budget_contract_v4(scope="new_run")
+
+    return {
+        "kind": "fintrace_annual_execution_binding_v10",
+        "execution_version": "execution_v10",
+        **_issue_pipeline_business_binding(
+            project_root, request, settings=settings, report=report, parsed_pdf=parsed_pdf,
+            prompt_version="annual_discovery_v4", discovery_binding=discovery_binding,
+        ),
+        "supplement_retrieval_version": "source_anchor_then_ngram_v2",
+        "budget_contract_version": archived["schema_version"],
+        "global_request_limit_chars": archived["global_request_limit_chars"],
+        "review_request_limit_chars": archived["review_request_limit_chars"],
+        "model_call_timeout_seconds": archived["model_call_timeout_seconds"],
+        "grouping_shard_plan_version": "member_bounded_v2",
+        "grouping_shard_max_members": 3,
+    }
+
+
+def build_annual_issue_pipeline_binding_v11(
+    project_root: Path,
+    request: Mapping[str, Any],
+    *,
+    settings: ModelSettings,
+    report: Mapping[str, Any],
+    parsed_pdf: object | None = None,
+    discovery_binding: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Activity identity for complete same-page period context, unchanged budgets."""
+    from finagent.agents.annual_issue_pipeline import GROUPING_SHARD_PLAN_VERSION, MAX_FINDINGS_PER_SHARD
+
+    return {
+        "kind": "fintrace_annual_execution_binding_v11",
+        "execution_version": "execution_v11",
+        **_issue_pipeline_business_binding(
+            project_root, request, settings=settings, report=report, parsed_pdf=parsed_pdf,
+            prompt_version="annual_discovery_v5", discovery_binding=discovery_binding,
+        ),
+        "supplement_retrieval_version": "source_anchor_then_ngram_v2",
+        "budget_contract_version": BUDGET_CONTRACT_VERSION,
+        "global_request_limit_chars": GLOBAL_REQUEST_LIMIT_CHARS,
+        "review_request_limit_chars": REVIEW_REQUEST_LIMIT_CHARS,
+        "model_call_timeout_seconds": MODEL_CALL_TIMEOUT_SECONDS,
+        "grouping_shard_plan_version": GROUPING_SHARD_PLAN_VERSION,
+        "grouping_shard_max_members": MAX_FINDINGS_PER_SHARD,
+    }
+
+
 
 
 def recovery_identity_sha256(binding: Mapping[str, Any]) -> str:
@@ -509,12 +748,14 @@ def _source_record(root: Path, request: Mapping[str, Any]) -> dict[str, Any]:
     return value
 
 
-def _prompts_sha256() -> str:
+def _prompts_sha256(*, prompt_version: str = "annual_discovery_v5") -> str:
     root = Path(__file__).resolve().parents[4]
     material: dict[str, str] = {}
-    for name in _PROMPTS:
-        content = (root / "config" / "prompts" / name).read_text(encoding="utf-8")
-        material[name] = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    for old_name in _PROMPTS:
+        name = f"{prompt_version}.md" if old_name == "annual_discovery_v3.md" else old_name
+        path = root / "config" / "prompts" / name
+        content = path.read_text(encoding="utf-8").encode("utf-8") if prompt_version == "annual_discovery_v3" else path.read_bytes()
+        material[name] = hashlib.sha256(content).hexdigest()
     return _sha256_json(material)
 
 

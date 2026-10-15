@@ -1,4 +1,7 @@
-"""用三份真实年报验证四指标提取及独立事实核验的适用边界。"""
+"""用已有真实年报核对四指标提取、独立事实核验与年度可比性的适用边界。
+
+五粮液 2024 仅作本轮独立公司对照，不是项目级未见盲测，也不为它单独调参。
+"""
 
 from __future__ import annotations
 
@@ -9,6 +12,13 @@ import pytest
 from finagent.api.annual_analysis import analyze_annual_pdf
 
 _ROOT = Path(__file__).resolve().parents[2]
+_OPENING_CAUSES = (
+    "准则追溯调整",
+    "会计政策变更",
+    "重大会计差错更正",
+    "同一控制合并范围变更",
+    "其他调整",
+)
 _CASES = (
     (
         "603288",
@@ -73,9 +83,14 @@ def test_three_real_reports_confirm_supported_facts_and_abstain_on_missing_curre
     assert len(non_recurring) == 2
 
     wuliangye = results["000858"]
-    assert wuliangye.comparability.status == "insufficient_evidence"
-    assert wuliangye.comparability.conflicts == ()
-    assert any("缺少报告年份抬头" in item for item in wuliangye.comparability.limitations)
+    comparability = wuliangye.comparability
+    assert comparability.status == "insufficient_evidence"
+    assert comparability.restatement_status == "unknown"
+    assert comparability.evidence
+    assert all(item.document_id == "cninfo-1223311527" for item in comparability.evidence)
+    assert all(item.report_year == 2024 and item.pdf_page >= 1 for item in comparability.evidence)
+    assert any("调整期初未分配利润合计" in item for item in comparability.limitations)
+    assert any("无法按年度列" in item or "不能当作无调整" in item for item in comparability.limitations)
     assert wuliangye.extraction_issues == ()
     assert len(wuliangye.extracted_facts) == 8
     assert {item.currency for item in wuliangye.facts} == {"未披露"}
@@ -93,3 +108,28 @@ def test_three_real_reports_confirm_supported_facts_and_abstain_on_missing_curre
     assert all(item.status == "failed" for item in wuliangye.calculations)
     assert not any(item.get("status") == "candidate" for item in wuliangye.screening)
     assert all(item.get("status") == "abstained" for item in wuliangye.screening)
+
+
+def test_moutai_2025_comparability_follows_source_text_not_company_id() -> None:
+    pdf = _ROOT / "data/raw/600519/2025/upload-ba1b6718f8864010a8bfcf649f3cf5ea/source.pdf"
+    if not pdf.is_file():
+        pytest.skip("本机没有用户提供的茅台 2025 原始 PDF。")
+
+    result = analyze_annual_pdf(
+        pdf,
+        run_id="cross-company-600519-2025",
+        company_id="600519",
+        report_year=2025,
+        document_id="upload-ba1b6718f8864010a8bfcf649f3cf5ea",
+    )
+
+    assert result.comparability.status == "insufficient_evidence"
+    assert result.comparability.restatement_status == "unknown"
+    assert result.comparability.document_id == "upload-ba1b6718f8864010a8bfcf649f3cf5ea"
+    assert result.comparability.evidence
+    for cause in _OPENING_CAUSES:
+        assert any(cause in item for item in result.comparability.limitations)
+    topics = {item.topic for item in result.comparability.evidence}
+    assert "first_adoption_opening_balance_adjustment" in topics
+    assert all(item.report_year == 2025 for item in result.comparability.evidence)
+    assert all(item.document_id == "upload-ba1b6718f8864010a8bfcf649f3cf5ea" for item in result.comparability.evidence)

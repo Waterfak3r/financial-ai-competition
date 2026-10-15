@@ -26,9 +26,12 @@ from finagent.core.annual_work_budget import (
     FINAL_REVIEW_BUDGET_SECONDS,
     FIXED_INVESTIGATION_BUDGET_SECONDS,
     DISCOVERY_BUDGET_SECONDS,
+    ISSUE_GROUPING_RESERVED_SECONDS,
+    MAIN_REPORT_BUDGET_SECONDS,
     runtime_stage_time_limits,
 )
 from finagent.schemas.text_pdf import ParsedTextPdf
+from finagent.retrieval.annual_context import NarrativeSnippet
 
 
 def run_annual_investigation_appendix(
@@ -155,140 +158,30 @@ def run_annual_investigation_appendix(
         return state
 
     state["model_name"] = settings.model
-    if request_mode in {"model_investigation", "integrated_analysis"} and isinstance(request_identity, Mapping):
-        return _run_recoverable_appendix(
-            report,
-            state=state,
-            identity=identity,
-            binding_source_report={
-                **dict(report),
-                **({"m3_screening": dict(m3_screening)} if isinstance(m3_screening, Mapping) else {}),
-            },
-            archived_pdf_path=archived_pdf_path,
-            source_record=record,
-            settings=settings,
-            run_dir=run_dir,
-            artifacts_root=artifacts_root,
-            request_mode=request_mode,
-            request_identity=request_identity,
-            resume_parent_run_id=resume_parent_run_id,
-            progress_callback=progress_callback,
-            checkpoint_callback=checkpoint_callback,
-            parsed_pdf=parsed_pdf,
-            main_soft_deadline=main_soft_deadline,
-            stage_time_limits_seconds=stage_time_limits_seconds,
-        )
+    active_mode = request_mode or ("integrated_analysis" if isinstance(m3_screening, Mapping) else "model_investigation")
+    return _run_recoverable_appendix(
+        report,
+        state=state,
+        identity=identity,
+        binding_source_report={
+            **dict(report),
+            **({"m3_screening": dict(m3_screening)} if isinstance(m3_screening, Mapping) else {}),
+        },
+        archived_pdf_path=archived_pdf_path,
+        source_record=record,
+        settings=settings,
+        run_dir=run_dir,
+        artifacts_root=artifacts_root,
+        request_mode=active_mode,
+        request_identity=request_identity,
+        resume_parent_run_id=resume_parent_run_id,
+        progress_callback=progress_callback,
+        checkpoint_callback=checkpoint_callback,
+        parsed_pdf=parsed_pdf,
+        main_soft_deadline=main_soft_deadline,
+        stage_time_limits_seconds=stage_time_limits_seconds,
+    )
 
-    before = _run_children(run_dir)
-    try:
-        stage_limits = dict(stage_time_limits_seconds or runtime_stage_time_limits(300))
-        fixed_deadline = min(
-            value for value in (
-                time.monotonic() + int(stage_limits.get("annual_investigation", FIXED_INVESTIGATION_BUDGET_SECONDS)),
-                main_soft_deadline,
-            ) if value is not None
-        )
-        with annual_call_deadline(fixed_deadline):
-            result = _invoke_agent(
-                report,
-                archived_pdf_path=archived_pdf_path,
-                source_record=record,
-                settings=settings,
-                run_dir=run_dir,
-                parsed_pdf=parsed_pdf,
-                deadline=fixed_deadline,
-                main_soft_deadline=main_soft_deadline,
-            )
-        payload = result.to_dict()
-        _validate_result_identity(payload, identity)
-        attempts = _nonnegative_int(payload.get("model_call_attempt_count"))
-        calls = _nonnegative_int(payload.get("model_call_count"))
-        payload.update(
-            model_called=calls > 0,
-            model_call_count=calls,
-            model_call_attempt_count=attempts,
-            archive_path=archive_path,
-            source_binding=binding,
-            model_name=settings.model,
-        )
-    except Exception as exc:
-        audits, attempts, calls = _discover_new_audits(run_dir, before, artifacts_root)
-        error_name = type(exc).__name__
-        if error_name == "LangGraphUnavailableError":
-            state.update(
-                status="failed",
-                reason="langgraph_unavailable",
-                reason_detail="年度调查图需要可选依赖 langgraph>=1.2,<1.3；本机未安装该依赖。",
-            )
-        else:
-            state.update(status="failed", reason="annual_investigation_failed")
-        state.update(
-            model_called=attempts > 0,
-            model_call_count=calls,
-            model_call_attempt_count=attempts,
-            audit_artifacts=audits,
-        )
-        payload = state
-
-    # Open-ended discovery is an independent pass over all extracted source
-    # text. It deliberately does not depend on the fixed candidate list or M3.
-    discovery_started = time.monotonic()
-    discovery_deadline = min(
-        value for value in (
-            discovery_started + int(stage_limits.get("annual_discovery", DISCOVERY_BUDGET_SECONDS)),
-            main_soft_deadline,
-        ) if value is not None
-    )
-    with annual_call_deadline(discovery_deadline):
-        discovery = _invoke_discovery(
-            report,
-            source_pdf_path=archived_pdf_path,
-            source_record=record,
-            settings=settings,
-            run_dir=run_dir,
-            artifacts_root=artifacts_root,
-            progress_callback=progress_callback,
-            parsed_pdf=parsed_pdf,
-            main_soft_deadline=main_soft_deadline,
-            discovery_deadline=discovery_deadline,
-        )
-    payload["discovery"] = discovery
-    payload["discovery_call_count"] = _nonnegative_int(discovery.get("model_call_count"))
-    payload["discovery_call_attempt_count"] = _nonnegative_int(
-        discovery.get("model_call_attempt_count")
-    )
-    payload["investigation_call_count"] = _nonnegative_int(payload.get("model_call_count"))
-    payload["investigation_call_attempt_count"] = _nonnegative_int(
-        payload.get("model_call_attempt_count")
-    )
-    payload["model_call_count"] = (
-        _nonnegative_int(payload.get("model_call_count"))
-        + payload["discovery_call_count"]
-    )
-    payload["model_call_attempt_count"] = (
-        _nonnegative_int(payload.get("model_call_attempt_count"))
-        + payload["discovery_call_attempt_count"]
-    )
-    payload["model_called"] = payload["model_call_attempt_count"] > 0
-    existing_audits = payload.get("audit_artifacts")
-    discovery_audits = discovery.get("audit_artifacts")
-    payload["audit_artifacts"] = [
-        *(existing_audits if isinstance(existing_audits, list) else []),
-        *(discovery_audits if isinstance(discovery_audits, list) else []),
-    ]
-
-    try:
-        review = _invoke_review(
-            report,
-            payload,
-            settings=settings,
-            run_dir=run_dir,
-            artifacts_root=artifacts_root,
-        )
-    except Exception:
-        review = not_called_model_review(report, "model_review_call_failed")
-        review["status"] = "failed"
-    return _attach_review_outcome(payload, review)
 
 
 class _RecoveryCheckpointError(RuntimeError):
@@ -332,6 +225,7 @@ def _raise_recovery_rejected_before_calls(
     settings: ModelSettings,
     run_dir: Path,
     execution_binding: Mapping[str, Any],
+    pipeline_binding: Mapping[str, Any],
     parsed_pdf: object | None,
     requested_parent_run_id: str,
     reason: str,
@@ -349,6 +243,11 @@ def _raise_recovery_rejected_before_calls(
         execution_binding=execution_binding,
         parsed_pdf=parsed_pdf,
     )
+    from finagent.agents.annual_issue_pipeline import checkpoint_issue_pipeline
+    pending_pipeline = checkpoint_issue_pipeline(
+        {**dict(identity), "report_period": source_record.get("report_period")},
+        discovery, execution_binding=pipeline_binding,
+    )
     archive_path = state.get("archive_path")
     investigation = {
         "kind": "fintrace_annual_investigation",
@@ -359,6 +258,7 @@ def _raise_recovery_rejected_before_calls(
         "model_call_count": 0,
         "model_call_attempt_count": 0,
         "discovery": discovery,
+        "model_issue_pipeline": pending_pipeline,
         "discovery_call_count": 0,
         "discovery_call_attempt_count": 0,
         "investigation_call_count": 0,
@@ -373,7 +273,7 @@ def _raise_recovery_rejected_before_calls(
         "archive_path": archive_path,
         "source_binding": state.get("source_binding"),
         "model_name": settings.model,
-        "final_review": not_called_model_review(report, reason),
+        "final_review": importlib.import_module("finagent.agents.annual_review").not_called_model_review_v3(report, reason),
     }
     snapshot_report, _snapshot_analysis = attach_investigation_to_report(
         binding_source_report,
@@ -427,7 +327,7 @@ def _run_recoverable_appendix(
     run_dir: Path,
     artifacts_root: Path,
     request_mode: str,
-    request_identity: Mapping[str, Any],
+    request_identity: Mapping[str, Any] | None,
     resume_parent_run_id: str | None,
     progress_callback: Any | None,
     checkpoint_callback: Any | None,
@@ -439,23 +339,41 @@ def _run_recoverable_appendix(
 
     from finagent.api.annual_report_read import load_annual_report
     from finagent.core.annual_recovery import (
-        build_annual_issue_pipeline_binding_v5,
+        build_annual_issue_pipeline_binding_v11,
         build_annual_recovery_binding,
+        build_annual_discovery_binding_from_context,
         validate_annual_recovery_parent,
     )
 
-    if request_identity.get("mode") != request_mode:
-        raise ValueError("annual_recovery_request_mode_mismatch")
-    binding = build_annual_recovery_binding(
-        _repository_root(),
-        request_identity,
-        settings=settings,
-        report=binding_source_report,
-        parsed_pdf=parsed_pdf,
-    )
-    pipeline_binding = build_annual_issue_pipeline_binding_v5(
+    if request_identity is not None:
+        if request_identity.get("mode") != request_mode:
+            raise ValueError("annual_recovery_request_mode_mismatch")
+        binding = build_annual_recovery_binding(
+            _repository_root(), request_identity, settings=settings,
+            report=binding_source_report, parsed_pdf=parsed_pdf,
+        )
+    else:
+        if resume_parent_run_id is not None:
+            raise ValueError("annual_recovery_request_identity_missing")
+        from finagent.retrieval.annual_discovery_context import PERIOD_HEADER_PLAN_VERSION, build_annual_discovery_context
+
+        discovery_module = importlib.import_module("finagent.agents.annual_discovery")
+        context = build_annual_discovery_context(
+            binding_source_report, archived_pdf_path, source_record,
+            system_prompt=discovery_module._load_prompt("annual_discovery_v5"),
+            model_name=settings.model, plan_version=PERIOD_HEADER_PLAN_VERSION, parsed_pdf=parsed_pdf,
+        )
+        binding = build_annual_discovery_binding_from_context(
+            context, settings=settings, report=binding_source_report, analysis_mode=request_mode,
+        )
+        request_identity = {
+            "company_id": identity["company_id"], "report_year": identity["report_year"],
+            "document_id": identity["source_document_id"], "sha256": identity["source_sha256"],
+            "mode": request_mode,
+        }
+    pipeline_binding = build_annual_issue_pipeline_binding_v11(
         _repository_root(), request_identity, settings=settings,
-        report=binding_source_report, parsed_pdf=parsed_pdf,
+        report=binding_source_report, parsed_pdf=parsed_pdf, discovery_binding=binding,
     )
     parent_archive = None
     parent_report: Mapping[str, Any] | None = None
@@ -473,7 +391,7 @@ def _run_recoverable_appendix(
                 settings=settings,
                 archive=parent_archive,
                 parsed_pdf=parsed_pdf,
-                require_issue_pipeline_v5=True,
+                require_issue_pipeline=True,
             )
             if not capability.get("can_resume"):
                 rejection_reason = _safe_recovery_reason(
@@ -514,6 +432,7 @@ def _run_recoverable_appendix(
                 settings=settings,
                 run_dir=run_dir,
                 execution_binding=binding,
+                pipeline_binding=pipeline_binding,
                 parsed_pdf=parsed_pdf,
                 requested_parent_run_id=resume_parent_run_id,
                 reason=rejection_reason,
@@ -632,6 +551,26 @@ def _run_recoverable_appendix(
                 raise _RecoveryCheckpointError("annual_checkpoint_persist_failed") from None
 
     reusable_items = _reusable_parent_items(parent_investigation)
+    reused_evidence_ids = {
+        evidence_id
+        for item in reusable_items
+        for evidence_id in item.get("narrative_evidence_ids", [])
+    }
+    reusable_narrative_evidences = tuple(
+        NarrativeSnippet(
+            evidence_id=row["evidence_id"],
+            source_document_id=row["source_document_id"],
+            source_sha256=row["source_sha256"],
+            signal_ids=tuple(row["signal_ids"]),
+            section_label=row["section_label"],
+            pdf_page=row["pdf_page"],
+            bbox=tuple(row["bbox"][key] for key in ("x0", "y0", "x1", "y1")),
+            raw_text=row["raw_text"],
+            selection_reason=row["selection_reason"],
+        )
+        for row in (parent_archive.narrative_evidences if parent_archive is not None else ())
+        if row["evidence_id"] in reused_evidence_ids
+    )
 
     def discovery_checkpoint(value: Mapping[str, object]) -> None:
         nonlocal latest_issue_pipeline
@@ -648,7 +587,7 @@ def _run_recoverable_appendix(
     # call. This state is replaced with the complete current finding ledger at
     # every discovery checkpoint and never claims no_findings prematurely.
     before = _run_children(run_dir)
-    stage_limits = dict(stage_time_limits_seconds or runtime_stage_time_limits(300))
+    stage_limits = dict(stage_time_limits_seconds or runtime_stage_time_limits(MAIN_REPORT_BUDGET_SECONDS))
     discovery_started = time.monotonic()
     discovery_deadline = min(
         value for value in (
@@ -745,6 +684,7 @@ def _run_recoverable_appendix(
             settings=settings,
             run_dir=run_dir,
             reusable_items=reusable_items,
+            reusable_narrative_evidences=reusable_narrative_evidences,
             checkpoint_callback=lambda partial: publish(discovery, partial),
             parsed_pdf=parsed_pdf,
             deadline=fixed_deadline,
@@ -817,7 +757,7 @@ def _run_recoverable_appendix(
     issue_started = time.monotonic()
     issue_deadline = min(
         value for value in (
-            issue_started + int(stage_limits.get("annual_issue_grouping", 35)),
+            issue_started + int(stage_limits.get("annual_issue_grouping", ISSUE_GROUPING_RESERVED_SECONDS)),
             main_soft_deadline,
         ) if value is not None
     )
@@ -902,12 +842,28 @@ def _reusable_parent_items(value: Mapping[str, Any] | None) -> list[Mapping[str,
     raw = value.get("items")
     if not isinstance(raw, list):
         return []
+    raw_evidences = value.get("narrative_evidences", [])
+    evidence_by_id = {
+        evidence["evidence_id"]: evidence
+        for evidence in raw_evidences
+        if isinstance(evidence, Mapping) and isinstance(evidence.get("evidence_id"), str)
+    } if isinstance(raw_evidences, list) else {}
     items = []
     for item in raw:
         if not isinstance(item, Mapping):
             continue
         if item.get("status") == "interpretation":
-            items.append(item)
+            evidence_ids = item.get("narrative_evidence_ids")
+            if (
+                isinstance(evidence_ids, list)
+                and all(
+                    isinstance(evidence_id, str)
+                    and evidence_id in evidence_by_id
+                    and item.get("signal_id") in evidence_by_id[evidence_id].get("signal_ids", [])
+                    for evidence_id in evidence_ids
+                )
+            ):
+                items.append(item)
         elif (
             item.get("status") == "abstained"
             and isinstance(item.get("reason"), str)
@@ -1425,6 +1381,9 @@ def _invoke_discovery(
             status=status,
         )
         result["audit_artifacts"] = audits
+        versions = {audit["prompt_version"] for audit in audits}
+        if len(versions) == 1:
+            result["prompt_version"] = next(iter(versions))
         result["model_call_attempt_count"] = attempts
         result["model_call_count"] = responses
         result["model_called"] = attempts > 0
@@ -1456,7 +1415,7 @@ def _not_called_discovery(
         "kind": "fintrace_annual_discovery",
         **dict(identity),
         "status": status,
-        "prompt_version": "annual_discovery_v2",
+        "prompt_version": "annual_discovery_v5",
         "model_called": False,
         "model_call_count": 0,
         "model_call_attempt_count": 0,
@@ -1496,18 +1455,11 @@ def _invoke_review(
 ) -> dict[str, Any]:
     agent = importlib.import_module("finagent.agents.annual_review")
     with annual_call_deadline(deadline):
-        runner = (
-            agent.run_annual_model_review_v3
-            if isinstance(investigation.get("model_issue_pipeline"), Mapping)
-            and investigation["model_issue_pipeline"].get("kind") == "annual_issue_pipeline_v1"
-            else agent.run_annual_model_review
-        )
-        return runner(
-            report,
-            investigation,
-            settings,
-            run_dir=run_dir,
-            artifacts_root=artifacts_root,
+        pipeline = investigation.get("model_issue_pipeline")
+        if not isinstance(pipeline, Mapping) or pipeline.get("kind") != "annual_issue_pipeline_v1":
+            raise ValueError("annual_review_issue_pipeline_missing")
+        return agent.run_annual_model_review_v3(
+            report, investigation, settings, run_dir=run_dir, artifacts_root=artifacts_root,
         )
 
 
@@ -1907,6 +1859,7 @@ def _invoke_agent(
     settings: ModelSettings,
     run_dir: Path,
     reusable_items: list[Mapping[str, object]] | tuple[Mapping[str, object], ...] = (),
+    reusable_narrative_evidences: tuple[NarrativeSnippet, ...] = (),
     checkpoint_callback: Any | None = None,
     parsed_pdf: object | None = None,
     deadline: float | None = None,
@@ -1931,6 +1884,7 @@ def _invoke_agent(
             settings,
             run_dir=run_dir,
             reusable_items=reusable_items,
+            reusable_narrative_evidences=reusable_narrative_evidences,
             checkpoint_callback=checkpoint_callback,
             parsed_pdf=parsed_pdf,
         )
@@ -2041,7 +1995,7 @@ def _discover_new_discovery_audits(
                     "response_path": f"{audit_dir}/response.json" if response.is_file() else None,
                     "failure_path": f"{audit_dir}/failure.json" if failure.is_file() else None,
                     "status": status,
-                    "prompt_version": "annual_discovery_v2",
+                    "prompt_version": json.loads(request.read_text(encoding="utf-8"))["prompt_version"],
                 },
             )
         )
@@ -2064,7 +2018,9 @@ def _discovery_batch_index(request_path: Path, identity: Mapping[str, Any]) -> i
         if request_path.stat().st_size > 2 * 1024 * 1024:
             return None
         request = json.loads(request_path.read_text(encoding="utf-8"))
-        if not isinstance(request, Mapping) or request.get("prompt_version") != "annual_discovery_v2":
+        if not isinstance(request, Mapping) or request.get("prompt_version") not in {
+            "annual_discovery_v1", "annual_discovery_v2", "annual_discovery_v3", "annual_discovery_v4", "annual_discovery_v5",
+        }:
             return None
         messages = request.get("messages")
         if not isinstance(messages, list) or len(messages) != 2:

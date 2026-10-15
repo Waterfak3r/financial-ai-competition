@@ -39,6 +39,7 @@ _AMOUNT_RE = re.compile(
 )
 _DATE_RE = re.compile(r"(\d{4})年(\d{1,2})月(\d{1,2})日")
 _CURRENCY_RE = re.compile(r"币种\s*[:：]\s*(人民币|美元|港币|港元|欧元|日元|英镑|新加坡元)")
+_NOTE_TOKEN_RE = re.compile(r"^(?:[一二三四五六七八九十]+、\d+|(?:附注)?\d+)$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,8 +222,7 @@ def _table_context(body: list[_Line], report_year: int) -> tuple[_Context | None
     if set(years) != {report_year, report_year - 1}:
         return None, ("missing_year_header", "表头没有同时披露报告年和上一年的年末列。")
 
-    unit_lines = [line for line in body if re.search(r"^单位\s*[:：]", _compact(line.text))]
-    parsed_units = [_parse_unit(line.text) for line in unit_lines]
+    unit_lines, parsed_units = _unit_disclosures(body)
     if not parsed_units or any(item is None for item in parsed_units):
         return None, ("missing_unit", "表头缺少明确单位，无法规范化金额。")
     unit_signatures = [item for item in parsed_units if item is not None]
@@ -260,10 +260,28 @@ def _parse_unit(text: str) -> tuple[str, str | None, Decimal] | None:
 
 def _row_candidates(body: list[_Line], row_name: str) -> list[tuple[_Line, tuple[str, ...]]]:
     candidates: list[tuple[_Line, tuple[str, ...]]] = []
+    used_blocks: set[tuple[int, int]] = set()
+    for key, pieces in _lines_by_block(body).items():
+        hits = [
+            _row_from_block_pieces(pieces, index)
+            for index, piece in enumerate(pieces)
+            if _has_exact_row_prefix(_compact(piece.text), row_name)
+        ]
+        if not hits:
+            continue
+        if _block_has_split_rows(pieces) or len(hits) > 1:
+            used_blocks.add(key)
+            candidates.extend(hits)
+            continue
+        row, amounts = hits[0]
+        if len(amounts) != 2:
+            continue
+        used_blocks.add(key)
+        candidates.append((row, amounts))
     seen_blocks: set[tuple[int, int]] = set()
     for line in body:
         key = (line.page_number, line.block.block_index)
-        if key in seen_blocks:
+        if key in used_blocks or key in seen_blocks:
             continue
         seen_blocks.add(key)
         row = _Line(line.page_number, line.block, line.block.text)
@@ -276,6 +294,83 @@ def _row_candidates(body: list[_Line], row_name: str) -> list[tuple[_Line, tuple
         candidates.append((row, amounts))
     return candidates
 
+
+def _unit_disclosures(
+    body: list[_Line],
+) -> tuple[list[_Line], list[tuple[str, str | None, Decimal] | None]]:
+    lines: list[_Line] = []
+    parsed: list[tuple[str, str | None, Decimal] | None] = []
+    for index, line in enumerate(body):
+        if not re.search(r"^单位\s*[:：]", _compact(line.text)):
+            continue
+        value = _parse_unit(line.text)
+        if value is None or value[1] is None:
+            following = _next_nonempty_line(body, index)
+            if following is not None and re.search(r"^币种\s*[:：]", _compact(following.text)):
+                value = _parse_unit(f"{line.text} {following.text}")
+        lines.append(line)
+        parsed.append(value)
+    return lines, parsed
+
+
+def _next_nonempty_line(body: list[_Line], index: int) -> _Line | None:
+    page = body[index].page_number
+    for line in body[index + 1 :]:
+        if line.page_number != page:
+            return None
+        if _compact(line.text):
+            return line
+    return None
+
+
+def _lines_by_block(body: list[_Line]) -> dict[tuple[int, int], list[_Line]]:
+    grouped: dict[tuple[int, int], list[_Line]] = {}
+    for line in body:
+        grouped.setdefault((line.page_number, line.block.block_index), []).append(line)
+    return grouped
+
+
+def _row_from_block_pieces(pieces: list[_Line], start: int) -> tuple[_Line, tuple[str, ...]]:
+    matched = pieces[start]
+    matched_compact = _compact(matched.text)
+    window = [matched]
+    collected: list[str] = list(_piece_amounts(matched.text))
+    for piece in pieces[start + 1 :]:
+        if len(collected) >= 2:
+            break
+        if _is_new_row_label(piece.text, matched_compact):
+            break
+        window.append(piece)
+        collected.extend(_piece_amounts(piece.text))
+    row_text = " ".join(piece.text.strip() for piece in window if piece.text.strip())
+    return _Line(matched.page_number, matched.block, row_text), tuple(collected)
+
+
+def _block_has_split_rows(pieces: list[_Line]) -> bool:
+    return len(pieces) > 1 or any("\n" in piece.block.text for piece in pieces)
+
+
+def _piece_amounts(text: str) -> tuple[str, ...]:
+    return tuple(match.group(0).strip() for match in _AMOUNT_RE.finditer(text))
+
+
+def _is_note_or_amount_only(text: str) -> bool:
+    compact = _compact(text)
+    if not compact or _NOTE_TOKEN_RE.fullmatch(compact):
+        return True
+    remainder = _AMOUNT_RE.sub("", text)
+    return _compact(remainder) == ""
+
+
+def _is_new_row_label(text: str, matched_compact: str) -> bool:
+    compact = _compact(text)
+    if _is_note_or_amount_only(text):
+        return False
+    if compact in matched_compact:
+        return False
+    if compact.startswith(("（", "(", "“", '"', "‘", "'", "－", "—", "-", "号填列")):
+        return False
+    return bool(re.search(r"[\u4e00-\u9fff]", text))
 
 def _has_exact_row_prefix(compact: str, row_name: str) -> bool:
     if not compact.startswith(row_name):
@@ -331,9 +426,9 @@ def _evidence(
         title_region=_region(title),
         unit_region=_region(context.unit_line),
         extraction_method="parsed_pdf_balance_sheet_row_and_date_columns",
-        surrounding_text=row.block.text,
+        surrounding_text=row.text,
         limitations=(
-            "定位坐标来自 ParsedTextPdf 文字块，值框包含整行文字块；须重新读取原始 PDF 独立核验。",
+            "定位坐标来自 ParsedTextPdf 文字块，值框仅作原文候选定位，不声称精确行核验；须重新读取原始 PDF 独立核验。",
             "未知追溯调整状态不表示两列已证实可比。",
         ),
     )
@@ -342,7 +437,7 @@ def _evidence(
 def _region(line: _Line) -> SourceRegion:
     block = line.block
     return SourceRegion(
-        text=block.text,
+        text=line.text,
         page=line.page_number,
         bbox=PdfBBox(block.bbox.x0, block.bbox.y0, block.bbox.x1, block.bbox.y1),
     )

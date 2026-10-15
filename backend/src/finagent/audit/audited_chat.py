@@ -9,6 +9,7 @@ run_dir 必须是本仓库 artifacts/runs 的直接子目录。
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 import uuid
@@ -101,7 +102,7 @@ def audited_complete_chat(
     secret = settings.api_key
     now = time.monotonic()
     timeout = settings.timeout_seconds if timeout_seconds is None else timeout_seconds
-    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout < 0:
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout < 0:
         raise ValueError("timeout_seconds must be a finite non-negative number")
     deadline = now + float(timeout)
     workflow_deadline = _ANNUAL_CALL_DEADLINE.get()

@@ -14,6 +14,12 @@ from typing import Any
 
 from finagent.audit import EvidenceRef, audited_complete_chat
 from finagent.audit.audited_chat import repository_runs_root
+from finagent.core.annual_work_budget import (
+    BUDGET_CONTRACT_VERSION,
+    GLOBAL_REQUEST_LIMIT_CHARS,
+    MODEL_CALL_TIMEOUT_SECONDS,
+    REVIEW_REQUEST_LIMIT_CHARS,
+)
 from finagent.core.model_settings import ModelSettings
 from finagent.llm.chat_completion import ChatMessage
 from finagent.llm.chat_completion import serialize_chat_body
@@ -212,7 +218,7 @@ def run_annual_model_review_v3(
     report: Mapping[str, Any], investigation: Mapping[str, Any], settings: ModelSettings,
     *, run_dir: Path, artifacts_root: Path,
 ) -> dict[str, Any]:
-    """Review the entire v5 candidate and issue path under one explicit bound."""
+    """Review the entire issue-pipeline candidate path under the activity v9 bound."""
 
     identity = _report_identity(report)
     result = not_called_model_review_v3(report, "annual_review_v3_input_invalid", status="failed")
@@ -231,17 +237,19 @@ def run_annual_model_review_v3(
     review_request = None
     try:
         prompt = _V3_PROMPT_PATH.read_text(encoding="utf-8")
+        limit = _activity_review_request_limit_chars(investigation)
         review_input, allowed_ids, evidence_refs, no_priority_allowed = _build_review_input_v3(
             report, investigation, identity, request_model=settings.model,
-            system_prompt=prompt,
+            system_prompt=prompt, max_request_chars=limit,
         )
         review_request = build_annual_review_v3_request(review_input, model=settings.model, system_prompt=prompt)
         messages = review_request["messages"]
-        if review_request["request_chars"] > V3_MAX_REQUEST_CHARS:
+        if review_request["request_chars"] > limit:
             return not_called_model_review_v3(report, "annual_review_v3_request_budget_exceeded", status="abstained")
         audited = audited_complete_chat(
             messages, settings, run_dir=run_dir, evidence_refs=evidence_refs,
             prompt_version=V3_PROMPT_VERSION, call_stage="annual_review",
+            timeout_seconds=MODEL_CALL_TIMEOUT_SECONDS,
         )
         audit = _audit_artifact_v3(
             audited.audit_dir, artifacts_root, "succeeded", messages=messages,
@@ -262,6 +270,8 @@ def run_annual_model_review_v3(
             "prompt_version": V3_PROMPT_VERSION,
         }
     except Exception as exc:
+        if isinstance(exc, ValueError) and str(exc) == "annual_review_v3_execution_binding_invalid":
+            return not_called_model_review_v3(report, "annual_review_v3_execution_binding_invalid", status="failed")
         if isinstance(exc, ValueError) and str(exc) in {"annual_review_request_budget_exceeded", "annual_review_v3_request_budget_exceeded"}:
             return not_called_model_review_v3(report, "annual_review_v3_request_budget_exceeded", status="abstained")
         if audited is not None:
@@ -874,6 +884,31 @@ def _build_review_input(
 
 
 
+def _activity_review_request_limit_chars(investigation: Mapping[str, Any]) -> int:
+    """Admit activity review only from the v11 same-page source-context contract."""
+
+    pipeline = investigation.get("model_issue_pipeline")
+    binding = pipeline.get("execution_binding") if isinstance(pipeline, Mapping) else None
+    if (
+        not isinstance(binding, Mapping)
+        or binding.get("kind") != "fintrace_annual_execution_binding_v11"
+        or binding.get("execution_version") != "execution_v11"
+        or binding.get("budget_contract_version") != BUDGET_CONTRACT_VERSION
+        or type(binding.get("global_request_limit_chars")) is not int
+        or binding.get("global_request_limit_chars") != GLOBAL_REQUEST_LIMIT_CHARS
+        or type(binding.get("review_request_limit_chars")) is not int
+        or binding.get("review_request_limit_chars") != REVIEW_REQUEST_LIMIT_CHARS
+        or type(binding.get("model_call_timeout_seconds")) is not float
+        or binding.get("model_call_timeout_seconds") != MODEL_CALL_TIMEOUT_SECONDS
+        or binding.get("grouping_shard_plan_version") != "member_bounded_v2"
+        or type(binding.get("grouping_shard_max_members")) is not int
+        or binding.get("grouping_shard_max_members") != 3
+    ):
+        raise ValueError("annual_review_v3_execution_binding_invalid")
+    return REVIEW_REQUEST_LIMIT_CHARS
+
+
+
 def _build_review_input_v3(
     report: Mapping[str, Any],
     investigation: Mapping[str, Any],
@@ -882,8 +917,14 @@ def _build_review_input_v3(
     request_model: str,
     system_prompt: str,
     enforce_budget: bool = True,
+    max_request_chars: int = V3_MAX_REQUEST_CHARS,
 ) -> tuple[dict[str, Any], set[str], list[EvidenceRef], bool]:
     """Build an untruncated v3 semantic input; size failure abstains as a whole."""
+    if type(max_request_chars) is not int or max_request_chars <= 0:
+        raise ValueError("annual_review_v3_request_budget_invalid")
+    if max_request_chars > REVIEW_REQUEST_LIMIT_CHARS:
+        raise ValueError("annual_review_v3_request_budget_invalid")
+
 
     confirmed = report.get("confirmed")
     if not isinstance(confirmed, Mapping):
@@ -1244,7 +1285,7 @@ def _build_review_input_v3(
     )
     review_input["coverage"]["no_priority_eligible"] = no_priority_allowed
     request = build_annual_review_v3_request(review_input, model=request_model, system_prompt=system_prompt)
-    if enforce_budget and request["request_chars"] > V3_MAX_REQUEST_CHARS:
+    if enforce_budget and request["request_chars"] > max_request_chars:
         raise ValueError("annual_review_v3_request_budget_exceeded")
     refs = [EvidenceRef(str(identity["source_document_id"]), page) for page in sorted(pages)]
     return review_input, allowed, refs, no_priority_allowed

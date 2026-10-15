@@ -19,6 +19,7 @@ from finagent.agents.annual_discovery import (
     run_annual_discovery,
 )
 from finagent.audit import audited_chat
+from finagent.core.annual_work_budget import BUDGET_CONTRACT_VERSION
 from finagent.core.model_settings import ModelSettings
 from finagent.llm.chat_completion import ChatCompletion, ModelResponseError
 from finagent.retrieval.annual_discovery_context import (
@@ -101,6 +102,28 @@ def _valid_response(evidence_id: str, quote: str, *, title: str = "未预设的�
         },
         ensure_ascii=False,
     )
+
+
+def _compact_response(alias: str, quote: str, *, title: str = "未预设的渠道政策变化") -> str:
+    value = json.loads(_valid_response(alias, quote, title=title))
+    for finding in value["findings"]:
+        for citation in finding["citations"]:
+            citation["fragment_alias"] = citation.pop("evidence_id")
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _active_binding(report, record, *, plan_sha256="c" * 64):
+    return {
+        "source_sha256": record["sha256"], "company_id": report["company_id"],
+        "report_year": report["report_year"], "source_document_id": record["document_id"],
+        "analysis_mode": "model_investigation", "provider_model_fingerprint": "a" * 64,
+        "model": "local-mock", "prompts_sha256": "b" * 64,
+        "parser_version": "annual-discovery-parser-v3-execution-v4",
+        "plan_sha256": plan_sha256, "m3_binding_sha256": None,
+        "plan_version": COMPACT_PLAN_VERSION, "execution_version": "execution_v4",
+        "prompt_version": "annual_discovery_v4",
+        "prompt_sha256": hashlib.sha256((annual_discovery._PROMPT_ROOT / "annual_discovery_v4.md").read_bytes()).hexdigest(),
+    }
 
 
 def _batch(batch_index: int = 1, raw_text: str = "客户甲在2025年度调整了交易安排，金额为120万元。") -> DiscoveryBatch:
@@ -250,6 +273,140 @@ def test_v3_parser_maps_only_current_batch_alias_and_validates_exact_quote() -> 
     assert rejected.rejected_findings == 1
     assert empty.findings == ()
     assert empty.rejected_findings == 0
+
+
+@pytest.mark.parametrize("field", ["title", "observation", "why_it_matters", "follow_up", "limitations"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "无法独立核实公司披露原因及是否存在舞弊。",
+        "进一步核查是否存在舞弊。",
+        "是否确认存在舞弊仍需核查。",
+        "是否确认不存在舞弊仍需核查。",
+        "是否确认没有舞弊仍需核查。",
+        "是否确认排除舞弊仍需核查。",
+        "是否不存在舞弊仍需核查。",
+        "是否排除舞弊仍需核查。",
+    ],
+)
+def test_v3_parser_retains_cited_finding_with_local_question(field: str, text: str) -> None:
+    fragment = _batch().fragments[0]
+    aliases = _batch_aliases((fragment,), 2)
+    batch = DiscoveryBatch(
+        2, (fragment,), len(fragment.raw_text), 1200,
+        plan_version=COMPACT_PLAN_VERSION, aliases=aliases,
+    )
+    quote = "客户甲在2025年度调整了交易安排"
+    value = json.loads(_compact_response(aliases[0][1], quote))
+    if field == "limitations":
+        value[field] = [text]
+    else:
+        value["findings"][0][field] = text
+
+    parsed = parse_annual_discovery_response_v3(json.dumps(value, ensure_ascii=False), batch)
+
+    assert len(parsed.findings) == 1
+    assert parsed.rejected_findings == 0
+    assert parsed.restored_quotes == 0
+    assert parsed.findings[0].citations == ((fragment.evidence_id, quote),)
+    assert parsed.limitations == tuple(value["limitations"])
+    if field != "limitations":
+        assert getattr(parsed.findings[0], field) == text
+
+
+@pytest.mark.parametrize("field", ["title", "observation", "why_it_matters", "follow_up", "limitations"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "公司确认存在舞弊。",
+        "公司确认不存在舞弊。",
+        "是否存在舞弊仍需核查；公司确认存在舞弊。",
+        "是否确认存在舞弊仍需核查但公司确认不存在舞弊。",
+        "是否确认不存在舞弊仍需核查，公司排除舞弊。",
+        "是否确认存在舞弊仍需核查且公司确认存在舞弊。",
+        "是否确认不存在舞弊仍需核查且公司确认不存在舞弊。",
+        "是否不存在舞弊且存在舞弊。",
+        "是否确认没有舞弊且公司确认存在舞弊。",
+        "是否确认排除舞弊且公司排除舞弊。",
+        "是否影响采购定价及存在舞弊。",
+        "是否影响采购定价及公司确认不存在舞弊。",
+        "无法独立核实公司披露原因及交易过程的完整记录，存在舞弊。",
+        "是否影响采购定价，但公司确认存在舞弊。",
+    ],
+)
+def test_v3_parser_rejects_definitive_conclusion_outside_local_question(
+    field: str, text: str
+) -> None:
+    fragment = _batch().fragments[0]
+    aliases = _batch_aliases((fragment,), 2)
+    batch = DiscoveryBatch(
+        2, (fragment,), len(fragment.raw_text), 1200,
+        plan_version=COMPACT_PLAN_VERSION, aliases=aliases,
+    )
+    value = json.loads(_compact_response(aliases[0][1], "客户甲在2025年度调整了交易安排"))
+    if field == "limitations":
+        value[field] = [text]
+        with pytest.raises(ValueError, match="definitive_conclusion_forbidden"):
+            parse_annual_discovery_response_v3(json.dumps(value, ensure_ascii=False), batch)
+    else:
+        value["findings"][0][field] = text
+        parsed = parse_annual_discovery_response_v3(json.dumps(value, ensure_ascii=False), batch)
+        assert parsed.findings == ()
+        assert parsed.rejected_findings == 1
+
+
+@pytest.mark.parametrize("prefix", ["是否", "无法"])
+def test_v3_parser_does_not_extend_question_or_negation_across_fields(prefix: str) -> None:
+    fragment = _batch().fragments[0]
+    aliases = _batch_aliases((fragment,), 2)
+    batch = DiscoveryBatch(
+        2, (fragment,), len(fragment.raw_text), 1200,
+        plan_version=COMPACT_PLAN_VERSION, aliases=aliases,
+    )
+    value = json.loads(_compact_response(aliases[0][1], "客户甲在2025年度调整了交易安排"))
+    value["findings"][0]["title"] = "需要核查" + prefix
+    value["findings"][0]["observation"] = "确认存在舞弊。"
+
+    parsed = parse_annual_discovery_response_v3(json.dumps(value, ensure_ascii=False), batch)
+
+    assert parsed.findings == ()
+    assert parsed.rejected_findings == 1
+
+
+def test_v3_parser_local_question_does_not_excuse_quote_from_wrong_alias() -> None:
+    fragments = (_batch().fragments[0], _batch(2, "公司披露库存上升主要是增加备货所致。").fragments[0])
+    aliases = _batch_aliases(fragments, 2)
+    batch = DiscoveryBatch(
+        2, fragments, sum(len(fragment.raw_text) for fragment in fragments), 1200,
+        plan_version=COMPACT_PLAN_VERSION, aliases=aliases,
+    )
+    value = json.loads(_compact_response(aliases[0][1], fragments[1].raw_text))
+    value["limitations"] = ["无法独立核实公司披露原因及是否存在舞弊。"]
+
+    parsed = parse_annual_discovery_response_v3(json.dumps(value, ensure_ascii=False), batch)
+
+    assert parsed.findings == ()
+    assert parsed.rejected_findings == 1
+    assert parsed.restored_quotes == 0
+    assert parsed.limitations == tuple(value["limitations"])
+
+
+def test_existing_parser_keeps_separate_adjacent_explanation_citations_and_rejects_joined_quote() -> None:
+    rows = ("商誉 123.45 234.56", "主要是本期计提商誉减值所致。", "公司披露销售价格下降。")
+    fragments = tuple(DiscoveryFragment(
+        evidence_id=f"adisc-{'a' * 12}-p7-b{index}-c0-{index:012x}",
+        pdf_page=7, block_index=index, start_char=0,
+        bbox=(30.0 + index * 150, 300.0, 150.0 + index * 150, 312.0), raw_text=text,
+    ) for index, text in enumerate(rows))
+    aliases = _batch_aliases(fragments, 4)
+    batch = DiscoveryBatch(4, fragments, sum(map(len, rows)), 1400, plan_version=COMPACT_PLAN_VERSION, aliases=aliases)
+    value = json.loads(_compact_response(aliases[0][1], rows[0], title="商誉余额变动待核查"))
+    value["findings"][0]["citations"] = [{"fragment_alias": alias, "quote": text} for (_, alias), text in zip(aliases, rows, strict=True)]
+    accepted = parse_annual_discovery_response_v3(json.dumps(value, ensure_ascii=False), batch)
+    assert accepted.findings[0].citations == tuple((fragment.evidence_id, fragment.raw_text) for fragment in fragments)
+    value["findings"][0]["citations"] = [{"fragment_alias": aliases[0][1], "quote": " ".join(rows)}]
+    rejected = parse_annual_discovery_response_v3(json.dumps(value, ensure_ascii=False), batch)
+    assert rejected.findings == () and rejected.rejected_findings == 1
 
 
 @pytest.mark.parametrize(
@@ -509,6 +666,8 @@ def _run(
         record,
         settings,
         run_dir=run_dir,
+        execution_binding=_active_binding(report, record),
+        main_soft_deadline=annual_discovery._monotonic_clock() + 360,
         progress_callback=callback,
         max_concurrency=max_concurrency,
     )
@@ -529,8 +688,8 @@ def test_graph_scans_without_fixed_candidates_and_audits_only_safe_source_refs(
     def responder(messages, settings):
         user = json.loads(messages[1].content)
         fragment = user["fragments"][0]
-        quote = fragment["raw_text"].strip()[:16]
-        return _valid_response(fragment["evidence_id"], quote)
+        quote = fragment[2].strip()[:16]
+        return _compact_response(fragment[0], quote)
 
     _patch_local_audit(monkeypatch, runs_root, responder)
     progress: list[dict[str, object]] = []
@@ -541,6 +700,12 @@ def test_graph_scans_without_fixed_candidates_and_audits_only_safe_source_refs(
     assert report["pending_review"]["candidate_signals"] == []
     assert payload["kind"] == "fintrace_annual_discovery"
     assert payload["status"] == "completed", payload
+    assert payload["prompt_version"] == "annual_discovery_v4"
+    contract = payload["execution_contract"]
+    assert contract["binding"]["prompt_version"] == "annual_discovery_v4"
+    assert contract["binding"]["plan_version"] == COMPACT_PLAN_VERSION
+    assert contract["binding"]["parser_version"] == "annual-discovery-parser-v3-execution-v4"
+    assert contract["binding"]["prompt_sha256"] == hashlib.sha256((annual_discovery._PROMPT_ROOT / "annual_discovery_v4.md").read_bytes()).hexdigest()
     assert payload["model_called"] is True
     assert payload["model_call_count"] == payload["model_call_attempt_count"] == 1
     assert payload["coverage"]["complete"] is True
@@ -559,6 +724,9 @@ def test_graph_scans_without_fixed_candidates_and_audits_only_safe_source_refs(
     response_path = project_root / Path(artifact["response_path"])
     request = json.loads(request_path.read_text(encoding="utf-8"))
     assert request["evidence_refs"] == [{"document_id": record["document_id"], "page": 1}]
+    assert request["prompt_version"] == "annual_discovery_v4"
+    batch_input = json.loads(request["messages"][1]["content"])
+    assert all(isinstance(fragment, list) and len(fragment) == 3 for fragment in batch_input["fragments"])
     request_text = request_path.read_text(encoding="utf-8")
     assert "unit-test-secret" not in request_text
     assert "https://model.invalid" not in request_text
@@ -577,24 +745,12 @@ def test_v3_public_entry_emits_supported_initial_and_terminal_progress(
     run_dir = runs_root / report["run_id"]
     run_dir.mkdir(parents=True)
     settings = ModelSettings("https://model.invalid/v1", "unit-test-secret", "local-mock")
-    binding = {
-        "source_sha256": digest,
-        "company_id": report["company_id"],
-        "report_year": report["report_year"],
-        "source_document_id": record["document_id"],
-        "analysis_mode": "model_investigation",
-        "provider_model_fingerprint": "a" * 64,
-        "model": settings.model,
-        "prompts_sha256": "b" * 64,
-        "parser_version": "annual-discovery-parser-v2-execution-v3",
-        "plan_sha256": "c" * 64,
-        "m3_binding_sha256": None,
-    }
+    binding = _active_binding(report, record)
 
     def responder(messages, _settings):
         user = json.loads(messages[1].content)
         fragment = user["fragments"][0]
-        return _valid_response(fragment["evidence_id"], fragment["raw_text"][:16])
+        return _compact_response(fragment[0], fragment[2][:16])
 
     _patch_local_audit(monkeypatch, runs_root, responder)
     progress: list[dict[str, object]] = []
@@ -645,19 +801,7 @@ def test_v3_public_entry_reuses_parent_batch_and_retains_accepted_finding(tmp_pa
     run_dir.mkdir(parents=True)
     monkeypatch.setattr(annual_discovery, "repository_runs_root", lambda: runs_root)
     settings = ModelSettings("https://model.invalid/v1", "unit-test-secret", "local-mock")
-    binding = {
-        "source_sha256": digest,
-        "company_id": report["company_id"],
-        "report_year": report["report_year"],
-        "source_document_id": record["document_id"],
-        "analysis_mode": "model_investigation",
-        "provider_model_fingerprint": "a" * 64,
-        "model": settings.model,
-        "prompts_sha256": "b" * 64,
-        "parser_version": "annual-discovery-parser-v2-execution-v3",
-        "plan_sha256": "c" * 64,
-        "m3_binding_sha256": None,
-    }
+    binding = _active_binding(report, record)
     parent_finding = {
         "finding_id": "disc:parent-accepted-finding",
         "batch_index": 1,
@@ -676,6 +820,8 @@ def test_v3_public_entry_reuses_parent_batch_and_retains_accepted_finding(tmp_pa
         "run_id": "annual-discovery-v3-parent-retained",
         "findings": [parent_finding],
         "execution_contract": {
+            "kind": "fintrace_annual_discovery_execution_v10",
+            "binding": copy.deepcopy(binding),
             "batches": [{"batch_index": 1, "state": "succeeded"}],
         },
     }
@@ -718,21 +864,7 @@ def test_v4_langgraph_preserves_resume_budget_scope_and_monotonic_timing(tmp_pat
     _patch_local_audit(monkeypatch, runs_root, responder)
 
     def binding_for(report, record):
-        return {
-            "source_sha256": digest,
-            "company_id": report["company_id"],
-            "report_year": report["report_year"],
-            "source_document_id": record["document_id"],
-            "analysis_mode": "model_investigation",
-            "provider_model_fingerprint": "a" * 64,
-            "model": settings.model,
-            "prompts_sha256": "b" * 64,
-            "parser_version": "annual-discovery-parser-v3-execution-v4",
-            "plan_sha256": "c" * 64,
-            "m3_binding_sha256": None,
-            "plan_version": "annual_discovery_plan_v3",
-            "execution_version": "execution_v4",
-        }
+        return _active_binding(report, record)
 
     new_report, new_record = _inputs(path, digest, run_id="annual-discovery-v4-new-budget")
     new_run_dir = runs_root / new_report["run_id"]
@@ -741,7 +873,7 @@ def test_v4_langgraph_preserves_resume_budget_scope_and_monotonic_timing(tmp_pat
         new_report,
         path,
         new_record,
-        system_prompt=annual_discovery._load_prompt("annual_discovery_v3"),
+        system_prompt=annual_discovery._load_prompt("annual_discovery_v4"),
         model_name=settings.model,
         plan_version=COMPACT_PLAN_VERSION,
     )
@@ -788,7 +920,8 @@ def test_v4_langgraph_preserves_resume_budget_scope_and_monotonic_timing(tmp_pat
         "run_id": "annual-discovery-v4-parent-budget",
         "findings": [],
         "execution_contract": {
-            "kind": "fintrace_annual_discovery_execution_v4",
+            "kind": "fintrace_annual_discovery_execution_v10",
+            "binding": binding_for(child_report, child_record),
             "batches": [],
         },
     }
@@ -808,6 +941,7 @@ def test_v4_langgraph_preserves_resume_budget_scope_and_monotonic_timing(tmp_pat
     new_contract = new_result["execution_contract"]
     resumed_contract = resumed_result["execution_contract"]
     assert new_result["status"] == resumed_result["status"] == "completed"
+    assert new_contract["kind"] == resumed_contract["kind"] == "fintrace_annual_discovery_execution_v10"
     assert new_contract["phase_budget"]["scope"] == "new_run"
     assert resumed_contract["parent_run_id"] == parent_discovery["run_id"]
     assert resumed_contract["phase_budget"]["scope"] == "resume"
@@ -837,7 +971,7 @@ def _controlled_v4_inputs(tmp_path: Path, run_id: str, *, page_count: int = 6):
         report,
         path,
         record,
-        system_prompt=annual_discovery._load_prompt("annual_discovery_v3"),
+        system_prompt=annual_discovery._load_prompt("annual_discovery_v4"),
         model_name=settings.model,
         plan_version=COMPACT_PLAN_VERSION,
     )
@@ -848,21 +982,7 @@ def _controlled_v4_inputs(tmp_path: Path, run_id: str, *, page_count: int = 6):
         separators=(",", ":"),
         allow_nan=False,
     ).encode("utf-8")).hexdigest()
-    binding = {
-        "source_sha256": digest,
-        "company_id": report["company_id"],
-        "report_year": report["report_year"],
-        "source_document_id": record["document_id"],
-        "analysis_mode": "model_investigation",
-        "provider_model_fingerprint": "a" * 64,
-        "model": settings.model,
-        "prompts_sha256": "b" * 64,
-        "parser_version": "annual-discovery-parser-v3-execution-v4",
-        "plan_sha256": plan_sha256,
-        "m3_binding_sha256": None,
-        "plan_version": "annual_discovery_plan_v3",
-        "execution_version": "execution_v4",
-    }
+    binding = _active_binding(report, record, plan_sha256=plan_sha256)
     return path, digest, report, record, runs_root, run_dir, settings, binding, context
 
 
@@ -1204,15 +1324,15 @@ def test_batch_failure_does_not_drop_successes_from_later_batches(tmp_path, monk
         if index == 2:
             fragment = user["fragments"][0]
             invalid = json.loads(
-                _valid_response(fragment["evidence_id"], fragment["raw_text"].strip()[:14])
+                _compact_response(fragment[0], fragment[2].strip()[:14])
             )
             invalid["findings"][0]["priority"] = []
             return json.dumps(invalid, ensure_ascii=False)
         if index == 3:
-            raise ModelResponseError("safe local failure")
+            raise ModelResponseError("safe local failure", provider_admitted=True, admission_id=str(uuid.uuid4()))
         fragment = user["fragments"][0]
         title = "首批渠道线索" if index == 1 else "末批诉讼线索"
-        return _valid_response(fragment["evidence_id"], fragment["raw_text"].strip()[:14], title=title)
+        return _compact_response(fragment[0], fragment[2].strip()[:14], title=title)
 
     _patch_local_audit(monkeypatch, runs_root, digit_free_responder)
     result, run_dir = _run(path, digest, runs_root, report, record)
@@ -1265,8 +1385,8 @@ def test_wall_clock_budget_preserves_success_and_marks_unattempted_pages(
         user = json.loads(messages[1].content)
         seen.append(user["batch_index"])
         fragment = user["fragments"][0]
-        response = _valid_response(fragment["evidence_id"], fragment["raw_text"].strip()[:14])
-        clock["now"] = 1901.0
+        response = _compact_response(fragment[0], fragment[2].strip()[:14])
+        clock["now"] += annual_discovery.DISCOVERY_BUDGET_SECONDS + 1
         return response
 
     _patch_local_audit(monkeypatch, runs_root, responder)
@@ -1276,7 +1396,7 @@ def test_wall_clock_budget_preserves_success_and_marks_unattempted_pages(
 
     assert seen == [1]
     assert payload["status"] == "partial"
-    assert payload["reason"] == "workflow_time_budget_exhausted"
+    assert payload["reason"] == "discovery_stage_budget_exhausted"
     assert payload["model_call_attempt_count"] == 1
     assert payload["findings"]
     assert payload["coverage"]["time_budget_exhausted"] is True
@@ -1303,8 +1423,8 @@ def test_first_batch_failure_then_budget_end_is_failed_and_keeps_unread_pages(
     def responder(messages, settings):
         user = json.loads(messages[1].content)
         seen.append(user["batch_index"])
-        clock["now"] = 1851.0
-        raise ModelResponseError("safe first-batch failure")
+        clock["now"] += annual_discovery.DISCOVERY_BUDGET_SECONDS + 1
+        raise ModelResponseError("safe first-batch failure", provider_admitted=True, admission_id=str(uuid.uuid4()))
 
     _patch_local_audit(monkeypatch, runs_root, responder)
     monkeypatch.setattr(annual_discovery, "_monotonic_clock", lambda: clock["now"])
@@ -1313,7 +1433,7 @@ def test_first_batch_failure_then_budget_end_is_failed_and_keeps_unread_pages(
 
     assert seen == [1]
     assert payload["status"] == "failed"
-    assert payload["reason"] == "workflow_time_budget_exhausted"
+    assert payload["reason"] == "discovery_stage_budget_exhausted"
     assert payload["model_call_attempt_count"] == 1
     assert payload["coverage"]["successful_batches"] == 0
     assert payload["coverage"]["failed_batches"] == 1
@@ -1371,7 +1491,7 @@ def test_all_batch_failures_are_failed_and_progress_error_is_only_a_safe_limitat
     runs_root = tmp_path / "artifacts" / "runs"
 
     def responder(messages, settings):
-        raise ModelResponseError("private provider text must not be returned")
+        raise ModelResponseError("private provider text must not be returned", provider_admitted=True, admission_id=str(uuid.uuid4()))
 
     _patch_local_audit(monkeypatch, runs_root, responder)
 

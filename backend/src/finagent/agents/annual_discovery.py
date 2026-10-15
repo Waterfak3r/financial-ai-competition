@@ -27,12 +27,13 @@ from finagent.audit.audited_chat import repository_runs_root
 from finagent.core.annual_work_budget import (
     public_budget_contract,
     DISCOVERY_BUDGET_SECONDS,
+    MODEL_CALL_TIMEOUT_SECONDS,
 )
 from finagent.core.model_settings import ModelSettings
 from finagent.llm.chat_completion import ChatMessage, ModelResponseError
 from finagent.retrieval.annual_discovery_context import (
     COMPACT_PLAN_VERSION,
-    LEGACY_PLAN_VERSION,
+    PERIOD_HEADER_PLAN_VERSION,
     MAX_BATCHES,
     MAX_SERIALIZED_INPUT_CHARS,
     AnnualDiscoveryContext,
@@ -49,15 +50,14 @@ from finagent.retrieval.annual_discovery_context import (
     validate_annual_discovery_identity,
 )
 
-PROMPT_VERSION = "annual_discovery_v3"
+PROMPT_VERSION = "annual_discovery_v5"
 LEGACY_PROMPT_VERSION = "annual_discovery_v2"
-SUPPORTED_PROMPT_VERSIONS = frozenset({"annual_discovery_v1", "annual_discovery_v2", "annual_discovery_v3"})
+SUPPORTED_PROMPT_VERSIONS = frozenset({"annual_discovery_v1", "annual_discovery_v2", "annual_discovery_v3", "annual_discovery_v4", "annual_discovery_v5"})
 MAX_FINDINGS_PER_BATCH = 6
 MAX_FINDINGS_PER_BATCH_V3 = 3
 MAX_CITATIONS_PER_FINDING = 4
 MAX_QUOTE_CHARS = 300
 MAX_MODEL_RESPONSE_CHARS = 80000
-MAX_WORKFLOW_SECONDS = 1800.0
 DEFAULT_MAX_CONCURRENCY = 3
 MAX_CONCURRENCY = 3
 CONCURRENCY_ENV = "FINTRACE_DISCOVERY_CONCURRENCY"
@@ -185,11 +185,6 @@ class AnnualDiscoveryState(TypedDict, total=False):
     context: AnnualDiscoveryContext | None
     batches: list[DiscoveryBatch]
     fragments_by_id: dict[str, DiscoveryFragment]
-    current_index: int
-    current_batch: DiscoveryBatch | None
-    response_text: str
-    call_succeeded: bool
-    failure_code: str | None
     model_call_count: int
     model_call_attempt_count: int
     processed_batches: int
@@ -199,7 +194,6 @@ class AnnualDiscoveryState(TypedDict, total=False):
     processed_chars: int
     attempted_chars: int
     findings: list[dict[str, object]]
-    finding_keys: list[str]
     limitations: list[str]
     audit_artifacts: list[AuditArtifact]
     coverage: dict[str, object]
@@ -336,16 +330,30 @@ def run_annual_discovery(
     identity = validate_annual_discovery_identity(report, source_record)
     _validate_run_dir(Path(run_dir), str(identity["run_id"]))
     resolved_concurrency = _resolve_max_concurrency(max_concurrency)
-    v4_execution = _is_v4_execution_binding(execution_binding)
-    prompt_version = PROMPT_VERSION if v4_execution else LEGACY_PROMPT_VERSION
+    if parent_discovery is not None and execution_binding is None:
+        raise ValueError("annual_discovery_binding_invalid")
+    if execution_binding is not None and not _is_current_execution_binding(execution_binding):
+        raise ValueError("annual_discovery_binding_invalid")
+    if parent_discovery is not None:
+        parent_contract = parent_discovery.get("execution_contract")
+        if (
+            not isinstance(parent_contract, Mapping)
+            or parent_contract.get("kind") != "fintrace_annual_discovery_execution_v11"
+            or parent_contract.get("binding") != execution_binding
+        ):
+            raise ValueError("annual_discovery_parent_binding_mismatch")
+    prompt_version = PROMPT_VERSION
     prompt_text = _load_prompt(prompt_version)
+    if execution_binding is not None and (
+        execution_binding.get("prompt_version") != prompt_version
+        or execution_binding.get("prompt_sha256") != hashlib.sha256((_PROMPT_ROOT / f"{prompt_version}.md").read_bytes()).hexdigest()
+    ):
+        raise ValueError("annual_discovery_binding_prompt_mismatch")
     graph = build_annual_discovery_graph()
     plan_started = _monotonic_clock()
     discovery_stage_deadline = discovery_deadline
     if discovery_stage_deadline is None:
-        discovery_stage_deadline = plan_started + (
-            DISCOVERY_BUDGET_SECONDS if v4_execution else MAX_WORKFLOW_SECONDS
-        )
+        discovery_stage_deadline = plan_started + DISCOVERY_BUDGET_SECONDS
     stage_deadline = discovery_stage_deadline
     if main_soft_deadline is not None:
         stage_deadline = min(stage_deadline, main_soft_deadline)
@@ -372,7 +380,6 @@ def run_annual_discovery(
             "main_soft_deadline": main_soft_deadline,
             "discovery_started_at": plan_started,
             "phase_budget": public_budget_contract(resumed=parent_discovery is not None),
-            "current_index": 0,
             "model_call_count": 0,
             "model_call_attempt_count": 0,
             "processed_batches": 0,
@@ -382,7 +389,6 @@ def run_annual_discovery(
             "processed_chars": 0,
             "attempted_chars": 0,
             "findings": [],
-            "finding_keys": [],
             "limitations": [],
             "audit_artifacts": [],
             "progress_warning": False,
@@ -402,7 +408,7 @@ def build_annual_discovery_initial_snapshot(
     execution_binding: Mapping[str, object],
     parsed_pdf: object | None = None,
 ) -> dict[str, object]:
-    """Build the source-bound zero-call v4 projection without dispatching a model."""
+    """Build the source-bound zero-call activity projection without model dispatch."""
 
     discovery_started_at = _monotonic_clock()
     identity = validate_annual_discovery_identity(report, source_record)
@@ -413,7 +419,7 @@ def build_annual_discovery_initial_snapshot(
         source_record,
         system_prompt=_load_prompt(PROMPT_VERSION),
         model_name=settings.model,
-        plan_version=COMPACT_PLAN_VERSION,
+        plan_version=PERIOD_HEADER_PLAN_VERSION,
         parsed_pdf=parsed_pdf,
     )
     plan_projection = annual_discovery_plan_projection(context)
@@ -633,7 +639,7 @@ def parse_annual_discovery_response_v3(
 ) -> AnnualDiscoveryParseResult:
     """Resolve only this batch's namespaced aliases, then verify exact quotes."""
 
-    if batch.plan_version != COMPACT_PLAN_VERSION or not batch.aliases:
+    if batch.plan_version not in {COMPACT_PLAN_VERSION, PERIOD_HEADER_PLAN_VERSION} or not batch.aliases:
         raise ValueError("annual_discovery_alias_plan_mismatch")
     if not isinstance(response_text, str) or not response_text.strip():
         raise ValueError("invalid_model_json")
@@ -653,7 +659,7 @@ def parse_annual_discovery_response_v3(
         raise ValueError("limitations_invalid")
 
     aliases = batch.evidence_id_by_alias
-    fragments = {item.evidence_id: item for item in batch.fragments}
+    fragments = {item.evidence_id: item for item in batch.evidence_fragments}
     parsed: list[_ParsedFinding] = []
     rejected = 0
     for raw_finding in raw_findings:
@@ -798,20 +804,26 @@ def _restore_whitespace_only_quote(quote: str, source_text: str) -> str | None:
     return recovered
 
 
-def _is_v4_execution_binding(value: object) -> bool:
-    return isinstance(value, Mapping) and value.get("execution_version") == "execution_v4"
+def _is_current_execution_binding(value: object) -> bool:
+    """Only the current business identity may execute; historical codecs are read-only."""
+    return (
+        isinstance(value, Mapping)
+        and value.get("execution_version") == "execution_v5"
+        and value.get("plan_version") == PERIOD_HEADER_PLAN_VERSION
+        and value.get("parser_version") == "annual-discovery-parser-v3-execution-v5"
+        and value.get("prompt_version") == PROMPT_VERSION
+    )
 
 
 def _plan_node(state: AnnualDiscoveryState) -> dict[str, object]:
     try:
-        compact = _is_v4_execution_binding(state.get("execution_binding"))
         context = build_annual_discovery_context(
             state["report"],
             state["source_pdf_path"],
             state["source_record"],
             system_prompt=state["prompt_text"],
             model_name=state["settings"].model,
-            plan_version=COMPACT_PLAN_VERSION if compact else LEGACY_PLAN_VERSION,
+            plan_version=PERIOD_HEADER_PLAN_VERSION,
             parsed_pdf=state.get("parsed_pdf"),
         )
     except AnnualDiscoverySourceError as exc:
@@ -857,6 +869,17 @@ def _plan_node(state: AnnualDiscoveryState) -> dict[str, object]:
             "limitations": state.get("limitations", []) + limitations,
             "progress_warning": warning,
         }
+    from finagent.core.annual_recovery import build_annual_discovery_binding_from_context
+
+    expected_binding = build_annual_discovery_binding_from_context(
+        context, settings=state["settings"], report=state["report"],
+        analysis_mode="integrated_analysis" if isinstance(state["report"].get("m3_screening"), Mapping) else "model_investigation",
+    )
+    execution_binding = state.get("execution_binding")
+    if execution_binding is None:
+        execution_binding = expected_binding
+    elif execution_binding != expected_binding:
+        raise ValueError("annual_discovery_binding_plan_mismatch")
 
     coverage = dict(context.coverage)
     batches = list(context.batches)
@@ -898,8 +921,9 @@ def _plan_node(state: AnnualDiscoveryState) -> dict[str, object]:
         limitations.append("progress_callback_failed")
     return {
         "context": context,
+        "execution_binding": execution_binding,
         "batches": batches,
-        "fragments_by_id": {item.evidence_id: item for item in context.fragments},
+        "fragments_by_id": {item.evidence_id: item for item in context.evidence_fragments},
         "coverage": coverage,
         "reason": reason,
         "not_called_reason": not_called_reason,
@@ -922,323 +946,8 @@ def _resolve_max_concurrency(value: int | None) -> int:
     return value
 
 
-def _write_execution_metadata(
-    run_dir: Path, identity: Mapping[str, object], concurrency: int
-) -> None:
-    path = run_dir / "discovery-execution.json"
-    payload = {
-        "kind": "fintrace_annual_discovery_execution_v1",
-        "prompt_version": LEGACY_PROMPT_VERSION,
-        "scheduler": "bounded_rolling",
-        "max_in_flight": concurrency,
-        "source_sha256": identity["source_sha256"],
-    }
-    try:
-        with path.open("x", encoding="utf-8", newline="\n") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-    except FileExistsError:
-        raise RuntimeError("年报发现执行元数据已存在，拒绝覆盖。") from None
-    except OSError:
-        raise RuntimeError("年报发现执行元数据写入失败；未启动批次调用。") from None
 
 
-def _scan_batches_node_v3(state: AnnualDiscoveryState) -> dict[str, object]:
-    """Run checkpointed v3 batches serially so no later call outruns its snapshot."""
-
-    batches = list(state.get("batches", []))
-    context = state.get("context")
-    binding = state.get("execution_binding")
-    identity = state.get("identity")
-    if (
-        not isinstance(context, AnnualDiscoveryContext)
-        or not isinstance(binding, Mapping)
-        or not isinstance(identity, Mapping)
-    ):
-        raise RuntimeError("annual_discovery_v3_context_unavailable")
-    parent_id = state.get("parent_discovery")
-    parent_count = state.get("parent_provider_admission_count", 0)
-    if type(parent_count) is not int or parent_count < 0:
-        raise RuntimeError("annual_discovery_v3_parent_count_invalid")
-    rows, coverage_rows, existing_findings, limitations, audit_artifacts = (
-        _initialize_v3_execution_projection(
-            state,
-            context,
-            binding,
-            parent_discovery=parent_id if isinstance(parent_id, Mapping) else None,
-            parent_count=parent_count,
-            batches=batches,
-        )
-    )
-    inherited_findings: dict[int, list[dict[str, object]]] = {}
-    for finding in existing_findings.values():
-        index = finding.get("batch_index")
-        if type(index) is int:
-            inherited_findings.setdefault(index, []).append(finding)
-
-    def publish_snapshot(*, time_exhausted: bool = False) -> dict[str, object]:
-        return _v3_discovery_snapshot(
-            state, context, binding, parent_id, parent_count, rows, coverage_rows,
-            existing_findings, limitations, audit_artifacts,
-            time_exhausted=time_exhausted,
-        )
-
-    # Persist a complete, source-bound zero-call projection before the first
-    # admission. A failed checkpoint callback therefore prevents all calls.
-    initial = publish_snapshot()
-    callback = state.get("checkpoint_callback")
-    if callback is not None:
-        callback(initial)
-    progress_warning = bool(state.get("progress_warning", False))
-    progress_callback = state.get("progress_callback")
-    progress_warning = _emit_progress(
-        progress_callback,
-        _progress_event(
-            "planned",
-            status="running" if batches else "not_called",
-            batch_index=0,
-            planned_batches=len(batches),
-            processed_batches=0,
-            partial_batches=0,
-            failed_batches=0,
-            total_pages=context.coverage.get("total_pages", 0),
-            total_chars=context.coverage.get("total_chars", 0),
-        ),
-    ) or progress_warning
-
-    stopped_reason: str | None = None
-    consecutive_transport_failures = 0
-    call_attempts = 0
-    response_count = 0
-    for batch in batches:
-        row = rows[batch.batch_index]
-        if row["resolution"] == "reused":
-            continue
-        if stopped_reason is not None:
-            _set_v3_unattempted(row, coverage_rows[batch.batch_index], stopped_reason)
-            continue
-        cancel_check = state.get("cancel_check")
-        if callable(cancel_check) and cancel_check():
-            stopped_reason = "user_cancelled"
-            _set_v3_unattempted(row, coverage_rows[batch.batch_index], stopped_reason)
-            continue
-        if float(state["deadline"]) <= _monotonic_clock():
-            stopped_reason = "workflow_time_budget_exhausted"
-            _set_v3_unattempted(row, coverage_rows[batch.batch_index], stopped_reason)
-            continue
-
-        progress_warning = _emit_progress(
-            progress_callback,
-            _progress_event(
-                "batch_started",
-                status="running",
-                batch_index=batch.batch_index,
-                planned_batches=len(batches),
-                processed_batches=sum(item["state"] != "unattempted" for item in rows.values()),
-                partial_batches=sum(item["state"] == "partial" for item in rows.values()),
-                failed_batches=sum(item["state"] == "failed" for item in rows.values()),
-                total_pages=context.coverage.get("total_pages", 0),
-                total_chars=context.coverage.get("total_chars", 0),
-            ),
-        ) or progress_warning
-
-        audit_id = str(uuid.uuid4())
-        outcome = _call_batch(
-            state,
-            batch,
-            audit_id,
-            _OrderedCallGate(batch.batch_index),
-        )
-        if outcome.audit_artifact is not None:
-            audit_artifacts.append(outcome.audit_artifact)
-        attempts = _v3_attempt_rows(outcome.attempt_records)
-        any_admitted = any(item["provider_admitted"] is True for item in attempts)
-        # A started audit request is not a provider attempt. Keep rejected
-        # admission evidence in the audit directory, but represent the batch
-        # as unattempted when no call crossed the durable admission boundary.
-        if not any_admitted:
-            attempts = []
-        call_attempts += sum(item["provider_admitted"] is True for item in attempts)
-        response_count += sum(item["response_accepted"] is True for item in attempts)
-        retained = inherited_findings.get(batch.batch_index, [])
-        accepted_new: list[dict[str, object]] = []
-        rejected = 0
-        restored = 0
-        failure_reason: str | None = None
-        if outcome.response_returned:
-            try:
-                parsed = parse_annual_discovery_response_v2(outcome.response_text, batch)
-                rejected = parsed.rejected_findings
-                restored = parsed.restored_quotes
-                seen_ids: set[str] = set()
-                for parsed_finding in parsed.findings:
-                    key = parsed_finding.duplicate_key()
-                    finding_id = _finding_id(str(identity["source_sha256"]), key)
-                    if finding_id in seen_ids:
-                        continue
-                    seen_ids.add(finding_id)
-                    evidence_ids = list(dict.fromkeys(evidence_id for evidence_id, _quote in parsed_finding.citations))
-                    accepted_new.append({
-                        "finding_id": finding_id,
-                        "batch_index": batch.batch_index,
-                        "title": parsed_finding.title,
-                        "observation": parsed_finding.observation,
-                        "why_it_matters": parsed_finding.why_it_matters,
-                        "follow_up": parsed_finding.follow_up,
-                        "priority": parsed_finding.priority,
-                        "classification": "unverified_model_finding",
-                        "verification_status": "unverified",
-                        "evidence_ids": evidence_ids,
-                        "citations": [
-                            {"evidence_id": evidence_id, "quote": quote}
-                            for evidence_id, quote in parsed_finding.citations
-                        ],
-                    })
-                for limitation in parsed.limitations:
-                    if limitation not in limitations:
-                        limitations.append(limitation)
-                for attempt in attempts:
-                    if attempt["response_accepted"] is True:
-                        attempt["accepted_findings"] = len(accepted_new)
-            except (ValueError, TypeError, KeyError) as exc:
-                failure_reason = str(exc)
-                if failure_reason not in _SAFE_CONTAINER_FAILURES:
-                    failure_reason = "invalid_model_response"
-
-        for finding in accepted_new:
-            existing_findings.setdefault(str(finding["finding_id"]), finding)
-        retained_union = [
-            item for item in existing_findings.values()
-            if item.get("batch_index") == batch.batch_index
-        ]
-        inherited_count = len(retained)
-        accepted_count = len(retained_union)
-        if outcome.response_returned and failure_reason is not None:
-            row_state, reason = "failed", failure_reason
-        elif outcome.response_returned:
-            if rejected and accepted_new:
-                row_state, reason = "partial", "some_findings_rejected"
-            elif rejected and not accepted_new:
-                row_state, reason = "failed", "all_findings_rejected"
-            else:
-                row_state, reason = "succeeded", None
-        elif not any_admitted:
-            row_state, reason = "unattempted", (
-                "workflow_time_budget_exhausted"
-                if outcome.failure_code == "model_call_timeout" and float(state["deadline"]) <= _monotonic_clock()
-                else "provider_admission_rejected"
-            )
-        else:
-            row_state = "failed"
-            fail_codes = [str(item.get("reason")) for item in attempts]
-            reason = "audit_write_failed" if "audit_write_failed" in fail_codes else (
-                "model_call_timeout" if "timeout" in fail_codes else "model_call_failed"
-            )
-        row.update(
-            state=row_state,
-            resolution="unattempted" if row_state == "unattempted" else "executed",
-            reason=reason,
-            attempts=attempts,
-        )
-        coverage_rows[batch.batch_index] = _v3_coverage_row(
-            batch, row_state, reason, str(row["resolution"]),
-            accepted_count, inherited_count,
-            rejected if row_state in {"partial", "failed"} else 0,
-            restored if row_state in {"succeeded", "partial"} else 0,
-        )
-        progress_warning = _emit_progress(
-            progress_callback,
-            _progress_event(
-            "batch_finished",
-            status={
-                "succeeded": "completed",
-                "partial": "partial",
-                "failed": "failed",
-                "unattempted": "running",
-            }[row_state],
-                batch_index=batch.batch_index,
-                planned_batches=len(batches),
-                processed_batches=sum(item["state"] != "unattempted" for item in rows.values()),
-                partial_batches=sum(item["state"] == "partial" for item in rows.values()),
-                failed_batches=sum(item["state"] == "failed" for item in rows.values()),
-                total_pages=context.coverage.get("total_pages", 0),
-                total_chars=context.coverage.get("total_chars", 0),
-            ),
-        ) or progress_warning
-        if progress_warning and "progress_callback_failed" not in limitations:
-            limitations.append("progress_callback_failed")
-        attempt_reasons = {item.get("reason") for item in _v3_attempt_rows(outcome.attempt_records)}
-        if any(item.get("reason") in {"http_401", "http_403"} for item in attempts):
-            stopped_reason = "authentication_failure_stopped"
-        elif any(item.get("reason") in {"ledger_budget_exhausted", "call_gate_closed"} for item in attempts):
-            stopped_reason = "provider_budget_exhausted"
-        elif any(item.get("reason") == "call_deadline_exhausted" for item in attempts):
-            stopped_reason = "workflow_time_budget_exhausted"
-        elif attempt_reasons & {
-            "ledger_provider_mismatch", "ledger_source_context_missing_or_unapproved",
-            "ledger_unavailable", "ledger_policy_mismatch", "audit_write_failed",
-        }:
-            stopped_reason = "provider_admission_rejected"
-        elif outcome.response_returned:
-            consecutive_transport_failures = 0
-        elif attempts and all(
-            item.get("reason") in {"http_429", "http_5xx", "connection_error", "timeout"}
-            for item in attempts
-        ):
-            consecutive_transport_failures += sum(item.get("provider_admitted") is True for item in attempts)
-            if consecutive_transport_failures >= 3:
-                stopped_reason = "consecutive_transport_failures_stopped"
-        elif row_state == "succeeded":
-            consecutive_transport_failures = 0
-
-        snapshot = publish_snapshot(
-            time_exhausted=stopped_reason == "workflow_time_budget_exhausted"
-        )
-        if callback is not None:
-            callback(snapshot)
-        if callable(cancel_check) and cancel_check():
-            stopped_reason = "user_cancelled"
-
-    final = publish_snapshot(time_exhausted=stopped_reason == "workflow_time_budget_exhausted")
-    if callback is not None:
-        callback(final)
-    progress_warning = _emit_progress(
-        progress_callback,
-        _progress_event(
-            "batch_finished" if final["coverage"]["processed_batches"] else "planned",
-            status=final["status"],
-            batch_index=final["coverage"]["processed_batches"],
-            planned_batches=len(batches),
-            processed_batches=final["coverage"]["processed_batches"],
-            partial_batches=final["coverage"]["partial_batches"],
-            failed_batches=final["coverage"]["failed_batches"],
-            total_pages=context.coverage.get("total_pages", 0),
-            total_chars=context.coverage.get("total_chars", 0),
-        ),
-    ) or progress_warning
-    return {
-        "findings": list(final["findings"]),
-        "finding_keys": [],
-        "limitations": list(final["limitations"]),
-        "audit_artifacts": audit_artifacts,
-        "coverage": dict(final["coverage"]),
-        "reason": final["reason"],
-        "overall_status": final["status"],
-        "model_call_count": response_count,
-        "model_call_attempt_count": call_attempts,
-        "successful_batches": final["coverage"]["successful_batches"],
-        "partial_batches": final["coverage"]["partial_batches"],
-        "failed_batches": final["coverage"]["failed_batches"],
-        "processed_batches": final["coverage"]["processed_batches"],
-        "processed_chars": final["coverage"]["processed_chars"],
-        "attempted_chars": final["coverage"]["attempted_chars"],
-        "execution_contract": final["execution_contract"],
-        "not_called_reason": final["reason"] if final["status"] == "not_called" else None,
-        "budget_exhausted": final["coverage"]["time_budget_exhausted"],
-        "progress_warning": progress_warning,
-    }
 
 
 def _set_v3_unattempted(
@@ -1409,6 +1118,10 @@ def _initialize_v3_execution_projection(
         limitation = "仅处理 PDF 可提取文字；图片文字未执行 OCR。"
         if limitation not in limitations:
             limitations.append(limitation)
+    if context.plan_version == PERIOD_HEADER_PLAN_VERSION:
+        limitations.append("同页原始期间表头仅为未核验来源上下文；缺失、多期间或跨页关系未知，不按报告年份补期间或证明列口径。")
+        if any(header.start_char > 0 for batch in context.batches for header in batch.period_headers):
+            limitations.append("期间表头原块已拆成来源连续切片；单片可能不完整，引用不得跨片拼接，也不据切片证明期间或列对应。")
     return rows, coverage_rows, existing_findings, limitations, []
 
 
@@ -1546,7 +1259,10 @@ def _v3_discovery_snapshot(
         status = "not_called"
     reason = None
     if status == "not_called":
-        reason = "workflow_time_budget_exhausted" if time_exhausted else "awaiting_model"
+        if not batches:
+            reason = "no_extractable_text" if total_chars == 0 else "input_limits_prevented_planning"
+        else:
+            reason = "workflow_time_budget_exhausted" if time_exhausted else "awaiting_model"
     elif status == "failed":
         reason = next((str(row["reason"]) for row in batches if row["state"] == "failed"), "model_call_failed")
     elif status == "partial":
@@ -1569,7 +1285,7 @@ def _v3_discovery_snapshot(
         for evidence_id in finding.get("evidence_ids", []) if isinstance(evidence_id, str)
     }
     identity_value = state["identity"]
-    fragments = {item.evidence_id: item for item in context.fragments}
+    fragments = {item.evidence_id: item for item in context.evidence_fragments}
     evidences = [
         fragments[evidence_id].evidence_value(str(identity_value["source_document_id"]), str(identity_value["source_sha256"]))
         for evidence_id in sorted(evidence_ids) if evidence_id in fragments
@@ -1637,7 +1353,7 @@ def _v4_discovery_snapshot(
     )
     contract = dict(snapshot["execution_contract"])
     contract.update(
-        kind="fintrace_annual_discovery_execution_v4",
+        kind="fintrace_annual_discovery_execution_v11",
         scheduler=dict(scheduler),
         phase_budget=dict(phase_budget),
         timing={
@@ -1655,7 +1371,7 @@ def _v4_discovery_snapshot(
     )
     snapshot["execution_contract"] = contract
     closed_reason = scheduler.get("dispatch_closed_reason")
-    if closed_reason is not None and snapshot.get("status") in {"not_called", "partial", "failed"}:
+    if closed_reason is not None and snapshot.get("status") in {"not_called", "partial", "failed"} and snapshot.get("reason") not in {"no_extractable_text", "input_limits_prevented_planning"}:
         snapshot["reason"] = closed_reason
     return snapshot
 
@@ -1677,290 +1393,11 @@ def _v4_expired_deadline_reason(state: Mapping[str, object]) -> str | None:
 
 
 def _scan_batches_node(state: AnnualDiscoveryState) -> dict[str, object]:
-    if _is_v4_execution_binding(state.get("execution_binding")):
-        return _scan_batches_node_v4(state)
-    if isinstance(state.get("execution_binding"), Mapping):
-        return _scan_batches_node_v3(state)
-    batches = list(state.get("batches", []))
-    if not batches or state.get("overall_status") == "not_called":
+    # Source planning failures retain their explicit not-called/source-error
+    # result. Do not replace them with a fabricated missing-context exception.
+    if state.get("context") is None and state.get("overall_status") == "not_called":
         return {}
-
-    concurrency = int(state.get("max_concurrency", DEFAULT_MAX_CONCURRENCY))
-    _write_execution_metadata(Path(state["run_dir"]), state["identity"], concurrency)
-    base_coverage = dict(state.get("coverage", {}))
-    processed = successful = partial = failed = 0
-    callback_warning = bool(state.get("progress_warning", False))
-    parsed_by_index: dict[int, dict[str, object]] = {}
-    audit_ids: dict[int, str] = {}
-    next_index = 0
-    stop_dispatch = False
-    call_gate = _OrderedCallGate(batches[0].batch_index)
-    max_workers = concurrency
-
-    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="annual-discovery") as pool:
-        in_flight: dict[Future[_BatchCallOutcome], int] = {}
-
-        def submit_one() -> bool:
-            nonlocal next_index, callback_warning, stop_dispatch
-            if next_index >= len(batches):
-                return False
-            if float(state["deadline"]) - _monotonic_clock() <= 0:
-                stop_dispatch = True
-                return False
-            batch = batches[next_index]
-            next_index += 1
-            audit_id = str(uuid.uuid4())
-            audit_ids[batch.batch_index] = audit_id
-            callback_warning = _emit_progress(
-                state.get("progress_callback"),
-                _progress_event(
-                    "batch_started",
-                    status="running",
-                    batch_index=batch.batch_index,
-                    planned_batches=len(batches),
-                    processed_batches=processed,
-                    partial_batches=partial,
-                    failed_batches=failed,
-                    total_pages=base_coverage.get("total_pages", 0),
-                    total_chars=base_coverage.get("total_chars", 0),
-                ),
-            ) or callback_warning
-            future = pool.submit(_call_batch, state, batch, audit_id, call_gate)
-            in_flight[future] = batch.batch_index
-            return True
-
-        while len(in_flight) < concurrency and submit_one():
-            pass
-
-        while in_flight:
-            remaining = float(state["deadline"]) - _monotonic_clock()
-            if remaining > 0:
-                done, _pending = wait(
-                    tuple(in_flight), timeout=remaining, return_when=FIRST_COMPLETED
-                )
-                if not done:
-                    stop_dispatch = True
-                    continue
-            else:
-                stop_dispatch = True
-                done, _pending = wait(tuple(in_flight), return_when=FIRST_COMPLETED)
-
-            completed = sorted(
-                done,
-                key=lambda future: _future_completion_key(
-                    future, in_flight[future]
-                ),
-            )
-            future = completed[0]
-            batch_index = in_flight.pop(future)
-            try:
-                outcome = future.result()
-            except Exception:
-                batch = next(item for item in batches if item.batch_index == batch_index)
-                audit_id = audit_ids[batch_index]
-                audit_dir = Path(state["run_dir"]) / audit_id
-                artifact = (
-                    _audit_artifact_from_dir(audit_dir, batch_index, _audit_dir_status(audit_dir), str(state.get("prompt_version", LEGACY_PROMPT_VERSION)))
-                    if audit_dir.is_dir()
-                    else AuditArtifact(batch_index, None, None, None, None, "failed", str(state.get("prompt_version", LEGACY_PROMPT_VERSION)))
-                )
-                outcome = _BatchCallOutcome(
-                    batch=batch,
-                    response_text="",
-                    call_succeeded=False,
-                    failure_code="model_call_failed",
-                    attempted=audit_dir.is_dir() and (audit_dir / "request.json").is_file(),
-                    response_returned=False,
-                    audit_artifact=artifact,
-                    completed_at=time.perf_counter(),
-                )
-
-            if outcome.unattempted:
-                stop_dispatch = True
-            else:
-                local = _process_batch_outcome(state, outcome)
-                parsed_by_index[batch_index] = local
-                result_row = local["coverage"]["batch_results"][-1]
-                result_status = result_row["status"]
-                processed += 1
-                if result_status == "succeeded":
-                    successful += 1
-                elif result_status == "partial":
-                    partial += 1
-                else:
-                    failed += 1
-                callback_warning = _emit_progress(
-                    state.get("progress_callback"),
-                    _progress_event(
-                        "batch_finished",
-                        status={
-                            "succeeded": "completed",
-                            "partial": "partial",
-                            "failed": "failed",
-                        }[result_status],
-                        batch_index=batch_index,
-                        planned_batches=len(batches),
-                        processed_batches=processed,
-                        partial_batches=partial,
-                        failed_batches=failed,
-                        total_pages=base_coverage.get("total_pages", 0),
-                        total_chars=base_coverage.get("total_chars", 0),
-                    ),
-                ) or callback_warning
-
-            if not stop_dispatch:
-                while len(in_flight) < concurrency and submit_one():
-                    pass
-
-    results = [parsed_by_index[index] for index in sorted(parsed_by_index)]
-    outcomes_by_index = dict(parsed_by_index)
-    # Preserve completion-order counters for progress, then normalize all durable
-    # output in the original PDF batch order.
-    batch_results = [
-        row
-        for result in results
-        for row in result["coverage"].get("batch_results", [])
-    ]
-    attempted_indices = set(outcomes_by_index)
-    unattempted_batches = [batch for batch in batches if batch.batch_index not in attempted_indices]
-    budget_exhausted = bool(unattempted_batches)
-    coverage = dict(base_coverage)
-    failed_pages = set(coverage.get("failed_pages", []))
-    unread_pages = set(coverage.get("unread_pages", []))
-    for result in results:
-        result_coverage = result.get("coverage", {})
-        if isinstance(result_coverage, Mapping):
-            failed_pages.update(result_coverage.get("failed_pages", []))
-            unread_pages.update(result_coverage.get("unread_pages", []))
-    if budget_exhausted:
-        omitted_chars = sum(batch.raw_chars for batch in unattempted_batches)
-        unread_pages.update(
-            fragment.pdf_page
-            for pending in unattempted_batches
-            for fragment in pending.fragments
-        )
-        batch_results.extend(
-            _batch_result(batch, "unattempted", "workflow_time_budget_exhausted")
-            for batch in unattempted_batches
-        )
-        coverage.update(
-            {
-                "unattempted_batches": len(unattempted_batches),
-                "unattempted_chars": omitted_chars,
-                "omitted_chars": int(coverage.get("omitted_chars", 0)) + omitted_chars,
-                "unread_pages": sorted(unread_pages),
-                "truncated": True,
-                "time_budget_exhausted": True,
-            }
-        )
-    attempted_chars = sum(
-        batch.raw_chars
-        for batch in batches
-        if batch.batch_index in outcomes_by_index
-        and outcomes_by_index[batch.batch_index].get("attempted") is True
-    )
-    response_count = sum(
-        1
-        for batch in batches
-        if batch.batch_index in outcomes_by_index
-        and outcomes_by_index[batch.batch_index].get("response_returned") is True
-    )
-    attempt_count = sum(
-        1
-        for batch in batches
-        if batch.batch_index in outcomes_by_index
-        and outcomes_by_index[batch.batch_index].get("attempted") is True
-    )
-    processed_chars = sum(
-        batch.raw_chars
-        for batch in batches
-        if batch.batch_index in outcomes_by_index
-        and outcomes_by_index[batch.batch_index]["coverage"]["batch_results"][-1]["status"] == "succeeded"
-    )
-    findings: list[dict[str, object]] = []
-    seen_finding_ids: set[str] = set()
-    limitations = list(state.get("limitations", []))
-    audits: list[AuditArtifact] = []
-    for batch in batches:
-        local = outcomes_by_index.get(batch.batch_index)
-        if local is None:
-            continue
-        for finding in local.get("findings", []):
-            if not isinstance(finding, dict):
-                continue
-            finding_id = finding.get("finding_id")
-            if isinstance(finding_id, str) and finding_id in seen_finding_ids:
-                continue
-            if isinstance(finding_id, str):
-                seen_finding_ids.add(finding_id)
-            findings.append(finding)
-        for limitation in local.get("limitations", []):
-            if isinstance(limitation, str) and limitation not in limitations:
-                limitations.append(limitation)
-        artifact = local.get("audit_artifact")
-        if isinstance(artifact, AuditArtifact):
-            audits.append(artifact)
-    for batch in unattempted_batches:
-        if "总体发现时间预算耗尽；未尝试批次和页面已列入 coverage。" not in limitations:
-            limitations.append("总体发现时间预算耗尽；未尝试批次和页面已列入 coverage。")
-        break
-    if callback_warning and "progress_callback_failed" not in limitations:
-        limitations.append("progress_callback_failed")
-
-    coverage.update(
-        {
-            "processed_batches": len(parsed_by_index),
-            "successful_batches": successful,
-            "partial_batches": partial,
-            "failed_batches": failed,
-            "processed_chars": processed_chars,
-            "attempted_chars": attempted_chars,
-            "batch_results": batch_results,
-            "failed_pages": sorted(failed_pages),
-            "unread_pages": sorted(unread_pages),
-        }
-    )
-    coverage["complete"] = coverage_is_complete(coverage)
-    warning = callback_warning
-    terminal_status = "budget_exhausted" if budget_exhausted else "running"
-    if budget_exhausted:
-        warning = _emit_progress(
-            state.get("progress_callback"),
-            _progress_event(
-                "budget_exhausted",
-                status="partial" if attempt_count else "not_called",
-                batch_index=unattempted_batches[0].batch_index,
-                planned_batches=len(batches),
-                processed_batches=len(parsed_by_index),
-                partial_batches=partial,
-                failed_batches=failed,
-                total_pages=coverage.get("total_pages", 0),
-                total_chars=coverage.get("total_chars", 0),
-            ),
-        ) or warning
-        if warning and "progress_callback_failed" not in limitations:
-            limitations.append("progress_callback_failed")
-
-    return {
-        "model_call_attempt_count": attempt_count,
-        "model_call_count": response_count,
-        "processed_batches": len(parsed_by_index),
-        "successful_batches": successful,
-        "partial_batches": partial,
-        "failed_batches": failed,
-        "processed_chars": processed_chars,
-        "attempted_chars": attempted_chars,
-        "findings": findings,
-        "finding_keys": [],
-        "limitations": limitations,
-        "audit_artifacts": sorted(audits, key=lambda item: item.batch_index),
-        "coverage": coverage,
-        "reason": "workflow_time_budget_exhausted" if budget_exhausted else state.get("reason"),
-        "overall_status": terminal_status,
-        "not_called_reason": "workflow_time_budget_exhausted" if budget_exhausted and attempt_count == 0 else None,
-        "budget_exhausted": budget_exhausted,
-        "progress_warning": warning,
-    }
+    return _scan_batches_node_v4(state)
 
 
 def _scan_batches_node_v4(state: AnnualDiscoveryState) -> dict[str, object]:
@@ -2351,7 +1788,7 @@ def _scan_batches_node_v4(state: AnnualDiscoveryState) -> dict[str, object]:
     final_contract = dict(final["execution_contract"])
     final["execution_contract"] = final_contract
     return {
-        "findings": list(final["findings"]), "finding_keys": [],
+        "findings": list(final["findings"]),
         "limitations": list(final["limitations"]), "audit_artifacts": audit_artifacts,
         "coverage": dict(final["coverage"]), "reason": final["reason"],
         "overall_status": final["status"],
@@ -2385,6 +1822,8 @@ def _call_batch(
             batch.fragments,
             plan_version=batch.plan_version,
             aliases=batch.aliases,
+            period_headers=batch.period_headers,
+            period_header_aliases=batch.period_header_aliases,
         )
         size = serialized_request_size(state["settings"].model, state["prompt_text"], user_content)
     except Exception:
@@ -2394,7 +1833,7 @@ def _call_batch(
             batch, "", False, "invalid_model_response", False, False, None,
             completed_at=time.perf_counter(),
         )
-    if size > MAX_SERIALIZED_INPUT_CHARS:
+    if size > MAX_SERIALIZED_INPUT_CHARS or size != batch.serialized_input_chars:
         if gate.enter(batch.batch_index, float(state["deadline"])) is None:
             return _unattempted_outcome(batch)
         return _BatchCallOutcome(
@@ -2419,8 +1858,8 @@ def _call_batch(
             evidence_refs=[
                 EvidenceRef(str(identity["source_document_id"]), page) for page in pages
             ],
-            prompt_version=str(state.get("prompt_version", LEGACY_PROMPT_VERSION)),
-            timeout_seconds=min(state["settings"].timeout_seconds, remaining_seconds),
+            prompt_version=str(state.get("prompt_version", PROMPT_VERSION)),
+            timeout_seconds=min(MODEL_CALL_TIMEOUT_SECONDS, remaining_seconds),
             audit_id=audit_id,
             call_stage="annual_discovery",
             batch_index=batch.batch_index,
@@ -2428,9 +1867,9 @@ def _call_batch(
         )
     except Exception as exc:
         artifact = (
-            _audit_artifact_from_dir(audit_dir, batch.batch_index, _audit_dir_status(audit_dir), str(state.get("prompt_version", LEGACY_PROMPT_VERSION)))
+            _audit_artifact_from_dir(audit_dir, batch.batch_index, _audit_dir_status(audit_dir), str(state.get("prompt_version", PROMPT_VERSION)))
             if audit_dir.is_dir()
-            else AuditArtifact(batch.batch_index, None, None, None, None, "failed", str(state.get("prompt_version", LEGACY_PROMPT_VERSION)))
+            else AuditArtifact(batch.batch_index, None, None, None, None, "failed", str(state.get("prompt_version", PROMPT_VERSION)))
         )
         return _BatchCallOutcome(
             batch=batch,
@@ -2454,7 +1893,7 @@ def _call_batch(
         attempted=True,
         response_returned=True,
         audit_artifact=_audit_artifact_from_dir(
-            result.audit_dir, batch.batch_index, "succeeded", str(state.get("prompt_version", LEGACY_PROMPT_VERSION))
+            result.audit_dir, batch.batch_index, "succeeded", str(state.get("prompt_version", PROMPT_VERSION))
         ),
         completed_at=time.perf_counter(),
         attempt_records=tuple(result.attempt_records),
@@ -2480,313 +1919,6 @@ def _future_completion_key(future: Future[_BatchCallOutcome], batch_index: int) 
         return future.result().completed_at, batch_index
     except Exception:
         return float("inf"), batch_index
-
-
-def _process_batch_outcome(
-    base_state: AnnualDiscoveryState, outcome: _BatchCallOutcome
-) -> dict[str, object]:
-    batch = outcome.batch
-    local_state: dict[str, object] = dict(base_state)
-    local_state.update(
-        {
-            "current_batch": batch,
-            "response_text": outcome.response_text,
-            "call_succeeded": outcome.call_succeeded,
-            "failure_code": outcome.failure_code,
-            "processed_batches": 0,
-            "successful_batches": 0,
-            "partial_batches": 0,
-            "failed_batches": 0,
-            "processed_chars": 0,
-            "attempted_chars": batch.raw_chars if outcome.attempted else 0,
-            "findings": [],
-            "finding_keys": [],
-            "audit_artifacts": [],
-            "coverage": dict(base_state.get("coverage", {})),
-            "progress_callback": None,
-            "progress_warning": False,
-        }
-    )
-    local_state["coverage"]["batch_results"] = []
-    updates = _parse_check_node(local_state)  # type: ignore[arg-type]
-    parsed = {**local_state, **updates}
-    parsed["audit_artifact"] = outcome.audit_artifact
-    parsed["attempted"] = outcome.attempted
-    parsed["response_returned"] = outcome.response_returned
-    return parsed
-
-
-def _parse_check_node(state: AnnualDiscoveryState) -> dict[str, object]:
-    batch = state.get("current_batch")
-    if batch is None:
-        return _finish_failed_batch(state, "batch_missing")
-    if not state.get("call_succeeded", False):
-        return _finish_failed_batch(state, state.get("failure_code") or "model_call_failed")
-
-    try:
-        parsed_result = (
-            parse_annual_discovery_response_v3(state.get("response_text"), batch)
-            if batch.plan_version == COMPACT_PLAN_VERSION
-            else parse_annual_discovery_response_v2(state.get("response_text"), batch)
-        )
-    except (ValueError, TypeError, KeyError) as exc:
-        code = str(exc)
-        safe_code = code if code in _SAFE_CONTAINER_FAILURES else "invalid_model_response"
-        return _finish_failed_batch(state, safe_code)
-    if not parsed_result.findings and parsed_result.rejected_findings:
-        return _finish_failed_batch(
-            state,
-            "all_findings_rejected",
-            rejected_findings=parsed_result.rejected_findings,
-        )
-
-    findings = list(state.get("findings", []))
-    finding_keys = list(state.get("finding_keys", []))
-    for parsed in parsed_result.findings:
-        key = parsed.duplicate_key()
-        if key in finding_keys:
-            continue
-        finding_keys.append(key)
-        finding_id = _finding_id(str(state["identity"]["source_sha256"]), key)
-        evidence_ids = list(dict.fromkeys(evidence_id for evidence_id, _quote in parsed.citations))
-        findings.append(
-            {
-                "finding_id": finding_id,
-                **({"batch_index": batch.batch_index} if state.get("execution_binding") is not None else {}),
-                "title": parsed.title,
-                "observation": parsed.observation,
-                "why_it_matters": parsed.why_it_matters,
-                "follow_up": parsed.follow_up,
-                "priority": parsed.priority,
-                "classification": "unverified_model_finding",
-                "verification_status": "unverified",
-                "evidence_ids": evidence_ids,
-                "citations": [
-                    {"evidence_id": evidence_id, "quote": quote}
-                    for evidence_id, quote in parsed.citations
-                ],
-            }
-        )
-
-    merged_limitations = list(state.get("limitations", []))
-    for limitation in parsed_result.limitations:
-        if limitation not in merged_limitations:
-            merged_limitations.append(limitation)
-    if parsed_result.rejected_findings:
-        return _finish_partial_batch(
-            state,
-            findings=findings,
-            finding_keys=finding_keys,
-            limitations=merged_limitations,
-            accepted_findings=len(parsed_result.findings),
-            rejected_findings=parsed_result.rejected_findings,
-            restored_quotes=parsed_result.restored_quotes,
-        )
-
-    coverage = dict(state.get("coverage", {}))
-    processed = state.get("processed_batches", 0) + 1
-    chars = state.get("processed_chars", 0) + batch.raw_chars
-    successful = state.get("successful_batches", 0) + 1
-    coverage.update(
-        {
-            "processed_batches": processed,
-            "successful_batches": successful,
-            "partial_batches": state.get("partial_batches", 0),
-            "failed_batches": state.get("failed_batches", 0),
-            "processed_chars": chars,
-            "attempted_chars": state.get("attempted_chars", 0),
-            "batch_results": list(state.get("coverage", {}).get("batch_results", []))
-            + [
-                _batch_result(
-                    batch,
-                    "succeeded",
-                    None,
-                    accepted_findings=len(parsed_result.findings),
-                    restored_quotes=parsed_result.restored_quotes,
-                )
-            ],
-        }
-    )
-    coverage["complete"] = coverage_is_complete(coverage)
-    warning = _emit_progress(
-        state.get("progress_callback"),
-        _progress_event(
-            "batch_finished",
-            status="completed",
-            batch_index=batch.batch_index,
-            planned_batches=len(state.get("batches", [])),
-            processed_batches=processed,
-            partial_batches=state.get("partial_batches", 0),
-            failed_batches=state.get("failed_batches", 0),
-            total_pages=coverage.get("total_pages", 0),
-            total_chars=coverage.get("total_chars", 0),
-        ),
-    )
-    if warning and "progress_callback_failed" not in merged_limitations:
-        merged_limitations.append("progress_callback_failed")
-    return {
-        "findings": findings,
-        "finding_keys": finding_keys,
-        "limitations": merged_limitations,
-        "processed_batches": processed,
-        "successful_batches": successful,
-        "processed_chars": chars,
-        "coverage": coverage,
-        "reason": state.get("reason"),
-        "progress_warning": state.get("progress_warning", False) or warning,
-    }
-
-
-def _finish_partial_batch(
-    state: AnnualDiscoveryState,
-    *,
-    findings: list[dict[str, object]],
-    finding_keys: list[str],
-    limitations: list[str],
-    accepted_findings: int,
-    rejected_findings: int,
-    restored_quotes: int,
-) -> dict[str, object]:
-    batch = state.get("current_batch")
-    if batch is None:
-        return _finish_failed_batch(state, "batch_missing")
-    processed = state.get("processed_batches", 0) + 1
-    partial = state.get("partial_batches", 0) + 1
-    coverage = dict(state.get("coverage", {}))
-    coverage.update(
-        {
-            "processed_batches": processed,
-            "successful_batches": state.get("successful_batches", 0),
-            "partial_batches": partial,
-            "failed_batches": state.get("failed_batches", 0),
-            "processed_chars": state.get("processed_chars", 0),
-            "attempted_chars": state.get("attempted_chars", 0),
-            "batch_results": list(coverage.get("batch_results", []))
-            + [
-                _batch_result(
-                    batch,
-                    "partial",
-                    "some_findings_rejected",
-                    accepted_findings=accepted_findings,
-                    rejected_findings=rejected_findings,
-                    restored_quotes=restored_quotes,
-                )
-            ],
-        }
-    )
-    unread_pages = set(coverage.get("unread_pages", []))
-    unread_pages.update(fragment.pdf_page for fragment in batch.fragments)
-    coverage["unread_pages"] = sorted(unread_pages)
-    coverage["complete"] = coverage_is_complete(coverage)
-    partial_limitation = "部分发现条目未通过严格字段或原文引用检查；该批次不计入完整处理字符。"
-    if partial_limitation not in limitations:
-        limitations.append(partial_limitation)
-    warning = _emit_progress(
-        state.get("progress_callback"),
-        _progress_event(
-            "batch_finished",
-            status="partial",
-            batch_index=batch.batch_index,
-            planned_batches=len(state.get("batches", [])),
-            processed_batches=processed,
-            partial_batches=partial,
-            failed_batches=state.get("failed_batches", 0),
-            total_pages=coverage.get("total_pages", 0),
-            total_chars=coverage.get("total_chars", 0),
-        ),
-    )
-    if warning and "progress_callback_failed" not in limitations:
-        limitations.append("progress_callback_failed")
-    return {
-        "findings": findings,
-        "finding_keys": finding_keys,
-        "limitations": limitations,
-        "processed_batches": processed,
-        "successful_batches": state.get("successful_batches", 0),
-        "partial_batches": partial,
-        "failed_batches": state.get("failed_batches", 0),
-        "processed_chars": state.get("processed_chars", 0),
-        "coverage": coverage,
-        "reason": state.get("reason") or "some_findings_rejected",
-        "progress_warning": state.get("progress_warning", False) or warning,
-    }
-
-
-def _finish_failed_batch(
-    state: AnnualDiscoveryState,
-    failure_code: str,
-    *,
-    rejected_findings: int = 0,
-) -> dict[str, object]:
-    batch = state.get("current_batch")
-    safe_failure_code = failure_code if failure_code in _SAFE_BATCH_FAILURES else "invalid_model_response"
-    processed = state.get("processed_batches", 0) + 1
-    failed = state.get("failed_batches", 0) + 1
-    coverage = dict(state.get("coverage", {}))
-    batch_results = list(coverage.get("batch_results", []))
-    if batch is not None:
-        batch_results.append(
-            _batch_result(
-                batch,
-                "failed",
-                safe_failure_code,
-                rejected_findings=rejected_findings,
-            )
-        )
-    coverage.update(
-        {
-            "processed_batches": processed,
-            "successful_batches": state.get("successful_batches", 0),
-            "partial_batches": state.get("partial_batches", 0),
-            "failed_batches": failed,
-            "processed_chars": state.get("processed_chars", 0),
-            "attempted_chars": state.get("attempted_chars", 0),
-            "batch_results": batch_results,
-        }
-    )
-    failed_pages = set(coverage.get("failed_pages", []))
-    if batch is not None:
-        failed_pages.update(fragment.pdf_page for fragment in batch.fragments)
-    coverage["failed_pages"] = sorted(failed_pages)
-    unread_pages = set(coverage.get("unread_pages", []))
-    unread_pages.update(failed_pages)
-    coverage["unread_pages"] = sorted(unread_pages)
-    coverage["complete"] = coverage_is_complete(coverage)
-    limitations = list(state.get("limitations", []))
-    safe_limitation = (
-        "至少一个批次的模型调用失败。"
-        if safe_failure_code in {"model_call_failed", "model_call_timeout"}
-        else "至少一个批次的模型回应未通过严格结构或引用检查。"
-    )
-    if safe_limitation not in limitations:
-        limitations.append(safe_limitation)
-    warning = _emit_progress(
-        state.get("progress_callback"),
-        _progress_event(
-            "batch_finished",
-            status="failed",
-            batch_index=batch.batch_index if batch else state.get("current_index", 0) + 1,
-            planned_batches=len(state.get("batches", [])),
-            processed_batches=processed,
-            partial_batches=state.get("partial_batches", 0),
-            failed_batches=failed,
-            total_pages=coverage.get("total_pages", 0),
-            total_chars=coverage.get("total_chars", 0),
-        ),
-    )
-    if warning and "progress_callback_failed" not in limitations:
-        limitations.append("progress_callback_failed")
-    return {
-        "processed_batches": processed,
-        "successful_batches": state.get("successful_batches", 0),
-        "partial_batches": state.get("partial_batches", 0),
-        "failed_batches": failed,
-        "processed_chars": state.get("processed_chars", 0),
-        "coverage": coverage,
-        "limitations": limitations,
-        "reason": state.get("reason") or safe_failure_code,
-        "progress_warning": state.get("progress_warning", False) or warning,
-    }
 
 
 def _finish_node(state: AnnualDiscoveryState) -> dict[str, object]:
@@ -2888,7 +2020,7 @@ def _result_from_state(state: Mapping[str, object]) -> AnnualDiscoveryResult:
         source_document_id=str(identity["source_document_id"]),
         source_sha256=str(identity["source_sha256"]),
         status=status,  # type: ignore[arg-type]
-        prompt_version=str(state.get("prompt_version", LEGACY_PROMPT_VERSION)),
+        prompt_version=str(state.get("prompt_version", PROMPT_VERSION)),
         model_called=int(state.get("model_call_attempt_count", 0)) > 0,
         model_call_count=int(state.get("model_call_count", 0)),
         model_call_attempt_count=int(state.get("model_call_attempt_count", 0)),
@@ -2965,7 +2097,15 @@ def _reject_definitive_conclusion(values: Sequence[str]) -> None:
             "舞弊已排除",
             "财务造假已排除",
         )
-        if any(_has_unnegated_phrase(normalized, phrase) for phrase in affirmative):
+        # Remove only the locally questioned predicate from this check's copy.
+        # A clause boundary also keeps its negation from excusing a later claim.
+        question_phrases = sorted(affirmative, key=len, reverse=True)
+        assertion_text = re.sub(
+            "是否(?:确认)?(?:" + "|".join(map(re.escape, question_phrases)) + ")",
+            "，",
+            normalized,
+        )
+        if any(_has_unnegated_phrase(assertion_text, phrase) for phrase in affirmative):
             raise ValueError("definitive_conclusion_forbidden")
 
 
@@ -3015,8 +2155,8 @@ def _finding_id(source_sha256: str, duplicate_key: str) -> str:
     return f"disc:{source_sha256[:12]}-{digest}"
 
 
-def _load_prompt(version: str = LEGACY_PROMPT_VERSION) -> str:
-    if version not in {LEGACY_PROMPT_VERSION, PROMPT_VERSION}:
+def _load_prompt(version: str = PROMPT_VERSION) -> str:
+    if version not in {LEGACY_PROMPT_VERSION, "annual_discovery_v3", "annual_discovery_v4", PROMPT_VERSION}:
         raise RuntimeError("年度开放发现提示词版本不受支持。")
     prompt_path = _PROMPT_ROOT / f"{version}.md"
     try:
@@ -3093,27 +2233,6 @@ def _is_timeout_exception(exc: BaseException) -> bool:
     return isinstance(exc, ModelResponseError) and str(exc) == "模型服务请求超时。"
 
 
-def _batch_result(
-    batch: DiscoveryBatch,
-    status: str,
-    reason: str | None,
-    *,
-    accepted_findings: int = 0,
-    rejected_findings: int = 0,
-    restored_quotes: int = 0,
-) -> dict[str, object]:
-    return {
-        "batch_index": batch.batch_index,
-        "status": status,
-        "reason": reason,
-        "pages": sorted({fragment.pdf_page for fragment in batch.fragments}),
-        "raw_chars": batch.raw_chars,
-        "accepted_findings": accepted_findings,
-        "rejected_findings": rejected_findings,
-        "restored_quotes": restored_quotes,
-    }
-
-
 def _emit_progress(
     callback: Callable[[dict[str, object]], None] | None, event: dict[str, object]
 ) -> bool:
@@ -3130,7 +2249,7 @@ def _audit_artifact_from_dir(
     path: Path,
     batch_index: int,
     status: str,
-    prompt_version: str = LEGACY_PROMPT_VERSION,
+    prompt_version: str = PROMPT_VERSION,
 ) -> AuditArtifact:
     root = repository_runs_root()
     try:

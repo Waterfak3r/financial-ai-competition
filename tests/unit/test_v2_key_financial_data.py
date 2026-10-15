@@ -32,6 +32,7 @@ def _synthetic_pdf(
     omit_year: int | None = None,
     omit_percentage_header: bool = False,
     omit_row: bool = False,
+    wrap_percent: bool = False,
 ) -> str:
     year_values = values or (_VALUES[2024], _VALUES[2023], _PERCENT, _VALUES[2022])
     document = pymupdf.open()
@@ -43,8 +44,14 @@ def _synthetic_pdf(
     page.insert_text((199, 153), f"{years[0]}年", fontname="china-s", fontsize=8)
     page.insert_text((301, 153), f"{years[1]}年", fontname="china-s", fontsize=8)
     if not omit_percentage_header:
-        page.insert_text((374, 144), "本期比上年同期", fontname="china-s", fontsize=7)
-        page.insert_text((386, 162), "增减（%）", fontname="china-s", fontsize=7)
+        if wrap_percent:
+            page.insert_text((374, 136), "本期比", fontname="china-s", fontsize=7)
+            page.insert_text((374, 148), "上年同", fontname="china-s", fontsize=7)
+            page.insert_text((374, 160), "期增减", fontname="china-s", fontsize=7)
+            page.insert_text((386, 172), "(%)", fontname="china-s", fontsize=7)
+        else:
+            page.insert_text((374, 144), "本期比上年同期", fontname="china-s", fontsize=7)
+            page.insert_text((386, 162), "增减（%）", fontname="china-s", fontsize=7)
     page.insert_text((487, 153), f"{years[2]}年", fontname="china-s", fontsize=8)
     if not omit_row:
         page.insert_text((40, 190), "归属于上市公司股东的扣", fontname="china-s", fontsize=8)
@@ -60,15 +67,17 @@ def _synthetic_pdf(
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _extract(path: Path, *, report_year: int = 2024):
+
+def _extract(path: Path, *, report_year: int = 2024, company_id: str = "603288"):
     parsed = parse_text_pdf(path, document_id="synthetic-603288-2024")
     result = extract_v2_key_financial_data_facts(
         parsed,
         source_pdf_path=path,
-        company_id="603288",
+        company_id=company_id,
         report_year=report_year,
     )
     return parsed, result
+
 
 
 def test_constructed_key_financial_data_aligns_amounts_to_year_headers_and_verifies(tmp_path: Path) -> None:
@@ -228,3 +237,27 @@ def test_missing_currency_missing_percentage_header_or_missing_row_does_not_veri
     _parsed_missing_row, missing_row = _extract(missing_row_path)
     assert missing_row.facts == ()
     assert missing_row.issues[0].code == "row_not_found"
+
+
+def test_wrapped_percentage_header_aligns_non_haitian_years(tmp_path: Path) -> None:
+    path = tmp_path / "wrapped-percent-2025.pdf"
+    values = ("82,293,107,655.25", "86,240,905,977.42", "-4.58", "74,752,564,425.52")
+    source_sha256 = _synthetic_pdf(
+        path,
+        years=(2025, 2024, 2023),
+        values=values,
+        wrap_percent=True,
+    )
+    _parsed, extracted = _extract(path, report_year=2025, company_id="600519")
+    assert extracted.issues == ()
+    assert len(extracted.facts) == 2
+    expected = {2025: values[0], 2024: values[1]}
+    for fact in extracted.facts:
+        year = fact.period_end.year
+        assert fact.company_id == "600519"
+        assert fact.raw_value == expected[year]
+        assert fact.source_sha256 == source_sha256
+        checked = verify_financial_fact(path, fact)
+        assert checked.result.status == "verified", checked.result.limitations
+        assert checked.evidence[0].pdf_page == 1
+

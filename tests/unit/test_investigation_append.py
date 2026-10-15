@@ -23,7 +23,11 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path, dict[str, An
     run_dir.mkdir(parents=True)
     original_pdf = source_dir / "source.pdf"
     archived_pdf = run_dir / "source.pdf"
-    pdf_bytes = b"mock annual report pdf bytes"
+    import pymupdf
+    pdf = pymupdf.open()
+    pdf.new_page()
+    pdf_bytes = pdf.tobytes()
+    pdf.close()
     original_pdf.write_bytes(pdf_bytes)
     archived_pdf.write_bytes(pdf_bytes)
     import hashlib
@@ -54,6 +58,7 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path, dict[str, An
 def _prepare_root(monkeypatch: pytest.MonkeyPatch, repository: Path) -> None:
     monkeypatch.setattr(appendix, "_repository_root", lambda: repository)
     monkeypatch.setattr(appendix, "_invoke_review", _successful_review)
+    monkeypatch.setattr(appendix, "_invoke_discovery", lambda report, **_kwargs: appendix._not_called_discovery(appendix._report_identity(report), "no_extractable_text"))
 
 
 def _successful_review(report: dict[str, Any], _investigation: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
@@ -74,7 +79,7 @@ def _successful_review(report: dict[str, Any], _investigation: dict[str, Any], *
             "response_path": "runs/mock-review/response.json",
             "failure_path": None,
             "status": "succeeded",
-            "prompt_version": "annual_review_v1",
+            "prompt_version": "annual_review_v3",
         }],
         "source_identity": {
             "run_id": report["run_id"],
@@ -114,6 +119,8 @@ def _valid_v4_binding(request: dict[str, Any]) -> dict[str, Any]:
         "parser_version": "annual-discovery-parser-v3-execution-v4",
         "plan_version": "annual_discovery_plan_v3",
         "execution_version": "execution_v4",
+        "prompt_version": "annual_discovery_v4",
+        "prompt_sha256": "e" * 64,
         "plan_sha256": "c" * 64,
         "m3_binding_sha256": "d" * 64 if request["mode"] == "integrated_analysis" else None,
     }
@@ -207,36 +214,6 @@ def test_optional_investigation_binds_source_and_preserves_unverified_status(
     assert investigation["source_binding"]["source_sha256"] == fixture[-1]["source_sha256"]
     assert investigation["items"][0]["verification_status"] == "unverified"
     assert "local-test-secret" not in json.dumps(investigation)
-
-
-def test_invoke_agent_passes_existing_parsed_pdf_to_retrieval_graph(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    from types import SimpleNamespace
-
-    parsed_pdf = object()
-    captured: dict[str, Any] = {}
-
-    def run_annual_investigation(*_args: Any, **kwargs: Any) -> _FakeResult:
-        captured.update(kwargs)
-        return _FakeResult({})
-
-    monkeypatch.setattr(
-        appendix.importlib,
-        "import_module",
-        lambda _name: SimpleNamespace(run_annual_investigation=run_annual_investigation),
-    )
-
-    appendix._invoke_agent(
-        {},
-        archived_pdf_path=tmp_path / "source.pdf",
-        source_record={},
-        settings=_settings(),
-        run_dir=tmp_path,
-        parsed_pdf=parsed_pdf,
-    )
-
-    assert captured["parsed_pdf"] is parsed_pdf
 
 
 def _review_reuse_fixture(
@@ -987,7 +964,7 @@ def test_pre_request_failure_is_not_reported_as_an_actual_model_call(
     ("with_response", "extra_user_field"),
     [(False, False), (True, False), (False, True)],
 )
-def test_discovery_exception_recovers_v2_audit_counts_without_inventing_coverage(
+def test_discovery_exception_recovers_v4_audit_counts_without_inventing_coverage(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     with_response: bool,
@@ -1016,7 +993,7 @@ def test_discovery_exception_recovers_v2_audit_counts_without_inventing_coverage
             (audit_dir / "request.json").write_text(
                 json.dumps({
                     "status": "started",
-                    "prompt_version": "annual_discovery_v2",
+                    "prompt_version": "annual_discovery_v4",
                     "messages": [
                         {"role": "system", "content": "synthetic prompt"},
                         {"role": "user", "content": json.dumps(request_batch)},
@@ -1069,7 +1046,7 @@ def test_discovery_exception_recovers_v2_audit_counts_without_inventing_coverage
     )
 
     assert discovery["status"] == "failed"
-    assert discovery["prompt_version"] == "annual_discovery_v2"
+    assert discovery["prompt_version"] == "annual_discovery_v4"
     assert discovery["model_call_attempt_count"] == 1
     assert discovery["model_call_count"] == int(with_response)
     assert discovery["model_called"] is True
@@ -1090,19 +1067,19 @@ def test_discovery_exception_recovers_v2_audit_counts_without_inventing_coverage
                 "response_path": f"{relative_audit_dir}/response.json" if with_response else None,
                 "failure_path": None if with_response else f"{relative_audit_dir}/failure.json",
                 "status": "succeeded" if with_response else "failed",
-                "prompt_version": "annual_discovery_v2",
+                "prompt_version": "annual_discovery_v4",
             }
         ]
 
 
-def test_not_called_discovery_uses_current_v2_prompt_identity(
+def test_not_called_discovery_uses_current_v4_prompt_identity(
     tmp_path: Path,
 ) -> None:
     _repository, _artifacts_root, _run_dir, _source_pdf, _record_path, report = _fixture(tmp_path)
 
     result = appendix._not_called_discovery(appendix._report_identity(report), "not_started")
 
-    assert result["prompt_version"] == "annual_discovery_v2"
+    assert result["prompt_version"] == "annual_discovery_v4"
     assert result["model_call_attempt_count"] == result["model_call_count"] == 0
     assert result["coverage"]["planned_batches"] == 0
 
@@ -1524,3 +1501,23 @@ def test_rejected_resume_persists_own_zero_call_v3_snapshot_without_parent_inher
     assert captured.value.investigation["model_call_attempt_count"] == 0
     assert captured.value.investigation["discovery"]["execution_contract"]["parent_run_id"] is None
     assert checkpoints == [(captured.value.snapshot_report, "failed", None)]
+
+
+@pytest.mark.parametrize("mutation", ["missing", "wrong_signal", "malformed_ids"])
+def test_incomplete_parent_interpretation_is_not_eligible_for_reuse(mutation: str) -> None:
+    item = {
+        "signal_id": "profit_up_cash_down", "status": "interpretation",
+        "narrative_evidence_ids": ["nctx-parent"],
+    }
+    parent = {
+        "items": [item, {"signal_id": "revenue_up_cash_down", "status": "abstained", "reason": "no_same_source_narrative_evidence"}],
+        "narrative_evidences": [{"evidence_id": "nctx-parent", "signal_ids": ["profit_up_cash_down"]}],
+    }
+    assert appendix._reusable_parent_items(parent) == parent["items"]
+    if mutation == "missing":
+        parent["narrative_evidences"] = []
+    elif mutation == "wrong_signal":
+        parent["narrative_evidences"][0]["signal_ids"] = ["revenue_up_cash_down"]
+    else:
+        item["narrative_evidence_ids"] = "nctx-parent"
+    assert appendix._reusable_parent_items(parent) == [parent["items"][1]]

@@ -34,6 +34,15 @@ def parse_text_pdf(path: str | Path, document_id: str) -> ParsedTextPdf:
 
     checked_id = _validate_document_id(document_id)
     file_path, data = _read_source(path)
+    return parse_text_pdf_bytes(data, checked_id, file_path.name)
+
+
+def parse_text_pdf_bytes(
+    data: bytes, document_id: str, source_filename: str,
+) -> ParsedTextPdf:
+    """解析只读来源字节快照；提取规则与路径入口完全相同。"""
+
+    checked_id = _validate_document_id(document_id)
     pymupdf = _load_pymupdf()
     document = _open_document(pymupdf, data)
     try:
@@ -46,7 +55,7 @@ def parse_text_pdf(path: str | Path, document_id: str) -> ParsedTextPdf:
     return ParsedTextPdf(
         document_id=checked_id,
         source_sha256=hashlib.sha256(data).hexdigest(),
-        source_filename=file_path.name,
+        source_filename=source_filename,
         page_count=len(pages),
         coordinate_system=COORDINATE_SYSTEM,
         coordinate_unit=COORDINATE_UNIT,

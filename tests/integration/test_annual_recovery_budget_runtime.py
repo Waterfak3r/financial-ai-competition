@@ -37,7 +37,7 @@ from finagent.core.model_settings_store import save_local_settings
 from finagent.core.model_call_ledger import read_gate_stage_admission_counts
 from finagent.api.annual_analysis import analyze_annual_pdf
 from finagent.retrieval.annual_discovery_context import (
-    COMPACT_PLAN_VERSION,
+    PERIOD_HEADER_PLAN_VERSION,
     build_annual_discovery_context,
 )
 
@@ -48,9 +48,9 @@ _EVIDENCE_BASE = (
     _ROOT / "artifacts" / "evaluations" / "annual-recovery-r3-20261006"
     / "runtime-budget"
 )
-_FREEZE_ENV = "FINTRACE_R3_SOURCE_FREEZE_SHA256"
-_EVIDENCE_ENV = "FINTRACE_R3_EVIDENCE_DIR"
-_TMP_ENV = "FINTRACE_R3_TMP_DIR"
+_FREEZE_ENV = "FINTRACE_V11_BUDGET_SOURCE_FREEZE_SHA256"
+_EVIDENCE_ENV = "FINTRACE_V11_BUDGET_EVIDENCE_DIR"
+_TMP_ENV = "FINTRACE_V11_BUDGET_TMP_DIR"
 _MODEL_NAME = "fintrace-r3-loopback-runtime-fixture"
 _LOCAL_API_KEY = "synthetic-r3-loopback-only-key"
 _MAX_TEST_PDF_PAGES = 220
@@ -1002,7 +1002,7 @@ def _planned_batches(fixture: ProjectFixture, evidence_root: Path, label: str) -
         report_year=fixture.report_year,
         document_id=fixture.document_id,
     )
-    prompt = (fixture.root / "config" / "prompts" / "annual_discovery_v3.md").read_text(encoding="utf-8")
+    prompt = (fixture.root / "config" / "prompts" / "annual_discovery_v5.md").read_text(encoding="utf-8")
     source_record = json.loads(fixture.source_record.read_text(encoding="utf-8"))
     context = build_annual_discovery_context(
         base.report,
@@ -1010,7 +1010,7 @@ def _planned_batches(fixture: ProjectFixture, evidence_root: Path, label: str) -
         source_record,
         system_prompt=prompt,
         model_name=_MODEL_NAME,
-        plan_version=COMPACT_PLAN_VERSION,
+        plan_version=PERIOD_HEADER_PLAN_VERSION,
         parsed_pdf=base.parsed_pdf,
     )
     result = {
@@ -1237,8 +1237,10 @@ def test_cli_healthy_slow_http_uses_three_workers_and_stable_batch_checkpoints()
         assert [row.get("batch_index") for row in rows] == list(range(1, plan["planned_batches"] + 1))
 
         phase = contract["phase_budget"]
-        assert phase["main_report_limit_seconds"] == 300
-        assert phase["work_deadline_seconds"] == 285
+        assert contract["kind"] == "fintrace_annual_discovery_execution_v11"
+        assert phase["schema_version"] == "annual_analysis_budget_v4"
+        assert phase["main_report_limit_seconds"] == 375
+        assert phase["work_deadline_seconds"] == 360
         assert phase["finalization_reserve_seconds"] == 15
         assert phase["scope"] == "new_run"
         assert phase["task_provider_attempt_limit"] == 30
@@ -2019,16 +2021,17 @@ def test_cli_stage_quota_drains_until_stage_deadline_then_freezes() -> None:
         assert scheduler["requested_max_concurrency"] == scheduler["effective_max_concurrency"] == 3
         assert model.actual_http_peak == 3
         assert phase_budget["scope"] == "new_run"
-        # The archive retains its immutable V1 defaults. The actual short
+        # The archive retains its immutable v4 defaults. The actual short
         # deadlines are evidenced by the Popen environment and monotonic clock.
-        assert phase_budget["main_report_limit_seconds"] == 300
-        assert phase_budget["work_deadline_seconds"] == 285
+        assert phase_budget["schema_version"] == "annual_analysis_budget_v4"
+        assert phase_budget["main_report_limit_seconds"] == 375
+        assert phase_budget["work_deadline_seconds"] == 360
         assert phase_budget["finalization_reserve_seconds"] == 15
         assert phase_budget["stage_time_limits_seconds"] == {
             "annual_discovery": 150,
             "annual_investigation": 60,
-            "annual_issue_grouping": 35,
-            "annual_review": 25,
+            "annual_issue_grouping": 90,
+            "annual_review": 45,
         }
         assert phase_budget["task_provider_attempt_limit"] == 30
         assert phase_budget["stage_provider_attempt_limits"]["annual_discovery"] == admitted_scan_limit
@@ -2044,7 +2047,7 @@ def test_cli_stage_quota_drains_until_stage_deadline_then_freezes() -> None:
             "standard_new_run_discovery_attempt_limit": admitted_scan_limit,
             "stage_attempt_limit_override_injected_by_harness": False,
             "cli_budget_environment_overrides": cli_budget_environment,
-            "archive_phase_budget_is_immutable_v1_baseline": phase_budget,
+            "archive_phase_budget_is_immutable_v4_baseline": phase_budget,
             "phase_budget": phase_budget,
             "controlled_stage_time_limits_seconds": stage_time_limits,
             "controlled_owner_main_limit_seconds": 60,
@@ -3149,7 +3152,7 @@ subprocess.Popen = _ObservedPopen
         api_port = _free_loopback_port()
         base_url = f"http://127.0.0.1:{api_port}"
         command = [
-            sys.executable, "-m", "uvicorn", "finagent.api.app:app",
+            sys.executable, "-m", "uvicorn", "finagent.api.app:create_app", "--factory",
             "--host", "127.0.0.1", "--port", str(api_port),
             "--log-level", "warning", "--no-access-log",
         ]

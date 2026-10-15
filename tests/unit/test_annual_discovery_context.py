@@ -149,6 +149,38 @@ def test_batch_raw_and_serialized_limits_are_enforced_and_excess_is_visible(tmp_
     assert context.coverage["complete"] is False
 
 
+@pytest.mark.parametrize("plan_version", ["annual_discovery_plan_v2", "annual_discovery_plan_v3"])
+def test_exact_request_boundary_includes_both_json_escape_layers(tmp_path, plan_version) -> None:
+    path = tmp_path / "escaped.pdf"
+    digest = _pdf(path, ['有"引号"\\斜线测试' * 40])
+    options = {"max_fragment_chars": 5, "plan_version": plan_version}
+    full = _build(path, digest, **options)
+    assert len(full.batches) == 1
+    limit = full.batches[0].serialized_input_chars
+    exact = _build(path, digest, max_serialized_chars=limit, **options)
+    smaller = _build(path, digest, max_serialized_chars=limit - 1, **options)
+
+    assert exact.batches[0].fragments == full.batches[0].fragments
+    assert smaller.batches[0].fragments == full.batches[0].fragments[:-1]
+    assert tuple(item for batch in smaller.batches for item in batch.fragments) == full.fragments
+    assert smaller.coverage["truncated"] is False
+    for batch in smaller.batches:
+        from finagent.retrieval.annual_discovery_context import serialize_batch_content
+        body = json.dumps({
+            "model": "mock-model",
+            "messages": [
+                {"role": "system", "content": "安全测试提示词"},
+                {"role": "user", "content": serialize_batch_content(
+                    smaller.identity, batch.batch_index, batch.fragments,
+                    plan_version=plan_version, aliases=batch.aliases,
+                )},
+            ],
+            "stream": False,
+        }, ensure_ascii=False)
+        assert len(body) == batch.serialized_input_chars
+        assert len(body) <= limit - 1
+
+
 def test_serialized_input_limit_counts_the_system_prompt_and_can_refuse_a_fragment(tmp_path) -> None:
     path = tmp_path / "serialized.pdf"
     digest = _pdf(path, ["有文字，但过长提示词不应让请求越过硬上限。"])

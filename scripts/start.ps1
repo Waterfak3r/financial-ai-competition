@@ -304,7 +304,7 @@ try {
     if (-not $apiRecognized) {
         $apiStdout = Join-Path $logDirectory 'api.stdout.log'
         $apiStderr = Join-Path $logDirectory 'api.stderr.log'
-        $apiArguments = '-m uvicorn finagent.api.app:app --app-dir "' + $backendSource + '" --host 127.0.0.1 --port 8000'
+        $apiArguments = '-m uvicorn finagent.api.app:create_app --factory --app-dir "' + $backendSource + '" --host 127.0.0.1 --port 8000'
         $process = Start-Process -FilePath $pythonPath -ArgumentList $apiArguments -WorkingDirectory $projectRoot -RedirectStandardOutput $apiStdout -RedirectStandardError $apiStderr -PassThru -WindowStyle Hidden
         $process.Refresh()
         $startedServices += [pscustomobject]@{ Name = 'API'; Id = [int]$process.Id; StartTimeTicks = $process.StartTime.ToUniversalTime().Ticks; Process = $process }

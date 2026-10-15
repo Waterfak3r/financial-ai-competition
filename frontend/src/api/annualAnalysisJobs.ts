@@ -1,5 +1,6 @@
 import type {
   AnnualAnalysisBudget,
+  AnnualAnalysisBudgetScope,
   AnnualAnalysisBudgetStageStatus,
   AnnualAnalysisDiscoveryProgress,
   AnnualAnalysisJob,
@@ -362,16 +363,86 @@ function readJob(value: unknown, expectedJobId?: string, expectedRequest?: Annua
   };
 }
 
+const LIVE_STAGE_ORDER = ["annual_discovery", "annual_investigation", "annual_issue_grouping", "annual_review"] as const;
+const LIVE_V1_STAGE_BASES: Record<(typeof LIVE_STAGE_ORDER)[number], number> = {
+  annual_discovery: 150,
+  annual_investigation: 60,
+  annual_issue_grouping: 35,
+  annual_review: 25,
+};
+const LIVE_V2_STAGE_BASES: Record<(typeof LIVE_STAGE_ORDER)[number], number> = {
+  annual_discovery: 150,
+  annual_investigation: 60,
+  annual_issue_grouping: 60,
+  annual_review: 45,
+};
+const LIVE_V3_STAGE_BASES: Record<(typeof LIVE_STAGE_ORDER)[number], number> = {
+  annual_discovery: 150,
+  annual_investigation: 60,
+  annual_issue_grouping: 90,
+  annual_review: 45,
+};
+
+function runtimeStageTimeLimits(
+  main: number,
+  bases: Record<(typeof LIVE_STAGE_ORDER)[number], number>,
+  maxMain: number,
+): Record<(typeof LIVE_STAGE_ORDER)[number], number> {
+  if (!Number.isInteger(main) || main < 60 || main > maxMain) {
+    throw invalidResponse("analysis_budget.main_report_limit_seconds");
+  }
+  const availableWork = main - 15;
+  const configuredTotal = LIVE_STAGE_ORDER.reduce((sum, name) => sum + bases[name], 0);
+  if (availableWork >= configuredTotal) {
+    return { ...bases };
+  }
+  const exact: Record<(typeof LIVE_STAGE_ORDER)[number], number> = {
+    annual_discovery: 0, annual_investigation: 0, annual_issue_grouping: 0, annual_review: 0,
+  };
+  const rounded: Record<(typeof LIVE_STAGE_ORDER)[number], number> = {
+    annual_discovery: 0, annual_investigation: 0, annual_issue_grouping: 0, annual_review: 0,
+  };
+  for (const name of LIVE_STAGE_ORDER) {
+    exact[name] = bases[name] * availableWork / configuredTotal;
+    rounded[name] = Math.floor(exact[name]);
+  }
+  const remaining = availableWork - LIVE_STAGE_ORDER.reduce((sum, name) => sum + rounded[name], 0);
+  const order = [...LIVE_STAGE_ORDER].sort((left, right) => {
+    const fracDiff = (exact[right] - rounded[right]) - (exact[left] - rounded[left]);
+    if (fracDiff !== 0) return fracDiff;
+    return LIVE_STAGE_ORDER.indexOf(left) - LIVE_STAGE_ORDER.indexOf(right);
+  });
+  for (const name of order.slice(0, remaining)) {
+    rounded[name] += 1;
+  }
+  return rounded;
+}
+
+function isBudgetStageStatus(value: unknown): value is AnnualAnalysisBudgetStageStatus {
+  return value === "not_started" || value === "planned" || value === "running"
+    || value === "completed" || value === "partial" || value === "budget_exhausted"
+    || value === "reserved";
+}
+
 function readAnnualAnalysisBudget(value: unknown, jobStatus: AnnualAnalysisJobStatus): AnnualAnalysisBudget {
   const record = asRecord(value);
+  if (record === null) throw invalidResponse("analysis_budget");
+  const schema = record.schema_version;
+  const isV4 = schema === "annual_analysis_budget_v4";
+  const isV3 = schema === "annual_analysis_budget_v3";
+  const isV2 = schema === "annual_analysis_budget_v2";
+  const hasReviewCapacity = isV2 || isV3 || isV4;
+  if (schema !== "annual_analysis_budget_v1" && !hasReviewCapacity) throw invalidResponse("analysis_budget 版本无效");
   exactKeys(record, [
     "schema_version", "scope", "main_report_limit_seconds", "work_deadline_seconds",
     "finalization_reserve_seconds", "elapsed_running_seconds", "queue_seconds",
     "provider_attempt_limits", "provider_admission_count", "provider_attempts_remaining", "stages",
+    ...(hasReviewCapacity ? ["review_request_limit_chars", "model_call_timeout_seconds"] : []),
+    ...(isV4 ? ["global_request_limit_chars"] : []),
   ], "analysis_budget");
-  if (record?.schema_version !== "annual_analysis_budget_v1") throw invalidResponse("analysis_budget 版本无效");
-  const scope = record.scope;
-  if (scope !== "new_run" && scope !== "resume") throw invalidResponse("analysis_budget.scope 无效");
+  const rawScope = record.scope;
+  if (rawScope !== "new_run" && rawScope !== "resume") throw invalidResponse("analysis_budget.scope 无效");
+  const scope: AnnualAnalysisBudgetScope = rawScope;
   const providerLimits = asRecord(record.provider_attempt_limits);
   exactKeys(providerLimits, [
     "task_default_new_run", "task_default_resume", "task_effective", "shared_goal_limit", "shared_goal_remaining_at_start",
@@ -381,7 +452,7 @@ function readAnnualAnalysisBudget(value: unknown, jobStatus: AnnualAnalysisJobSt
   const taskEffective = budgetInteger(providerLimits?.task_effective, "analysis_budget.provider_attempt_limits.task_effective");
   const sharedGoalLimit = nullableBudgetInteger(providerLimits?.shared_goal_limit, "analysis_budget.provider_attempt_limits.shared_goal_limit");
   const sharedGoalRemaining = nullableBudgetInteger(providerLimits?.shared_goal_remaining_at_start, "analysis_budget.provider_attempt_limits.shared_goal_remaining_at_start");
-  const expectedTaskLimit = scope === "resume" ? 20 : 30;
+  const expectedTaskLimit: 20 | 30 = scope === "resume" ? 20 : 30;
   if (
     defaultNewRun !== 30 || defaultResume !== 20 || taskEffective !== expectedTaskLimit ||
     (sharedGoalLimit !== null && sharedGoalRemaining !== null && sharedGoalRemaining > sharedGoalLimit) ||
@@ -389,50 +460,61 @@ function readAnnualAnalysisBudget(value: unknown, jobStatus: AnnualAnalysisJobSt
   ) throw invalidResponse("analysis_budget.provider_attempt_limits 额度关系无效");
 
   const stageRecords = asRecord(record.stages);
-  const stageNames = ["annual_discovery", "annual_investigation", "annual_issue_grouping", "annual_review"] as const;
-  exactKeys(stageRecords, stageNames, "analysis_budget.stages");
+  exactKeys(stageRecords, LIVE_STAGE_ORDER, "analysis_budget.stages");
   const expectedStageLimits = scope === "resume"
     ? { annual_discovery: 14, annual_investigation: 2, annual_issue_grouping: 2, annual_review: 2 }
     : { annual_discovery: 18, annual_investigation: 2, annual_issue_grouping: 8, annual_review: 2 };
-  const stages = Object.fromEntries(stageNames.map((name) => [
-    name,
-    readBudgetStage(stageRecords?.[name], name, expectedStageLimits[name]),
-  ])) as AnnualAnalysisBudget["stages"];
+  const maxWork = isV3 || isV4 ? 360 : isV2 ? 330 : 285;
+  const stages = {
+    annual_discovery: readBudgetStage(stageRecords?.annual_discovery, "annual_discovery", expectedStageLimits.annual_discovery, maxWork),
+    annual_investigation: readBudgetStage(stageRecords?.annual_investigation, "annual_investigation", expectedStageLimits.annual_investigation, maxWork),
+    annual_issue_grouping: readBudgetStage(stageRecords?.annual_issue_grouping, "annual_issue_grouping", expectedStageLimits.annual_issue_grouping, maxWork),
+    annual_review: readBudgetStage(stageRecords?.annual_review, "annual_review", expectedStageLimits.annual_review, maxWork),
+  };
   const providerAdmissionCount = budgetInteger(record.provider_admission_count, "analysis_budget.provider_admission_count");
   const providerAttemptsRemaining = budgetInteger(record.provider_attempts_remaining, "analysis_budget.provider_attempts_remaining");
   const elapsedRunningSeconds = budgetSeconds(record.elapsed_running_seconds, "analysis_budget.elapsed_running_seconds");
   const queueSeconds = budgetSeconds(record.queue_seconds, "analysis_budget.queue_seconds");
-  const stageAdmissions = stageNames.reduce((sum, name) => sum + stages[name].admitted_attempts, 0);
-  const stageCapacity = stageNames.reduce((sum, name) => sum + stages[name].attempt_limit, 0);
-  const stageTimeCapacity = stageNames.reduce((sum, name) => sum + stages[name].time_limit_seconds, 0);
+  const stageAdmissions = LIVE_STAGE_ORDER.reduce((sum, name) => sum + stages[name].admitted_attempts, 0);
+  const stageCapacity = LIVE_STAGE_ORDER.reduce((sum, name) => sum + stages[name].attempt_limit, 0);
   const mainReportLimitSeconds = budgetInteger(record.main_report_limit_seconds, "analysis_budget.main_report_limit_seconds");
   const workDeadlineSeconds = budgetInteger(record.work_deadline_seconds, "analysis_budget.work_deadline_seconds");
   const finalizationReserveSeconds = budgetInteger(record.finalization_reserve_seconds, "analysis_budget.finalization_reserve_seconds");
+  const expectedStages = runtimeStageTimeLimits(
+    mainReportLimitSeconds,
+    isV3 || isV4 ? LIVE_V3_STAGE_BASES : isV2 ? LIVE_V2_STAGE_BASES : LIVE_V1_STAGE_BASES,
+    isV3 || isV4 ? 375 : isV2 ? 345 : 300,
+  );
+  const reviewRequestLimitChars = hasReviewCapacity
+    ? budgetInteger(record.review_request_limit_chars, "analysis_budget.review_request_limit_chars")
+    : null;
+  const modelCallTimeoutSeconds = hasReviewCapacity ? record.model_call_timeout_seconds : null;
+  const expectedTimeout = isV3 || isV4 ? 90 : isV2 ? 60 : null;
   if (
-    mainReportLimitSeconds < 60 || mainReportLimitSeconds > 300 ||
     workDeadlineSeconds !== mainReportLimitSeconds - 15 || finalizationReserveSeconds !== 15 ||
+    hasReviewCapacity && (reviewRequestLimitChars !== (isV4 ? 128000 : 40000) || typeof modelCallTimeoutSeconds !== "number" || !Number.isFinite(modelCallTimeoutSeconds) || modelCallTimeoutSeconds !== expectedTimeout) ||
+    isV4 && record.global_request_limit_chars !== 96000 ||
     jobStatus === "queued" && elapsedRunningSeconds !== 0 ||
-    stageTimeCapacity > workDeadlineSeconds ||
     stageCapacity > taskEffective ||
     providerAdmissionCount > taskEffective || providerAttemptsRemaining !== taskEffective - providerAdmissionCount ||
-    stageAdmissions !== providerAdmissionCount
+    stageAdmissions !== providerAdmissionCount ||
+    LIVE_STAGE_ORDER.some((name) => stages[name].time_limit_seconds !== expectedStages[name])
   ) throw invalidResponse("analysis_budget 计时或请求准入计数不一致");
   if (stages.annual_issue_grouping.status === "reserved" &&
     stages.annual_issue_grouping.admitted_attempts !== 0) {
     throw invalidResponse("缺少归并层时不能记录问题归并阶段准入");
   }
-  return {
-    schema_version: "annual_analysis_budget_v1",
+  const common = {
     scope,
     main_report_limit_seconds: mainReportLimitSeconds,
     work_deadline_seconds: workDeadlineSeconds,
-    finalization_reserve_seconds: finalizationReserveSeconds,
+    finalization_reserve_seconds: 15 as const,
     elapsed_running_seconds: elapsedRunningSeconds,
     queue_seconds: queueSeconds,
     provider_attempt_limits: {
-      task_default_new_run: 30,
-      task_default_resume: 20,
-      task_effective: taskEffective,
+      task_default_new_run: 30 as const,
+      task_default_resume: 20 as const,
+      task_effective: expectedTaskLimit,
       shared_goal_limit: sharedGoalLimit,
       shared_goal_remaining_at_start: sharedGoalRemaining,
     },
@@ -440,12 +522,42 @@ function readAnnualAnalysisBudget(value: unknown, jobStatus: AnnualAnalysisJobSt
     provider_attempts_remaining: providerAttemptsRemaining,
     stages,
   };
+  if (isV4) {
+    return {
+      schema_version: "annual_analysis_budget_v4",
+      ...common,
+      global_request_limit_chars: 96000,
+      review_request_limit_chars: 128000,
+      model_call_timeout_seconds: 90,
+    };
+  }
+  if (isV3) {
+    return {
+      schema_version: "annual_analysis_budget_v3",
+      ...common,
+      review_request_limit_chars: 40000,
+      model_call_timeout_seconds: 90,
+    };
+  }
+  if (isV2) {
+    return {
+      schema_version: "annual_analysis_budget_v2",
+      ...common,
+      review_request_limit_chars: 40000,
+      model_call_timeout_seconds: 60,
+    };
+  }
+  return {
+    schema_version: "annual_analysis_budget_v1",
+    ...common,
+  };
 }
 
 function readBudgetStage(
   value: unknown,
   name: keyof AnnualAnalysisBudget["stages"],
   expectedConfiguredLimit: number,
+  maxTimeLimit: number,
 ): AnnualAnalysisBudget["stages"][keyof AnnualAnalysisBudget["stages"]] {
   const record = asRecord(value);
   const requiredKeys = [
@@ -462,13 +574,10 @@ function readBudgetStage(
     ? undefined
     : budgetSeconds(record.elapsed_seconds, `analysis_budget.stages.${name}.elapsed_seconds`);
   const status = record?.status;
-  const statuses = new Set<AnnualAnalysisBudgetStageStatus>([
-    "not_started", "planned", "running", "completed", "partial", "budget_exhausted", "reserved",
-  ]);
   if (
-    timeLimit < 1 || timeLimit > 285 || attemptLimit !== expectedConfiguredLimit || admittedAttempts > attemptLimit ||
+    timeLimit < 1 || timeLimit > maxTimeLimit || attemptLimit !== expectedConfiguredLimit || admittedAttempts > attemptLimit ||
     plannedAttempts !== null && plannedAttempts > 100_000 ||
-    typeof status !== "string" || !statuses.has(status as AnnualAnalysisBudgetStageStatus) ||
+    !isBudgetStageStatus(status) ||
     status === "reserved" && (name !== "annual_issue_grouping" || admittedAttempts !== 0)
   ) throw invalidResponse(`analysis_budget.stages.${name} 字段或上限无效`);
   return {
@@ -476,7 +585,7 @@ function readBudgetStage(
     attempt_limit: attemptLimit,
     planned_attempts: plannedAttempts,
     admitted_attempts: admittedAttempts,
-    status: status as AnnualAnalysisBudgetStageStatus,
+    status,
     ...(elapsedSeconds === undefined ? {} : { elapsed_seconds: elapsedSeconds }),
   };
 }

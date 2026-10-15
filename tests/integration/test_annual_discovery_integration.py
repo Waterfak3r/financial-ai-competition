@@ -18,7 +18,8 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_PROJECT_ROOT / "backend" / "src"))
 
 from finagent.agents import annual_discovery, annual_review
-from finagent.audit import AuditedChatResult
+from finagent.audit import audited_chat
+from finagent.agents.annual_review_wire import decode_annual_issue_input_wire, decode_annual_review_v3_wire
 from finagent.core.model_settings import ModelSettings
 from finagent.llm.chat_completion import ChatCompletion
 from finagent.reports import investigation_append
@@ -79,7 +80,7 @@ def _finding_for(batch: dict[str, object], topic: str) -> dict[str, object]:
     selected = next(
         fragment
         for fragment in batch["fragments"]
-        if quote in fragment["raw_text"]
+        if quote in fragment[2]
     )
     return {
         "title": title,
@@ -88,8 +89,8 @@ def _finding_for(batch: dict[str, object], topic: str) -> dict[str, object]:
         "follow_up": follow,
         "priority": "medium",
         "citations": [
-            {"evidence_id": selected["evidence_id"], "quote": quote},
-            {"evidence_id": selected["evidence_id"], "quote": second_quote},
+            {"fragment_alias": selected[0], "quote": quote},
+            {"fragment_alias": selected[0], "quote": second_quote},
         ],
     }
 
@@ -145,6 +146,7 @@ def test_synthetic_pdf_cli_mock_get_preview_and_three_exports(
     monkeypatch.setattr(investigation_append, "_ensure_langgraph_available", lambda: None)
     monkeypatch.setattr(annual_discovery, "repository_runs_root", lambda: runs_root)
     monkeypatch.setattr(annual_review, "repository_runs_root", lambda: runs_root)
+    monkeypatch.setattr(audited_chat, "repository_runs_root", lambda: runs_root)
 
     def abstained_fixed_candidates(report, **_kwargs):
         identity = {
@@ -168,13 +170,20 @@ def test_synthetic_pdf_cli_mock_get_preview_and_three_exports(
 
     monkeypatch.setattr(investigation_append, "_invoke_agent", abstained_fixed_candidates)
 
-    def mock_audited_chat(
-        messages, settings, *, run_dir, evidence_refs, prompt_version, audit_id=None, **_kwargs
-    ):
+    prompt_root = _PROJECT_ROOT / "config" / "prompts"
+    prompts = {name: (prompt_root / f"{name}.md").read_text(encoding="utf-8") for name in (
+        "annual_discovery_v4", "annual_issue_grouping_v1", "annual_issue_global_v1", "annual_issue_supplement_v1", "annual_review_v3",
+    )}
+    fixture_prompt_root = project_root / "config" / "prompts"
+    fixture_prompt_root.mkdir(parents=True)
+    for prompt_path in prompt_root.glob("*.md"):
+        (fixture_prompt_root / prompt_path.name).write_bytes(prompt_path.read_bytes())
+
+    def mock_complete_chat(messages, settings, **_kwargs):
         assert settings == _DUMMY_SETTINGS
-        assert settings.api_key == "dummy-test-only-key-never-sent"
+        prompt_version = next(name for name, text in prompts.items() if text == messages[0].content)
         user_content = messages[1].content
-        if prompt_version == "annual_discovery_v2":
+        if prompt_version == "annual_discovery_v4":
             batch = json.loads(user_content)
             finding = _finding_for(batch, topic)
             findings = [finding]
@@ -182,62 +191,40 @@ def test_synthetic_pdf_cli_mock_get_preview_and_three_exports(
                 invalid = copy.deepcopy(finding)
                 invalid["citations"][0]["quote"] = "并非来源中的原文"
                 findings.append(invalid)
-            response_text = json.dumps({"findings": findings, "limitations": []}, ensure_ascii=False)
-        elif prompt_version == "annual_review_v2":
-            review_input = json.loads(user_content)
+            response = {"findings": findings, "limitations": []}
+        elif prompt_version == "annual_issue_grouping_v1":
+            grouping = decode_annual_issue_input_wire(json.loads(user_content))
+            response = {"schema_version": "annual_issue_group_shard_result_v1", "decisions": [{
+                "finding_id": finding_id, "disposition": "retain", "target_finding_id": None,
+                "reason_code": "distinct_issue", "reason_evidence_id": None, "reason_quote": None,
+            } for finding_id in grouping["input_member_finding_ids"]]}
+        elif prompt_version == "annual_issue_supplement_v1":
+            supplement = decode_annual_issue_input_wire(json.loads(user_content))
+            response = {"schema_version": "annual_issue_supplement_result_v1", "roles": [{
+                "issue_id": item["issue_id"], "evidence_id": item["evidence_id"],
+                "role": "unknown", "reason_code": "relationship_unclear",
+            } for item in supplement["evidence_assignments"]]}
+        elif prompt_version == "annual_review_v3":
+            review_input = decode_annual_review_v3_wire(json.loads(user_content))
             assert review_input["verified_facts"] == []
-            assert review_input["coverage"]["discovery_findings_count"] == 1
-            finding_id = review_input["discovery_items"][0]["finding_id"]
-            assert review_input["discovery_items"][0]["citation_pages"] == [3]
-            assert evidence_refs and {item.page for item in evidence_refs} == {3}
-            response_text = json.dumps({
-                "assessment": "prioritize_review",
-                "summary": "建议对年报披露事项进一步复核。",
-                "reasons": [{
-                    "text": "该披露事项值得进一步关注。",
-                    "evidence_ids": [finding_id],
-                }],
-                "follow_up_items": [],
-                "limitations": [],
-            }, ensure_ascii=False)
+            assert review_input["coverage"]["candidate_count"] == 1
+            candidate = review_input["issue_hierarchy"]["candidate_pool"][0]
+            finding_id = candidate["finding_id"]
+            assert {citation["pdf_page"] for citation in candidate["citations"]} == {3}
+            response = {
+                "assessment": "prioritize_review", "summary": "建议对年报披露事项进一步复核。",
+                "reasons": [{"text": "该披露事项值得进一步关注。", "evidence_ids": [finding_id]}],
+                "follow_up_items": [], "limitations": review_input["limitations_required"],
+            }
         else:
             raise AssertionError(f"unexpected mock prompt version: {prompt_version}")
-
-        audit_dir = run_dir / (audit_id or str(uuid.uuid4()))
-        audit_dir.mkdir()
-        refs = [
-            {"document_id": item.document_id, "page": item.page}
-            for item in evidence_refs
-        ]
-        request_record = {
-            "model": settings.model,
-            "prompt_version": prompt_version,
-            "messages": [
-                {"role": item.role, "content": item.content}
-                for item in messages
-            ],
-            "evidence_refs": refs,
-        }
-        (audit_dir / "request.json").write_text(
-            json.dumps(request_record, ensure_ascii=False), encoding="utf-8"
-        )
-        (audit_dir / "response.json").write_text(json.dumps({
-            "model": settings.model,
-            "response_id": f"mock-{len(calls) + 1}",
-            "text": response_text,
-        }, ensure_ascii=False), encoding="utf-8")
-        calls.append({"prompt_version": prompt_version, "request": request_record})
-        return AuditedChatResult(
-            completion=ChatCompletion(
-                text=response_text,
-                model=settings.model,
-                response_id=f"mock-{len(calls)}",
-            ),
-            audit_dir=audit_dir,
+        calls.append({"prompt_version": prompt_version, "request": {"messages": [{"role": item.role, "content": item.content} for item in messages]}})
+        return ChatCompletion(
+            text=json.dumps(response, ensure_ascii=False), model=settings.model,
+            response_id=f"mock-{len(calls)}", provider_admitted=True, admission_id=str(uuid.uuid4()),
         )
 
-    monkeypatch.setattr(annual_discovery, "audited_complete_chat", mock_audited_chat)
-    monkeypatch.setattr(annual_review, "audited_complete_chat", mock_audited_chat)
+    monkeypatch.setattr(audited_chat, "complete_chat", mock_complete_chat)
 
     result = analyze_annual.main([
         "--source-pdf", str(source_pdf),
@@ -296,17 +283,17 @@ def test_synthetic_pdf_cli_mock_get_preview_and_three_exports(
         assert discovery["coverage"]["partial_batches"] == 0
         assert discovery["coverage"]["complete"] is True
     assert manifest["status"] == "completed_with_issues"
-    assert [call["prompt_version"] for call in calls] == [
-        "annual_discovery_v2", "annual_review_v2"
-    ]
+    assert calls[0]["prompt_version"] == "annual_discovery_v4"
+    assert calls[-1]["prompt_version"] == "annual_review_v3"
+    assert "annual_issue_grouping_v1" in [call["prompt_version"] for call in calls]
     discovery_request = calls[0]["request"]["messages"][1]["content"]
     serialized_batch = json.loads(discovery_request)
     assert any(
-        quote in item["raw_text"]
+        quote in item[2]
         for item in serialized_batch["fragments"]
     )
     assert all(
-        not any(marker in item["raw_text"] for marker in ("cash flow", "MD&A"))
+        not any(marker in item[2] for marker in ("cash flow", "MD&A"))
         for item in serialized_batch["fragments"]
     )
     assert expected_title in (report_dir / "report.md").read_text(encoding="utf-8")

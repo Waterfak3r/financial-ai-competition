@@ -727,3 +727,349 @@ Vite 加载当前前端，API 使用本轮当前后端的隔离副本。真实�
 本轮维护 README 的当前能力/操作、architecture 的前端与角色缺省契约、annual-discovery 的页面顺序、恢复任务书的阶段状态及产品路线的当前状态链接；roadmap、data-policy、开发角色配置及比赛提交材料的契约没有变化，未复制新的验收流水。仍未完成：真人非金融用户 30 秒理解试验、R6 两份指定年报的新版真实服务 Web/API/性能及跨公司语义复核、非原开发机演练和独立比赛交付。没有新凭据或真实数据外发授权，不能把本轮 mock、旧归档或源码审阅作为这些关卡通过。
 
 用户随后明确授权本地 commit。提交范围为本轮 OMP 协作规则/角色配置、Word 二进制属性修正及 R5 前端与相关文档；运行证据和输入仍按 `.gitignore` 保留本地，不强制纳入 Git。用户原有计划书的删除/新增及 `tem/` 财报资料不纳入该提交，也不恢复或删除。该授权不包含远端推送或新的真实模型调用。
+
+<a id="annual-analysis-recovery-r6"></a>
+
+## 2026-10-12 R6 通用事实修复、跨公司边界与授权真实验收
+
+**结论：已实施修复并执行验收，R6 未全部通过。** 离线事实/可比性/M3、最终套件、当前源码故障矩阵及实际页面/导出路径已有证据；两份指定年报的基础结果均超过 15 秒，真实公司问题归并没有形成事项，最终评审在联网前因完整请求预算不足弃权。未参与适配的格力对照未提取到可确认事实；原 PDF 独立代理复核还发现模型因果解释不足。不能由此宣称通用财务判断、真实归并主报告、全文完成或真人金融审查通过。
+
+### 版本、输入与授权边界
+
+本轮开工 HEAD 为 `96fd64f67cebdbfae72287f8bca68725b82a3b00`；交付为工作区增量，没有新建 R6 commit、没有推送。最终 81 个后端源码清单 SHA256 为 `698a4c5e3934ca724ec69167683dc901f4aedd4046a51bd289d47451a7d8ff44`，最终套件、真实 API 和当前故障演练都绑定此清单；它不是 Git commit。最终 API PID `17184`、创建 FILETIME `134362490738358646`，加载身份与源码相符，见[进程身份](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/api-final-runtime-identity.json)及[最终源码/保护范围](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/final-source-and-protection.json)。
+
+| 输入 | 文件性质、用途 | PDF 页数 | 字节数 | SHA256 |
+| --- | --- | --- | --- | --- |
+| 海天 2024，`cninfo-1222994233` | 已有公开年报；获授权的本地及真实服务验收 | 208 | 4561223 | `5a97b13534438f5e85249752ef492fbd9e23af73e67845e47bad1ab7d92e20ee` |
+| 用户提供的茅台 2025，原 `tem/` 文件及受控上传副本 | 来源性质、官方披露日期及再分发许可未确认；获授权的本地及真实服务验收 | 143 | 1082847 | `474905deeaf0f875fc0a1b097a626c0c7852c427faadc5d7fc7816cbf45ea288` |
+| 五粮液 2024，`cninfo-1223311527` | 已参与历史 C-01，不是盲测；仅本地边界复核 | 147 | 7895552 | `b737191a758994a35e9442d46847de771fe48b758feb9a7f35601def922435e7` |
+| 格力 2024，`cninfo-1223330631` | 财务适配冻结后选取，未据结果适配；仅本地独立对照 | 248 | 5087621 | `c7184706caf5f57c04a795990967cfc4f4253024e02f8bdaffe2b260df2c6006` |
+
+格力从[巨潮原 PDF](https://static.cninfo.com.cn/finalpage/2025-04-28/1223330631.PDF)取得，注册在 `data/raw/000651/2024/cninfo-1223330631/`；下载时间 `2026-10-12T03:02:29.078517+00:00`，URL 日期没有冒充独立核验的披露日期，许可仍未知。选择/下载证据见[独立对照选择](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/independent-holdout-selection.json)、[下载登记](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/independent-holdout-download.json)。该材料及五粮液都未获模型外发授权，也未外发。授权仅覆盖海天和用户茅台两个 SHA，不推定比赛公开再分发权。
+
+### 修复内容及本地财务结果
+
+- `ingestion/extract_annual_facts.py` 复用 v2 提取流程，支持标签与两期金额在同一多行 PDF block 的收入、资产负债及主要会计数据；重复金额不猜测匹配。核验器重新打开 PDF words，按年份、横向列间距及换行表头独立核对；没有伪造比父 block 更精细的 bbox。
+- `verification/comparability.py` 区分摘要/正文与平级标题，勾选“不适用”也检查紧随正文；明确影响冲突与无法确定分别保留 `conflict`/`insufficient_evidence`。空白调整额不当零，五项期初调整及未解释的非零差异保持阻断。
+- `verification/m3_semantic_mapping.py` 依赖唯一主要会计数据标题、明确人民币单位及同源两期归母利润的独立匹配；过程内 HMAC 绑定来源、文档、期间、字段身份和值。没有公司代码/页码答案，复制 JSON 不产生授权。
+- 实际浏览器发现旧终态归档被 job GET 改写为 interrupted，修复 `api/annual_analysis_jobs.py` 的最终归档判定：严格 reader 接受且旧版 `snapshot=None` 的终态保持原语义；现代归档缺 seal 仍拒绝，owner/gate 边界不放宽。修复前失败运行 `annual-analysis-eb9cd248-83c4-446f-9147-49ba31b288d0` 保留诊断，不手工改归档。`frontend/src/pages/AnnualAnalysisPage.tsx` 仅纠正可比性不足的缺口说明，不放宽计算资格、不删金额。
+- provider 假客户端改用真实 audited/admission 契约，保留后部合格引用与物理列/换行边界回归；删除旧只验证转发/副本的集成测试，不把 mock 回声作为真实归并证据。实现和公共契约经过独立审阅；根因/规则归属见[架构](architecture.md)，不在此另立协议。
+
+| 本地实际 CLI | 基础确认事实 / 计算 | M3 新增来源字段 / 独立核验总数 | 结果 | exit / 耗时 |
+| --- | --- | --- | --- | --- |
+| 海天 2024 | 8 / 8 | 10 / 18，均 verified | 可比性与语义映射 verified；试行分 0，不是舞弊概率 | 0 / 16.28 秒 |
+| 茅台 2025 | 8 / 0 | 10 / 18，均 verified | 保留两期金额；五项期初调整零值证据缺失，比较/M3 弃权，分数 None | 2 / 7.73 秒 |
+| 五粮液 2024 | 0 / 0 | 0 / 0 | 币种未确认及未解释非零差异 `2554581.61`；不补零、不输出分数 | 2 / 5.64 秒 |
+| 格力 2024，未参与适配 | 0 / 0 | 0 / 0 | 格式/可比性证据未支持，mapping/M3 abstained；这不是泛化通过 | 2 / 4.43 秒 |
+
+前三个 CLI 在生命周期修复前的源码清单 `271ed40f238a4515a8f1172ff328ec16d3db1f70f80745b9255ad7a3f32dd21a` 执行，财务提取/核验适配与上述最终清单相同；不把它们冒称最终清单运行。对应 run 分别为 `annual-analysis-25c7677e-f545-4adc-ba09-a56ec89a3f15`、`annual-analysis-dd958488-7a05-4196-a74d-4f1536fb59db`、`annual-analysis-5ecb7bef-b90e-4f91-91c3-ed5f565ee7fa`。见[CLI 原始结果](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/offline-final-cli-results.json)及[财务汇总](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/offline-final-summary.json)。格力在最终清单实际运行 `annual-analysis-9afaf11f-4a13-4c22-a6d3-bd26e9f41877`，见[独立对照结果](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/independent-holdout-result.json)。这些 CLI 都没有调用模型。
+
+最终清单的本地 Web/API 海天 job `annual-job-7b037bcd8e8044e1a8842fb9f15a436a` / run `annual-analysis-04d69582-a91b-46c1-a860-53d3dd32430f` 为 completed；真实原茅台上传 job `annual-job-0d9e0dcc3d044359a29fdb0cfbc738d9` / run `annual-analysis-aee1c173-17bc-4d9c-b80a-b4a83c5126c6` 为 completed_with_issues，未调用模型。茅台页面显示收入、归母利润、经营净现金流三行两期对照，亿元值依次为 `1688.38/1708.99`、`823.20/862.28`、`615.22/924.64`，原始元值与核验保留，比较比率未被强行生成。
+
+### 授权真实服务：首次结果、覆盖与未通过目标
+
+离线预估海天 18 批、茅台 13 批，正常各阶段预计 30/25 次，共 55 次，并预留 20 次续跑，未带着必然超 80 的计划启动。真实 provider/model 为当前配置的 `deepseek-flash`，身份指纹 `587bf1eb93db540876cadc9dd023f2bad664fe9080af1bd98e7b2f366d5c53cc`；没有增加供应方/型号默认值，没有输出凭据或服务 URL。首次任务维持 30 次/285 秒工作截止/300 秒硬截止，续跑 20 次；四阶段秒数仍为 150/60/35/25。没有调大目标或丢弃成员来制造通过。
+
+| 实际新在线结果 | 基础可读，自服务接受 | 首条来源合格 AI 可读，自 running | running 至终态 | 首次请求尝试 | 发现 / 归并事项 / 最终评审 |
+| --- | --- | --- | --- | --- | --- |
+| 海天 2024 | 27.88 秒，15 秒目标未通过 | 72.82 秒，本次 90 秒目标满足 | 229.42 秒，部分结果；不算可用归并主报告通过 | 14 | 13 / 0 / abstained |
+| 用户茅台 2025 | 16.02 秒，15 秒目标未通过 | 64.06 秒，本次 90 秒目标满足 | 198.25 秒，部分结果；不算可用归并主报告通过 | 11 | 12 / 0 / abstained |
+
+基础时间采用持久化 job `created_at` 到实际公司/年份及六个金额可读的浏览器 DOM；AI 时间采用 job `running_started_at` 到有合格来源引用的可见发现，100ms 采样，均在同一 OS UTC 上。排队海天 0.619 秒、茅台 0.671 秒单列；茅台实际上传 HTTP 201 的观测耗时 0.279 秒另记，不混入基础时限。首次计时未保存相应视口，不用后来的截图反推其桌面尺寸。首条“来源合格”仅指 schema/来源，不等于财务解释正确，也不称供应方全程健康的基准。
+
+海天 job `annual-job-748eaf80346a4e80b018e81e22a9c354` / run `annual-analysis-ca816a11-041c-4b13-8130-18ff64c0d6c8`；茅台 job `annual-job-1fa0a85caadd444dbbf51c56eb78ee57` / run `annual-analysis-5d71adbf-50c9-494a-84f6-9f5fabbf497b`，上传来源 `upload-67f0d7f72bd84b0094f33b24e2a7e18f` 的 SHA 与原件一致。两 job 均 completed_with_issues。见[海天首次完整观测](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/real-haitian-first-attempt.json)、[茅台首次完整观测](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/real-moutai-first-attempt.json)和[精确计量/关卡汇总](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/r6-acceptance-result.json)。
+
+| 首次扫描覆盖账 | 计划批次 / 字符 | 成功 / 部分 / 失败 / 未尝试批次 | 成功批次字符 / 尝试字符 / 未尝试字符 |
+| --- | --- | --- | --- |
+| 海天 | 18 / 204321 | 2 / 4 / 5 / 7 | 23879 / 131046 / 73275 |
+| 茅台 | 13 / 151314 | 4 / 1 / 5 / 3 | 46967 / 118068 / 33246 |
+
+两份都因发现阶段时间预算止步，全文未完成。部分批次的合格发现仍保留，但不升级为整批成功。两个归并调用均未取得可接受响应；海天首分片含 12 个成员，约 34.85 秒超时且没有响应，后续分片未尝试。归并分别保留 13/12 个候选成员，全局 `awaiting_global_reconciliation`、零应用决策、零事项。不能用首屏卡片或保存发现称归并闭环。
+
+两份最终评审均为 `abstained/annual_review_v3_request_budget_exceeded`、`model_called=False`、零评审请求准入。归档未持久化原始预准入请求体；按最终 raw report、investigation、pipeline 和实际 v3 构造器纯本地重建，海天约 35277 字符、茅台 32033 字符，仍超过 24000。此重建不是精确历史请求体证明，也没有外发；既有语义投影和紧凑 JSON 已使用，字段消融只作体积诊断，删除必要 claim 会失去合法性。本轮没有调高阈值、删候选/成员、把弃权写成评审完成。见[评审体积本地重建](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/real-review-size-reconstruction.json)。
+
+### 真实失败部分续跑、模型观点复核与计账
+
+实际点击海天“补跑失败部分”得到 POST 202，子 job `annual-job-32f81430ca1e483283ca9948bdb69bc2` / run `annual-analysis-bdbc94b3-cf09-4885-a17c-2aed4b57c63c`。父发现 13 个 ID 全部保留，成功批次 `[2,3]` 标为 `succeeded/reused` 且 `attempts=[]`，没有重新调用。子运行 94.234 秒，新增 5 次请求、零新响应，触发 `consecutive_transport_failures_stopped`，仍 completed_with_issues、未完成归并/评审。这证明缓存/预算/部分产物行为，不证明模型成功恢复。见[续跑终态](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/real-haitian-resume-final.json)及[消费者复用证明](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/real-resume-consumer-proof.json)。茅台的自动化点击未观察到其 POST 或子 URL，不称续跑成功，也不再重试。
+
+独立 reviewer 实际读取海天 PDF 页 1–94、茅台页 1–72 的提取文本，对最终 25 个 finding ID 完整复核；最初遗漏一个茅台投资现金流条目，补齐后才使用最终包。没有独立核验整页图，不是金融专家/真人审计。海天“按持股比例确认利润”的解释无原文支持；存货增加、商誉下降、其他应收款下降已有备货/减值/保证金退回解释。茅台投资现金流扩张已有财务子公司同业存款/同业存单说明，不能写成原因缺失。来源数值正确不自动支持异常、因果或舞弊判断；这些观点保留未核验，不改归档掩盖。见[完整原 PDF 文本独立复核](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/independent-agent-original-pdf-review-complete.json)。
+
+最终真实请求 **30/80，剩余 50**：海天首次 14、茅台首次 11、海天子运行 5；discovery 26、固定 investigation 2、grouping 2、review 0，全部来自两个获授权 SHA 和同一 provider 指纹。六个 gate 全部关闭；账本 `network_started` 不是成功响应计数。连续传输失败后停止外发，没有新 probe、重置账本、反复全量扫描或以偶然成功替换失败。API 页面 goal 投影为 None，不把它冒称页面显示 80；实际外部跨运行持久账本仍执行上限 80。没有供应方账单/token 证据，不估算金额。见[最终安全计账](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/ledger-accounting-final.json)。
+
+### 最终检查、实际浏览器与关闭保护
+
+最终源码的后端全套为 **879 passed / 28 skipped**，JUnit 305.752 秒；helper 收集等待不当性能基准。28 项分别为 Windows 缺 symlink 3、R2 opt-in 9、R3 opt-in 11、R4 opt-in 3、strict capability runner 1、semantics runner 1，未把跳过算通过。生命周期/并发专项 73 passed / 1 skipped。前端实际 `npm run typecheck && npm run build` exit 0，5.23 秒，Vite 8.3.0、29 modules；minified JS 大于 500kB 提示仍在。见[后端最终结果](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/backend-suite-deliverable.result.json)、[原始跳过理由](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/backend-suite-deliverable.stdout.txt)及[前端最终结果](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/frontend-deliverable.result.json)。
+
+当前源码故障演练是实际 CLI/API/worker 与原创合成输入、loopback provider，不是两个真实公司的财务通过：preflight、reuse_parent、reuse_child、business_input_drift_child、business_input_drift_continuation、cancel_group、deadline_global、http401_supplement、owner_hard_exit 九项通过，wrapper pytest 3 passed / 173.82 秒。loopback HTTP 与独立合成账本均 59 次，外部真实调用零，不占上述 30 次真实账本。正式独立 attempt 为 `artifacts/evaluations/annual-recovery-r4-20261010/runtime-acceptance-r6-20261012T034813Z-c2d61210/`，见[原始矩阵结果](../artifacts/evaluations/annual-recovery-r4-20261010/runtime-acceptance-r6-20261012T034813Z-c2d61210/attempt-result.json)。第一次主控漏建正式 attempt 目录，runner 在任何运行前报 `formal_attempt_directory_missing`；失败证据保留，后续使用新唯一目录，不重用失败目录或隐去失败。
+
+实际页面覆盖原件上传、本机样例、增量、旧归档、前进/后退/刷新、核验原文抽屉、失败部分续跑和三格式下载。基础报告在 1365×900 桌面和 390×844 窄屏检查；在线报告也实际检查桌面及 390×844，最终窄屏 scrollWidth 375，无横向溢出。茅台核验页 61 的原始金额与高亮实际可见；AI 发现引用页图另核对，不把原文高亮当财务解释验证。见[窄屏/证据记录](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/local-browser-evidence-narrow.json)、[历史导航](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/browser-routing-history.json)、[在线桌面截图](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/browser/real-moutai-desktop-report.png)、[在线窄屏截图](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/browser/real-moutai-narrow-report.png)及[AI 原文抽屉](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/browser/real-ai-discovery-evidence-observed.png)。
+
+在线茅台页面三格式实际下载 JSON 233693、Markdown 78413、HTML 48696 字节，与对应严格 API 字节一致；JSON 完整保留 12 发现、12 候选成员，不因概览最多三项截断。下载 HTML 实际用 file URL、断网重新载入，六个原始元值和 12 标题保留、无外部资源；HTML 显示评审 abstained/未调用，精确机器 reason 只在 JSON 保留，不冒称 HTML 显示 reason 字符串。原生浏览器 helper 后期点击/下载等待出现无效或旧文件返回，使用同一真实页面 DOM handler 的 click、实际 HTTP 200 和下载 inventory 完成证明，没有替换 API 结果或 mock 下载。见[真实三格式消费者证明](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/real-browser-export-proof.json)、[真实导出 API](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/real-api-export-proof.json)、[下载 HTML 断网读取](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/real-offline-html-smoke.json)及[离线截图](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/browser/real-offline-html.png)。
+
+三份旧结果 API 均实际 HTTP 200，provider 次数不增加。原 job `annual-job-7da3cb43ac544fb8bff6bbd3b99eae1a`、`annual-job-b85de6c54bea4c3eb38fe7e6a2acedad` 保持 failed；`annual-job-c40343564b0f470282a342372dc959a4` 保持原 completed_with_issues，不把三者都写成 failed。14 个列明保护对象的最终 SHA 与起点逐字节相同，包含三份旧 report/manifest/job、原 PDF、用户原茅台文件与改动 Word；原用户 Word 删除状态保留。仅审计列明文件，不是整盘资料审计。见[旧归档只读场景](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/legacy-three-readonly-smoke.json)、[旧 job 终态保护](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/protected-legacy-job-status-final.json)及最终保护清单。
+
+真实三 job 都终态后，仅关闭创建身份核对相符的本轮 API 和具名 Vite 服务；API 的 Windows terminate exit 1 不称正常 CLI exit 0。原生 Windows TCP 清单确认 8846/5846 无监听；本轮 browser tabs 已关闭，不终止宿主浏览器服务。只移除五个本轮启动/观察临时脚本，临时目录、正式日志、预算账本、原始失败与复现产物保留。见[所属服务停止](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/owned-runtime-stop.json)、[原生监听关闭检查](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/owned-listener-closure.result.json)及[精确临时脚本清理](../artifacts/evaluations/annual-recovery-r6-20261011T141924Z-5332b746/owned-scaffold-cleanup.result.json)。
+
+本轮更新 README 当前能力、architecture 提取/核验/生命周期契约、data-policy 新对照来源、annual-discovery 真实边界、两份路线及恢复阶段状态；旧报告/源码包/比赛交付材料仍保持各自历史绑定。上述正式运行证据按现有忽略规则保留本地，不强制纳入 Git，许可未明确的资料不加入公开比赛包。未通过的软件目标如上；真人跨公司金融复核、非金融用户 30 秒理解试验、另一台电脑干净安装、比赛网络/API 规则、计划书 PDF/MP4/平台提交仍未完成。R6 没有新 commit 或推送，不把本轮证据、旧 mock 或源码审阅算作这些关卡通过。
+
+<a id="annual-analysis-recovery-r6-landing"></a>
+
+## 2026-10-12 R6 落地：有界放宽、两家新真实运行与质量阻塞
+
+**结论：第一档 v6/v2 留作历史，第二档 v7 / `annual_analysis_budget_v3` 已通过软件与受控运行关卡；两家新真实 Web/API 主流程均已执行，但未通过完整落地与质量验收。** 海天当前已知成员全局闭合但全文发现不完整，茅台归并未闭合；两家最终评审均在有效阶段截止处超时。独立原 PDF 审查发现已披露解释遗漏、主体/资金方向和期间等错误，不能用“模型观点/待核查”标签豁免。活动及冻结历史合同见[架构](architecture.md#annual-execution-budget)，旧 R6 失败评价保留。
+
+### 源码身份与正式目录
+
+正式证据目录为 [`artifacts/evaluations/annual-recovery-r6-landing-20261012T082716Z-51bb821d`](../artifacts/evaluations/annual-recovery-r6-landing-20261012T082716Z-51bb821d)。**第一档** runtime 81 个后端源码清单 SHA256 为 `05a0c16bfcfe61ef0538dd25f6e425abb7e55fb37ae76cadec29aaacd2d0ae16`（[`source-manifest-integrated.json`](../artifacts/evaluations/annual-recovery-r6-landing-20261012T082716Z-51bb821d/source-manifest-integrated.json)），不是第二档代码身份。**第二档** Core/Surface 已独立静态审阅并整合，无剩余静态阻塞，runtime 81 文件 SHA256 为 `29790bda13cd0e88caa49a04f4b268c69b8e0d4b87b1e02f7be9dbf6327da99d`，见 [`tier2-integration-receipt.json`](../artifacts/evaluations/annual-recovery-r6-landing-20261012T082716Z-51bb821d/tier2-integration-receipt.json)。Core/Surface 增量分别保存为该目录的 `tier2-core-initial.patch` 与 `tier2-surface-initial.patch`；不把补丁、整合或静态审查当作运行通过。交付为工作区增量，没有新建 R6 commit、没有推送。
+
+### 第一档软件关卡：只归属 v6/v2
+
+后端套件 attempt1 为 8 failed / 890 passed / 28 skipped，随后修正 fixture/type；attempt2 为 **898 passed / 28 skipped**，前端 build attempt2 exit 0。原失败保留，结果见 [`backend-suite-attempt2.result.json`](../artifacts/evaluations/annual-recovery-r6-landing-20261012T082716Z-51bb821d/backend-suite-attempt2.result.json)、[`backend-suite-attempt2.stdout.txt`](../artifacts/evaluations/annual-recovery-r6-landing-20261012T082716Z-51bb821d/backend-suite-attempt2.stdout.txt) 与 [`frontend-build-attempt2.result.json`](../artifacts/evaluations/annual-recovery-r6-landing-20261012T082716Z-51bb821d/frontend-build-attempt2.result.json)。本次文档代理没有重跑命令；这些通过数不属于 v3。
+
+合成长等待实际观测归并 38 秒、评审 29 秒，请求体 33229 字符、18 个成员、全局闭合、评审完成、三格式导出 HTTP 200，见 [`long-wait-smoke/result.json`](../artifacts/evaluations/annual-recovery-r6-landing-20261012T082716Z-51bb821d/long-wait-smoke/result.json)。该输入是 synthetic，不是财务 gold，不能当作跨公司语义、真人金融复核或新真实主流程通过。
+
+跨 owner 复用 attempt1 因只允许 cancelled 而失败；attempt2 在 actual cancelled、owner 实际时间 60→345 秒且政策相同下复用 6 次、无新 discovery、父 hash 不变，见 [`cross-owner-smoke-attempt2/result.json`](../artifacts/evaluations/annual-recovery-r6-landing-20261012T082716Z-51bb821d/cross-owner-smoke-attempt2/result.json)。这是第一档动态证明，不是 v3 的 60→375 复用证明；单次可运行不是稳定性证明。
+
+9 案 opt-in 矩阵目录 [`artifacts/evaluations/annual-recovery-r4-20261010/runtime-acceptance-r6-landing-20261012T101300Z-51bb821d`](../artifacts/evaluations/annual-recovery-r4-20261010/runtime-acceptance-r6-landing-20261012T101300Z-51bb821d) 标记 passed，59 次 loopback、0 次外部请求。
+
+### 两份新确定性基础结果与浏览器消费者
+
+两份新真实 PDF 的确定性浏览器基础结果：海天 **8.4527773 秒**、茅台 **4.5055906 秒**，上传另计，8 条事实实际可读，未调用云端模型；分别见 [`basic-haitian-browser-measurement.json`](../artifacts/evaluations/annual-recovery-r6-landing-20261012T082716Z-51bb821d/basic-haitian-browser-measurement.json) 和 [`basic-moutai-browser-measurement.json`](../artifacts/evaluations/annual-recovery-r6-landing-20261012T082716Z-51bb821d/basic-moutai-browser-measurement.json)。茅台原文页 61 金额/页图见 [`browser/basic-moutai-evidence-page61.json`](../artifacts/evaluations/annual-recovery-r6-landing-20261012T082716Z-51bb821d/browser/basic-moutai-evidence-page61.json)。本轮无需速度重构，也未作 M3 发布顺序修复；不能据新确定性结果改判首次 R6 目标。
+
+实际浏览器读取旧 v1 job 为 HTTP 200，预算仍为实际 300 秒；第一档 v2 live owner 实际 345 秒、v6 archive 仍显示自身 40k/60 政策。三格式页面点击下载与 API bytes 一致，离线 HTML 在 network denied 下可读，390px 窄屏无页面横向溢出。原始索引、DOM、截图及下载证据集中在 [`browser/`](../artifacts/evaluations/annual-recovery-r6-landing-20261012T082716Z-51bb821d/browser/)，具体见 `verification-index.json`、`old-v1-live-budget.txt`、`controlled-v2-live-budget.txt`、`controlled-v6-v2-budget.txt`、`controlled-v6-v2-downloads.json`、`controlled-v6-tier1-offline-html-desktop.png` 与 `controlled-v6-v2-budget-narrow390.png`。这些均不是第二档新真实 AI 报告。
+
+### 同完整 body 的两档真实单分片专项
+
+两次仅重建海天历史 run `annual-analysis-ca816a11-041c-4b13-8130-18ff64c0d6c8` 的 `group:000:8e3bcb1499adbc3e`，12 个成员，完整 Chat body **15028 字符 / 20764 字节**，SHA256 为 `5120ecde4028317ba46a59b34a6d60c511e6bf9a658ef8ed579929c2f79c0e77`。来源、provider/model、提示词及 body 不变，无自动重试。
+
+| 独立专项 | 有效阶段 / 单次上限 | 实际耗时 | 准入 / 耐久响应 | 结果与证据 |
+| --- | --- | --- | --- | --- |
+| 第一档 | 60 / 60 秒 | 60.0185845 秒 | 1 / 0 | timeout，无响应；[`grouping-bdc946d664284ed584939cc985953c4c/result.json`](../artifacts/evaluations/annual-recovery-r6-landing-20261012T082716Z-51bb821d/tuning/grouping-bdc946d664284ed584939cc985953c4c/result.json) |
+| 第二档独立试验 | 90 / 90 秒 | 63.8277561 秒 | 1 / 1 | accepted，12/12 成员有合法 decision；[`grouping-e0d673ae1ead4bf4bbea5685bb864ba9/result.json`](../artifacts/evaluations/annual-recovery-r6-landing-20261012T082716Z-51bb821d/tuning/grouping-e0d673ae1ead4bf4bbea5685bb864ba9/result.json) |
+
+第二档响应经 pipeline typed/source 校验；供应方 usage 为 prompt 6887 + completion 13449 = 20336 tokens，不推算费用。独立审阅核对实际 admission、canonical members、同 body 及只升归并的 375 秒公式；模型自审不是 finance 核验。**专项结束当时**共享账本为 32/80、剩余 48，调参 2/6。这只是单 H shard，不是 global closure、最终评审或新 Web report。专项原件中的活动产品政策仍标 v2 且 `product_policy_modified=false`，保留试验发生时身份，不回写成 v3 产品运行。
+
+### 第二档稳定代码的软件与实际运行关卡
+
+后端 **924 passed / 28 skipped**，前端 build exit 0，见 `backend-suite-tier2-attempt1.*`、`frontend-build-tier2-attempt1.*` 及 [`offline-gates-tier2-result.json`](../artifacts/evaluations/annual-recovery-r6-landing-20261012T082716Z-51bb821d/offline-gates-tier2-result.json)。显式年度单次 90 秒覆盖较短持久设置，并被更短共享阶段截止夹紧，见 `worker-timeout-smoke-tier2/result.json`。实际 loopback 归并等待 65.0013 秒、评审 29.0015 秒，完整 body 33229 字符、18 个成员；当前已知发现全局闭合且评审完成，pipeline 仍为 `supplement_role_pending`，32/72 补证配对已处理、40 未处理，不能写成全部补证完成或财务 gold。
+
+同政策 owner 60→375 的实际取消/续跑复用 6 个成功发现批次，零新 discovery 请求，迟到响应和 child 运行后 parent 原件未变，见 `cross-owner-smoke-tier2/result.json`。旧 v5/v6 严格读取及三格式导出通过，保留各自封存政策，见 `historical-read-after-tier2/result.json`。
+
+九案矩阵原第二档 attempt 因固定 9 秒延迟早于实际 owner 60 的 12 秒归并截止而失败；这是测试夹具未跟随政策，不是生产越界。保留失败原件，仅修正为从实际 POST 预算派生的延迟及晚于截止/封存的边界断言，未降低旧断言。独立审阅后的修正版 **9/9 passed**，目录 [`runtime-acceptance-r6-landing-tier2-fixed-20261012T121608Z-51bb821d`](../artifacts/evaluations/annual-recovery-r4-20261010/runtime-acceptance-r6-landing-tier2-fixed-20261012T121608Z-51bb821d)；迟到响应实际 27.0009 秒，完成晚于终态及封存，原 hash 未变、无后续补证。对应源码仍是上述第二档 manifest。
+
+### 同固定配置的两家新真实 Web/API 主流程
+
+两家均通过实际页面显式启用 AI；茅台重新上传用户原始 2025 PDF，SHA256 与授权原件一致。未更换供应方/型号、未增加并发、未扩大共同 80 次上限，未进行付费续跑。
+
+| 新运行 | 端到端 / 排队 | 本次真实准入 | 发现覆盖 | 成员及归并 | 最终评审 |
+| --- | --- | --- | --- | --- | --- |
+| 海天 `annual-analysis-43b53ad5-9bdc-4b75-b095-9bd62115fff5` | 305.072 / 0.612 秒 | 11 | 尝试 6/18 批；1 成功、5 失败、12 未尝试 | 3 findings、3 成员、3 issues；当前已知成员全局闭合，pipeline 因全文覆盖不完整仍 partial | 1 准入、0 响应；44.8422 秒 timeout |
+| 用户茅台 `annual-analysis-927e5ac9-99af-462b-8ad0-558c010658ec` | 295.691 / 0.663 秒 | 12 | 尝试 9/13 批；5 成功、1 partial、3 失败、4 未尝试 | 17 findings、17 成员、12 局部 issues；90.054 秒归并阶段截止，全局未闭合 | 1 准入、0 响应；44.7736 秒 timeout |
+
+两家终态均为 `completed_with_issues`，保存部分结果及恢复能力不是完整成功。严格 API、状态转移、账本准入、三格式实际导出原件分别在 `real-main-haitian-v3/`、`real-main-user-moutai-v3/`。两家均实际点击三格式下载，下载与 API 六份 bytes 完全一致，见 `browser/new-real-v3-download-byte-proof.json`；实际打开受控 PDF 证据，桌面及 390px 页面观察无窄屏横向溢出、页面错误列表为空。两家离线 HTML 均实际 file URL 读取，无脚本/外部图片；茅台在 offline emulation 后重载仍可读，保留 partial、未闭合布尔值和评审失败，见 `browser/real-user-moutai-v3-offline-html-proof.json`。截图、下载与消费者原件见 `browser/`；不把空 response-text、超时截图或工具杀 tab 当作产品通过/失败。两家“读取保存结果”实际仅发严格 GET，无 POST、新任务或模型调用；茅台重载三个请求均 HTTP 200，见 `browser/real-user-moutai-v3-saved-read-proof.json`。
+
+海天 3 个发现与茅台全部 17 个发现已独立对照原 PDF 表头、主体、期间、单位及相关说明，分别见 [`new-haitian-v3-original-pdf-review.json`](../artifacts/evaluations/annual-recovery-r6-landing-20261012T082716Z-51bb821d/new-haitian-v3-original-pdf-review.json)、[`new-user-moutai-v3-original-pdf-review.json`](../artifacts/evaluations/annual-recovery-r6-landing-20261012T082716Z-51bb821d/new-user-moutai-v3-original-pdf-review.json)。海天有同处商誉减值原因被否认、春节备货说明未呈现及关联采购“高”无基准；茅台有财务公司吸收关联存款负债方向混同、陈酿限定遗漏、报告期内与期后治理事项混同、余额变动被写成资金流向、同处直销成本解释遗漏、上期已负现金流却写“转为净流出”。这是原文审查发现，不是金融真人复核。茅台 p35 工具文本遗漏处，reviewer 另读同源完整 parsed blocks；随后主控在实际证据抽屉打开完整原 PDF 页图并目视确认第十三节两个报告期末未整改事项，图像 893×1263，见 `browser/real-user-moutai-v3-governance-original-page35.png`，没有改写 reviewer 原件中的当时视觉限制。
+
+只读定位确认：海天成功 discovery batch 已发送同页商誉原因和春节说明，不能归咎于全文规划丢失；旧提示词单片段引用表述比 parser 更窄，后续 issue 文案直接复制 finding，补证泛词排序挤掉源短指标。通用修复必须改变新发现及来源锚定检索合同，不能只换补证标签、截输入、手改旧报告或增加模型自审轮次来冒称修正。
+
+两家结束后共享账本 **55/80、剩余 25**，调参仍 **2/6**，开放准入 gate 为 0。新业务合同下不能复用旧提示词成功批次；海天完整计划 30 + 失败预留 3 = 33，当前至少缺 8 次容量；茅台计划 25 + 3 = 28，至少缺 3 次。上述缺口各按单家重核，不把二者相加冒称已获授权。未扩大总额度、未少扫材料。最终评审 60 秒、390 秒 owner、48k 容量及按需总评分支未启用；删评审也不能修复归并未闭合和已知源解释错误，优先处理通用来源语义缺陷。
+
+末两次实际准入为茅台第二归并分片及最终评审，原审计分别 17.5785 秒与 44.7736 秒 timeout、各 1 准入/0 响应。本轮停止后续外发，真实 API 服务在任务均终态且 gate 关闭后停止，见 `real-provider-stop-after-two-main-runs.json`。后续新提示词完整输入规划须离线重算，不能只按旧批数推定新合同启动所需额度；额度不足与未取得新语义输出证据分别记录。
+
+20 项列明原 PDF、用户 DOCX、旧 parent sealed report/job 等 hash 在海天新运行后未改，见 `protected-files-after-haitian-v3.json`；不是全盘审计，后续仍须最后列明复核。新语义合同的软件及模型结果不能借用本节 v7 通过数。真人金融复核、非金融用户理解试验、另一台电脑干净安装、比赛网络/API 规则仍单列未通过；不省原 scope 或人审条件。
+
+### 新语义合同 v8：初始验证与独立审查
+
+新 `annual_discovery_v4.md` 保留旧 v3 文件字节，要求保留披露解释、分别引用相关原文并区分主体、期间、比较口径与资金方向。plan_v3 / discovery_v3 解析器、事项 pipeline_v1、review_v3 及预算 v3 不变；外层/envelope 改为 v8，并绑定 `source_anchor_then_ngram_v2`。旧 v5/v6/v7 只读，不借旧成功批次抵扣新计划。
+
+初始 v8 整合后前端 build exit 0，后端 **7 failed / 970 passed / 28 skipped**，原件 `frontend-build-semantic-v8-attempt1.*`、`backend-suite-semantic-v8-attempt1.*` 完整保留，不将其算作通过。失败包括空白/错 SHA 前置处理、旧未绑定发现夹具未迁移紧凑输入、时间夹具过早截止及旧 Markdown 版本措辞断言。独立代码审查另发现 API 完整恢复绑定与前端最小展示形状冲突、早期 v8 缺事项绑定仍可能通过、长块引文后的短指标被截掉、500 字块首窗丢失实际引文及未知章节/相邻原因标注失真，见 `semantic-v8-initial-independent-review.json`。
+
+初始实际原 PDF 上下文烟测 exit 0：海天 3 个事项选 12 片、茅台 12 个事项选 47 片，连续原文/定位与上限通过；新完整计划仍为海天 18 批、204321 字符，茅台 13 批、151314 字符。另严格读取旧 v5 两份、冻结 v6/v7 受控报告及两份新真实 v7 报告，18 份三格式导出成功且六份报告 SHA 未变，见 `semantic-context-v8-smoke/result.json`。这是初始实现结果，不能替代纠正后的验证；海天补证还夹入相邻不相关数值表行，已经交回修复。任何上下文选择和引用检查均不证明新模型语义已通过。
+
+用户最新选择交付审核后的可追溯任务增量补丁；没有授权把初始 32 项用户改动做成基线提交。原起点 HEAD、原工作区 diff 和逐文件 hash 保留；本任务不创建提交、修改 HEAD/索引或推送。补丁须以原脏工作区字节为父基线，并在独立临时副本实际应用后逐文件验证当前字节，不以 HEAD 全差异混入用户改动。
+
+### 2026-10-13 v8 纠正候选：真实故障与单批外发
+
+第一份纠正候选源 manifest 为 `4b869d257f3562f4dc941cc2e472734c5c846cb029d1cff5075b308b1f1aa98f`，82 个生产源文件。前端 build exit 0；后端 **27 failed / 968 passed / 28 skipped**，完整原件位于 `v8-final/backend-suite-attempt1.*`，不是最终通过版本。`v8-final/long-wait-smoke-tier2/result.json` 记录实际归并 65.0054 秒、评审 29.0016 秒、body 34953 字符，18 个成员/事项、已知关系闭合、评审完成及三格式 HTTP 200；取消/owner 60→375 复用烟测 exit 0。原 PDF/六份历史报告、18 份导出烟测 exit 0，但海天商誉选片仍包含无关应交税费和长期借款行，缺 p147/p149，因此这份烟测的局部断言不能代表来源相关性通过。
+
+当前源码九案矩阵在 preflight 的真实 CLI/API 归档读取处失败，完整原件保留在 `runtime-acceptance-v8-final-20261013T000000Z-51bb821d`。独立审查确认三项生产阻塞：发现异常分支引用未定义 batch_index 导致 attempt/audit 丢失；零准入 deadline 拒绝的 timeout=0.0 与 reader 正数守卫、外层 timeout 与 attempt call_deadline_exhausted 分类不一致；泛化词匹配仍抢占商誉补证名额。另有零批次原因错误和九项新测试 fixture 未进入校验。不能删除审计、放宽所有失败读取或改断言掩盖这些错误；修正后的新源与验证另行记录。
+
+在原授权调参余额内执行了一次新提示词完整海天 batch 2 专项，不是新 Web 完整报告。独立安全审查及无外发 preflight 后，同一 provider/model、原共享账本、attempt=1；batch 包含 p13–23 的 374 个片段、11957 原文字符，完整请求 22724 字符 / 38812 字节，body SHA256 `df853f59fe945ccca4946f035d7be4dfcda3c07019b0130f76d473acf70b0cec`，提示词原字节 SHA256 `1af4db330b058caea7d8ae0bb9f53f4779eaa1d14c454040231e787c6da752de`。完整计划仍 18 批 / 6856 片段，未截输入。真实 run `annual-stage-r6-tuning-c282cc4910bf48a693123e898b258341`，1 准入/1 耐久响应，parser 接受 2 条、拒绝 1 条，结果 **partial**；见 `tuning/discovery-v8-c282cc4910bf48a693123e898b258341/` 与对应运行审计。
+
+新输出已引用并陈述春节备货解释，净利/经营现金流同比方向有源支持；库存事项仍用“仅披露为”漏掉同段高产销率/周转率陈述，存量与期间流量比较的限制未充分明示。供应商 quote 将原文跨行字符重组为非连续子串，被现 parser 拒绝，未放宽规则。商誉披露与原因在输入中但未生成 finding，不能据缺席宣称商誉语义已修复。独立源审查及对 priority=核查顺序、假说不是已确认因果的纠正见 `v8-final/V8DiscoveryOriginalReview-raw.json`；这些不是金融真人核验或跨公司质量通过。
+
+专项后真实共享账本为 **56/80、剩余 24**，调参 **3/6**，gate 为 0，旧海天列明原件 SHA 未变。单家公司完整计划加预留现在分别为海天 33 次（至少缺 9 次）、茅台 28 次（至少缺 4 次）；不将单阶段当作可跨绑定复用的正式 discovery 批次，不扩大授权或少扫材料。具名 bash 服务因运行环境错误未启动，其就绪标记亦曾误命中旧端口；这些工具失败不算产品验收。后续实际浏览器服务用 Windows 原生、受控生命周期进程，并核对实际 PID 与源码身份。
+
+### 第二份 v8 纠正候选与宿主模型回退
+
+生产源 manifest `fb164a6da0bacc2b59c550277a8856bf884266371d239d9d373701a29a41de9f`，82 个文件。后端 **4 failed / 994 passed / 28 skipped**，四项均为伪造 prompt hash 已被拒绝后，测试仍限定偶然的错误优先顺序；保留篡改拒绝行为验证，不修改生产校验去迎合错误文案。完整原件为 `v8-final/backend-suite-corrected.*`。实际矩阵 **1 failed / 2 passed**，preflight 与初始恢复阶段已越过旧零准入审计错误，但多代 `business-input-drift-continuation` 的真实任务 GET 超过 15 秒；不能延长观察 timeout 冒称修复，见 `v8-final/runtime-matrix-corrected.*` 与 `runtime-acceptance-v8-corrected-1336eefe/` 原件。
+
+这份原 PDF 补证烟测失败：海天商誉选中 p22 两处因果段及 p149 市场/价格/利润率说明，但 p77 重复资产负债表数字抢占 p147 金额附注；已消除的无关税费/借款行不代表全部来源相关性通过。六份历史报告严格读取与 18 份导出已先执行、原报告 hash 未变；失败结果另保留于 `semantic-context-v8-corrected-smoke/result.json`，不使用局部成功覆盖最后的来源断言。
+
+用户要求 Grok 与 Luna 额度耗尽后统一使用 naapi 回退。项目配置已设置对应 fallback，并关闭等待用量重置；有效配置读取确认来源为项目层。具体模型标识仅维护于 [`.omp/config.yml`](../.omp/config.yml)，调用身份以宿主实际报告为准；应用财务分析的 provider/model 与原共同账本授权没有因此改变。
+
+### 单次严格读取修复与后续来源排序候选
+
+源码 `7d5ae043d0a003898ab01c553c89d945fbfa7dd6553725d871c5645ab4fbb17f`、82 个生产文件，后端 **999 passed / 28 skipped**、前端 build exit 0。实际九案矩阵全部通过，59 次 loopback HTTP 与同一合成账本 59 次准入一致，前后主源码及副本 hash 相同、外部调用为 0；见 `v8-final/backend-suite-stable.*`、`frontend-build-stable.*` 和 `runtime-acceptance-v8-stable-c2dd2204/attempt-result.json`。GET 将本次 strict archive/error 传给各投影，不跨请求缓存；多代续跑不再发生原 15 秒 GET 超时。此源原 PDF 烟测仍失败，不能视作完整软件验收：金额附注仍被仅共享指标的其他附注挤出。
+
+随后主体锚候选 `85d3bdb1f7a23d865a9281649f913fa2dcd337caeabfcaa39df869054d8eb71e` 的来源排序专项 exit 0，但实际海天 p147 仍未选中；再过滤通用计提/减值措辞后，又被同主体的母公司长期股权投资行挤出。各失败原件保留于 `semantic-context-v8-entity-final-smoke/`、`semantic-context-v8-final-rank-smoke/`。当前追加同页编号表题的指标锚排序，不修改片数/容量，不特判公司或页码；旧合同通过数不移作这一新源的证明。
+
+`protected-files-v8-entity-final.json` 核对 20 项初始列明原件及旧 discovery_v3 原字节，均未变；两份新真实报告按原 API 检查点的规范 JSON 内容哈希核对亦未变。此前保护脚本误将规范内容哈希与 raw 文件字节哈希比较，失败原件保留于 `protected-files-v8-stable.json`；纠正比较合同后才通过，不宣称这两项拥有此前未保存的 raw 字节基线。
+
+naapi 长上下文审查唤醒返回预扣费额度不足，未产出。其后短上下文独立审查指出未知 reader RuntimeError 可能逃逸；主控实际 `AnnualAnalysisJobService.get` 演练证明本次失败先使 availability 不可用，capability 在错误重抛之前即拒绝恢复，原件 `v8-final/job-unknown-read-error-final/result.json`，不为不可达分支扩大 catch 掩盖其他错误。用户随后明确 naapi 已无 token，本轮停止再启动或唤醒这类子代理，保留指定回退配置、不擅自换模型；最终新增来源表题排序尚无独立复核，不能标为“全部已审查通过”。
+
+### 最后来源表题候选：本地门禁与界面状态修复
+
+生产源 `7cf2f1974c1ff1a5282aef3af25d1c041ff5d7720b19345195e81fbe9520de50`、82 个文件：后端 **999 passed / 28 skipped**，当前源码九案恢复矩阵通过，主源码/副本前后 hash 均一致、无外部调用。原件分别为 `v8-delivery-candidate/backend-suite.*` 和 `runtime-acceptance-v8-delivery-candidate-fb8290ce/`。来源排序专项 **40 passed**；实际海天选择 p22 两个连续独立原因块、p147 金额附注及 p149 市场说明，茅台 12 个事项选择 47 片并可重建原文。六份 v5/v6/v7 历史报告及 18 份导出可读，原报告 raw hash 在烟测前后不变，见 `semantic-context-v8-table-final-smoke/`。上下文检索通过不证明新模型文案或金融语义通过。
+
+同源较长等待烟测实际归并 **65.0013 秒**、评审 **29.0011 秒**，完整 body **34953 字符**、18 个成员/事项、已知关系闭合及三格式 HTTP 200。pipeline 仍 partial：补证共有 72 个角色任务，本次请求 32 个、40 个 pending；没有把已知关系闭合升格为全部处理完成。实际取消/owner 60→375 续跑复用了六个批次，没有新 discovery 请求，原 parent 未变，见 `v8-delivery-candidate/long-wait-smoke-tier2/` 与 `cross-owner-smoke-tier2/`。
+
+真实 Vite 编译客户端消费当前 API 的 v5/v6/v7/v8 六份响应，读取成功且预算身份分别保持 v1/v2/v3；不是仅靠 build 验证 P1 投影修复。原件 `v8-delivery-candidate/browser-session/browser/ts-reader-all-versions.json`。实际页面暴露首屏将“pipeline partial”误写成“关系未闭合”；`AnnualReportOverview.tsx` 已按 global_closure.closed 分开关系状态和覆盖/补证缺口。当前实际桌面 1440px、窄屏 390px 无横向溢出，闭合提示保留缺口，截图及修复前原件均保留；前端修复后 build exit 0，见 `frontend-build-state-fix.*`。这是主控小范围修复与实际验证，不冒称已经得到新的独立复核。
+
+默认浏览器守护进程退出 21；改用已安装 Chromium 后可渲染和截图。原生 app.path 复用同一页面导致具名句柄互相导航，按顺序导航才读取正确版本；下载等待器锁住同 tab，超过指定时限仍未结束，CDP 桥接下载也挂起。第一次只读服务到有界会话截止后自动清理自有进程，工具失败原件保留，不算产品通过或失败。后续另以现有 Playwright 和已安装 Chromium 执行真实按钮/原文/文件演练；初次脚本遗漏嵌套补证折叠区、后续启动遇到服务会话截止及不必要的 networkidle 观察条件，失败原件完整保留。改为自有服务与消费者同一有界生命周期、以真实报告控件就绪为门禁，不增加产品超时、不安装依赖、不更换模型、不外发。
+
+### 原文、实际文件与离线读取最终演练
+
+旧模拟 PDF 的右列重复文字出现 x1=596、页面宽 595，预览按既有坐标守卫返回 HTTP 422。未放宽页图校验，未改任何旧 PDF 或已封存报告；只将测试生成器的第二份重复填充按页内可用宽度构造，第一列完整句及主要结构保留。旧失败原件 `v8-delivery-candidate/native-browser-proof-diagnosed/` 已先证明实际三格式下载与 API 三份 bytes 一致，但该场次页图未通过，不能作为完整浏览器验收。
+
+新合法模拟源保持六个发现批次、18 个成员/事项、完整评审 body **34789 字符**，生产 hash 仍为 `7cf2f197...`。同源九案矩阵再次通过，见 `runtime-acceptance-v8-fixture-final-a2529550/`。Vite 开发态三进程演练曾出现 CSS 模块未完成响应而阻塞 DOM；最后使用已构建的真实前端及单一受控 API/生产预览，不延长产品时限、不模拟响应。
+
+完整演练 exit 0：run `annual-analysis-3aee84b0-079e-433a-9bb8-a4e9259e663f`、job `annual-job-a85c76a2529e4ddea8e3680e9e803061`。1440px 桌面与 390px 窄屏 documentWidth 均等于视口、页面错误为空；pending 补证原文抽屉实际读取第 15 页 PNG（1769×105），展示角色待标注、连续原文及未独立核验限定。三份真实点击文件（JSON 233398 / Markdown 75585 / HTML 87793 字节）与 API 各自 bytes 完全一致。HTML 实际 file URL 打开并断网重载，脚本及外部图片均为 0。全部应用请求为 GET，无新建/补跑或外部模型调用；有界演练结束后自有 API/预览进程全部退出。原件与截图见 `v8-browser-fixture-final/production-browser-proof/`、`production-browser-session/session-result.json`；使用环境为已有 Playwright 1.60.0、已安装 Chromium 151.0.7922.34，没有安装依赖。
+
+这些关卡证明当前候选的软件消费行为，不证明真实金融语义或新完整在线主流程通过。最后来源表题增量仍缺独立复核，naapi 无 token 后未继续唤醒/派发、也未切换用户模型；候选增量不能标为全部审核通过。共同真实请求账仍按原 80 次与最多 6 次调参授权处理，未用合成账本抵扣真实请求，也未借旧提示词成功批省略新合同扫描。
+
+最终列明保护核对见 `protected-files-final.json`：20 项初始原件及旧提示词 raw 字节均未变，两份新真实报告的规范检查点内容哈希均未变；不是全盘或所有新报告 raw 字节基线审计。最后真实共同账本读数 **56/80、余 24、调参 3/6、开放 gate 0**，见 `v8-browser-fixture-final/real-ledger-final.json`。海天 33 次完整计划含预留至少缺 9，用户茅台 28 次至少缺 4，各按单家公司计，不视为已追加授权。当前候选只保留可追溯任务增量及实际应用校验，不能冒称全部独立审核通过；本任务未执行提交、暂存、修改 refs 或推送。
+
+交付构造发现项目 `core.autocrlf=true` 令临时应用后的配置变成 CRLF，而当前文件为 LF；首份候选应用虽执行成功，但 raw 字节校验失败，不能计为通过。后续仅在 diff/apply 命令上使用 `-c core.autocrlf=false`，不修改 Git 配置。同时发现工作区等待额度重置开关后来为 true（项目层有效值），与本轮先前设置不同；按用户后续改动保留，不覆盖为 false。配置候选的父基线保留当前全部非任务配置字节，仅移除两条本次授权的 Grok/Luna selector 链，再产生任务增量；此配置父基线与原任务起点差异单列，不伪称原脏工作区已是一棵 Git snapshot。
+
+候选增量交付文件为 [`task-increment-candidate-r6-v8-delivery.patch`](../artifacts/evaluations/annual-recovery-r6-landing-20261012T082716Z-51bb821d/task-increment-candidate-r6-v8-delivery.patch)，逐文件父基线/当前 raw SHA、来源补丁、实际应用校验与独审未完成状态见[对应 manifest](../artifacts/evaluations/annual-recovery-r6-landing-20261012T082716Z-51bb821d/task-increment-candidate-r6-v8-delivery.patch.manifest.json)。它不是针对 main HEAD 的整工作区 diff：继承原 32 项用户改动，配置另保留后续用户字节；不得把候选名称、临时副本应用成功或主控验证解释为金融质量或全部独立审核通过。
+
+## 2026-10-13 R6 追加授权：共享总额无限、真实 GET 热路径与导入副作用
+
+证据目录：[`annual-recovery-r6-unlimited-20261013T125543Z-473014ef`](../artifacts/evaluations/annual-recovery-r6-unlimited-20261013T125543Z-473014ef)。用户先授权调用容量，随后明确“模型api调用不设置上限”“无视所有block的规则条件继续推进任务”。本轮取消共享累计尝试上限，不清零历史，不更换供应方/模型或外发来源，不取消任务/阶段尝试预算、有限截止、取消或严格来源核验；不可用 naapi 不再启动/唤醒，末轮独审未发生的事实保留，不当作继续运行的程序性阻塞。
+
+原账本的 56 条尝试逐行守恒，备份、原策略及材料哈希在本证据目录保存。配置 `limit=null` 与原 SQLite 策略行 `quota_limit=0` 同步按新授权更新；运行时仍拒绝仅修改配置但未显式更新持久策略的情况。实际连接器本地 HTTP 烟测证明原有限额度可拒绝第三次准入，明确无限策略后第三次成功及第四次 HTTP 401 均计账，取消门关闭后拒绝新准入；不是用大整数模拟无限额。最初本地响应夹具缺少 ID，被连接器正常拒绝，失败未删、未放宽解析。
+
+新真实海天任务 `annual-job-c637a4aee701429782831c4d7e5acb54` / `annual-analysis-a5095b33-90d3-4878-8953-ff72631b7d16`，启动加载源码 `acab648c`，原完整 18 批/204321 字符计划不省略。该任务实际准入 8 次，发现结束 6/18（2 完整成功、4 失败、12 未尝试），保存 6 条合格线索；最终 `completed_with_issues`、归并仍 pending、评审弃权为 user_cancelled。审计及取消标记保留，不能据该原因字符串推定用户真的点击过取消，也不算完整财务质量通过。同账本另有 `annual-analysis-1a20f2a0-8b1c-4b6c-8a78-ad0a3f66ac9f` 的 4 次发现准入，不由本主控创建、不算本主控新运行成果；总数 68 的时点与归属单列。
+
+真实状态观察器在 20 秒 HTTP 限制内超时；原严格报告读取约 1.35 秒，而完整公共 GET 的 cProfile 约 39.57 秒，主要开销是恢复验证两次规划时逐片重建整批别名及完整 JSON。改为原序列化器的两层转义精确增量计长，整批最终序列化并断言一致；原文、边界、别名、投影、提示词、预算和业务身份不变。两份原件的 v2/v3 四组新旧请求正文、计划投影、coverage 和字符数全部精确一致；海天紧凑规划实测从约 6.50 秒到 0.18 秒，完整实际 HTTP GET 在原 20 秒限制下约 4.62 秒，恢复能力为可续跑。证据 `exact-original-source-plan-comparison.json`、`actual-http-get-after.json`；不是跨请求缓存或加大超时。
+
+追加检查先因未指定正式 tests 目录而采集大量历史源码副本，1618 个 collection 错误；后按正式目录执行的第一次完整检查触及工具 600 秒期限。失败及日志均保留，不删历史副本或缓存来掩盖。随后稳定 `cace8328` 候选完整后端 **1002 passed / 28 skipped**，九案恢复运行门禁通过；这两组只归该源码身份，不转借给后来修改的工厂候选。修复后的实际海天页面完成 1440/390px、PNG 原文、三格式真实下载逐字节匹配 API、断网离线 HTML 演练；初次按钮烟测用错可访问名称而超时，纠正测试 DOM 选择器后通过，原页面没有为烟测改名。
+
+排查非预期取消同时发现 `app = create_app()` 令单纯导入 API 模块也构造开发项目服务并执行遗留任务恢复。隔离复制源码、合法 running 任务的实跑证明：旧模块导入产生取消标记并改为 interrupted；去除模块级应用实例、迁移活动调用方到 `finagent.api.app:create_app --factory` 后，实际导入保持原任务 raw 字节且不产生取消标记。真实归档测试另只复制指定 run/report/提示词到隔离项目，保留原 PDF 和引用检查。工厂候选源码 **`fe3ea9429a8ec6e41cd782f7b7dc7a45f8d08b608655ee352cb19a5e9b11054f`** 已实际启动，加载/磁盘身份一致，原同绑定海天仍可恢复。后续完整检查及九案门禁按此新身份另行执行；首个真实子任务 `annual-job-642ab6d1501543f094fea465ca23a81d` 已通过正式恢复入口接受，父记录原字节先行留存。这里不预报子任务、第二家公司或最后语义质量通过。
+
+
+工厂候选 `fe3ea942` 后续完整后端 **1002 passed / 28 skipped**；九案运行矩阵实际 `status=passed`、failures 为空，59 个 loopback HTTP 请求与 SQLite 准入一一计账、外部请求零次，运行前后源码清单一致。原始输出 `backend-explicit-factory-final-suite.*` 与 `explicit-factory-runtime-matrix.*`，完整九案结果在 `runtime-acceptance-v8-explicit-factory-bdb03d35/attempt-result.json`。该结果不转借给后续调查引用池修复。
+
+海天同绑定三代真实续跑：
+
+| 子运行 | 本次准入 | 扫描完整成功 / 计划 | 未尝试批次 | 保存线索 / 问题 | 实际下游状态 |
+| --- | --- | --- | --- | --- | --- |
+| `annual-analysis-91bed776-6105-4571-9b6c-366388543691` | 13 | 4/18 | 8 | 13/13 | 归并部分，全局待处理；评审失败 |
+| `annual-analysis-3e073a3e-e402-4bae-802b-81d089d0105d` | 11 | 7/18 | 7 | 19/12 | 归并阶段截止；评审请求超限而未外发 |
+| `annual-analysis-eaa32874-3062-489d-8036-a4c53f6eefe6` | 8 | 8/18 | 4 | 24/22 | 归并部分，全局待处理；评审在输入构造阶段失败、零准入 |
+
+每代原始状态、逐次账与三格式导出保存在 `real-main-haitian-resume-one/two/three/`；父运行 raw 字节对比另存，不将本次准入混为整条恢复链计数。第三代结束时共同账本为 100 次、开放 gate 为零；其中既有 56 次、其他调用者 4 次、本主控新父子链 40 次。跨过原 80 次边界证明共享无限策略实际生效，不证明扫描或全局归并已完成。
+
+第三代评审失败定位为固定调查复用丢失父补充证据：复用 revenue_up_cash_down 的 8 个引用，但重新检索后只保存 4 段。实际 LangGraph + 原 PDF 零网络烟测在修复前复现 4 个悬空引用；修复后继承严格读取器复核过的全部 8 段，两个调查结论原样保留、引用池完整、零模型尝试，原归档五个文件前后 SHA 一致。证据 `reused-investigation-pool-before.json`、`real-graph-reuse-pool-before/after.json`。专项回归 **76 passed**，包括真实图的一次剩余候选 loopback 调用、再下一代零调用复用、每个检查点的引用可解析，以及缺失/错来源/错 signal 在准入前拒绝；删除了仅断言参数转发的形式测试。
+
+第二代完整正式报告离线重建 review_v3 Chat body 为 **45030 字符**（未截原文、事项、成员、核验池或提示词），当前 40000 字符确实不足，条件第二档 48000 可容纳该份输入；记录 `real-review-body-capacity-measurement.json`。第三代输入构造失败与供应方超时不同；本段未启用 48000，也不把重建成功或零调用烟测写作新的真实评审通过。
+
+继承引用池修复候选 **`3b936ab065cbeb2583514029024c84fb4b72892b4a4ee1530a5b8ece66624580`** 的完整后端为 **1008 passed / 28 skipped**；九案实际 API/CLI 矩阵通过，59 次 loopback HTTP 与准入一致、外部请求零次，前后 82 项生产源码身份一致。证据 `backend-inherited-pool-final-suite.*`、`inherited-pool-runtime-matrix.*` 及 `runtime-acceptance-v8-inherited-pool-ce93d707/attempt-result.json`。这些结果只属于该 v8 候选，不转借给后续 v9 容量合同。
+
+| 同一配置的追加真实运行 | 本次准入 | 完整成功 / 部分 / 失败 / 未尝试批次 | 合格线索 / 问题 | 真实下游状态 |
+| --- | --- | --- | --- | --- |
+| 海天第四代 `annual-analysis-cd0b7e3a-eff9-4115-a230-e430c06231ed` | 12 | 12 / 0 / 4 / 2，共 18 批 | 35 / 32 | 全局完整请求超限，零全局准入；评审请求超限，零评审准入 |
+| 用户茅台新入口 `annual-analysis-5c21ce12-3c89-4fb4-bd9f-d2fb5eac2ec6` | 11 | 5 / 1 / 3 / 4，共 13 批 | 17 / 15 | 全局未闭合；评审请求超限，零评审准入 |
+
+两项终态均为 `completed_with_issues`，不是完整处理或金融质量通过。海天第四代保留 8 段调查引用池，引用均可解析，原先缺证解释已重新调查。茅台实际 running 约 263.97 秒、排队约 1.33 秒，完整 13 批/151314 字符计划保留；没有以少扫材料满足额度。第四代及茅台原始状态、逐次准入、严格 API 报告和三格式导出分别在 `real-main-haitian-resume-four/`、`real-main-user-moutai-v8-unlimited/`。茅台结束后共享累计 **123 次**、开放 gate 零：原有 56 次、其他调用者 4 次、本主控本轮父子链及茅台 63 次。供应方、两份来源及账本未更换。
+
+两份真实报告均完成 1440/390px 页面、原始 PNG 引用、三格式实际浏览器下载与 API 逐字节比对，以及断网离线 HTML 演练，证据 `haitian-pool-fixed-exports-unlimited-ui/`、`moutai-v8-real-browser-exports/`。当时实际配置确为无限累计额度，但旧 v3 job 投影对共享字段固定返回 null；不能从历史 null 推定当时无限。后续 v4 live job 改为只读快照实际共同策略，旧 null 仍按“当时未记录”展示，不补写旧 job 或报告。
+
+第四代海天完整 global body 实测 **49570 字符**，与归档待处理请求 SHA 完全一致；完整 review body **64420 字符**。因此原先考虑的 global 40000 / review 48000 对这份完整输入仍必然不足，不实施已知无效的升档。依据用户追加调用容量和继续推进授权，另立 **execution_v9 / annual_analysis_budget_v4** 容量合同：全局/补证 96000 字符，评审 128000 字符；原文、成员、提示词、wire/projection、375/360/15 秒、150/60/90/45 秒阶段、90 秒单次上限、尝试预算及并发均不变。决定与风险见 `capacity-v9-decision.json`；这里记录决定，不预报新版真实供应方、全文覆盖或语义质量通过。
+
+仍存在具体语义缺陷：茅台新发现 `disc:474905deeaf0-12d19b83e0648de38e2b` 将余额下降、购买同业存单增加和一年内到期重分类串成特定资产转移。直接阅读原 PDF 第 13–14 页可核对各项披露，但不能证明该资金转移链；已有未核验标签不等于修复完成。证据 `moutai-v8-known-transfer-assertion-review.json`。原报告保留，后续新结果须把明确披露事实与待核查资金流向区分；没有据模型自评或线索未出现宣称已知错误全部消失。
+
+### v9 容量合同软件验证与检查点竞争修复
+
+首个 v9 源码身份 **`6c847ed5509be6bad5124de0b5c3be5f74b517041ec5dcc73d67ffaeb0fa4a49`** 已完成两份原件的完整输入重建：海天 18 批/204321 字符，global/review body 为 49570/64420 字符；茅台 13 批/151314 字符，body 为 26584/42210 字符。完整 global body SHA 与原待处理归档一致，旧报告/manifest/PDF 原字节及三格式导出 SHA 不变；共同账本仍 123 次，外部调用零次。证据 `capacity-v9-original-input-smoke-corrected.json`。第一次烟测误用 grouping 提示词重建 global 请求，被哈希断言拒绝；修正夹具采用生产 global 提示词，失败原始输出保留，未改程序提示词或放宽哈希检查。
+
+该 v9 身份的九案实际 API/CLI 矩阵通过，59 次 loopback HTTP / 59 次 SQLite 计账、外部请求零次，82 项源码与冻结副本前后身份一致。证据 `capacity-v9-runtime-matrix.*` 及 `runtime-acceptance-v9-capacity-v9-2a776979/attempt-result.json`。前端 typecheck/build 通过，既有大 chunk 警告保留。新构建在实际 1440/390px 浏览器展示旧海天归档，确认共享 null 显示“当时预算未记录共同上限”，没有冒称历史无限策略；三格式实际下载与 API 一致，PNG 原文及离线 HTML 通过，见 `capacity-v9-haitian-legacy-browser/`。
+
+该身份完整后端第一次为 **1013 passed / 2 failed / 28 skipped**，不写作全套通过。跳过原因已用 `-ra` 逐项保存：三项 Windows 符号链接能力不足；其余为需专属冻结/故障 runner 的 opt-in 集成场景，实际九案另行执行。失败之一是旧“version=8”导出测试使用了活动夹具而生成 v9；已将 v8 明确冻结为历史夹具，新增 v9 容量字段投影用例，不改旧报告身份。
+
+另一失败是跨进程检查点首次初始化：锁文件以 `(dev, inode, size, mtime)` 判定打开前后身份，正常的另一写入者 `0→1` 字节初始化会误触 `checkpoint_writer_lock_failed`。实际双进程精确窗口在修复前得到子序号 1、父失败；修复后同窗口得到子 1 / 父 2，最新指针为 2。另用本机 Windows CRT 实测空文件可锁定并释放 EOF 后一字节，文件仍零字节，因此移除不必要的截长初始化；锁路径类型/reparse 和设备/文件 ID 校验保留，其他正式文件的完整身份检查不变。证据 `checkpoint-zero-byte-lock-proof.json`、`checkpoint-writer-race-before/after.json`。检查点与报告 API/导出专项 **76 passed**，保留实际跨进程序号断言及初始化窗口回归。
+
+检查点修复后的新身份为 **`f33133f8df0ada4a5ceec826a0fa16a0e1e645adb37729187b82837a1e17d570`**，此前空闲自有 API `69364` 在 active job 与开放 gate 均为零时已安全停止。最终全套与实际矩阵按该新身份另行执行；不把上一身份的 1013 通过、九案或尚未发生的真实分析写作最终版本通过。宿主命名服务走 `/bin/bash` 找不到 Windows Python 的失败已记录并报告工具问题；实际验收服务使用已核对的 Windows Python 与自有 Popen 身份，不停止未知进程。
+
+
+检查点修复后的同一身份 `f33133f8` 完整后端 **1017 passed / 28 skipped**，原始耗时 731.06 秒。九案实际 API/CLI 矩阵全部通过，59 次 loopback HTTP 与 59 次 SQLite 准入对应、外部请求零次，前后源码 SHA 一致；证据 `backend-capacity-v9-checkpoint-final-suite.*`、`capacity-v9-checkpoint-runtime-matrix.*` 及 `runtime-acceptance-v9-capacity-v9-checkpoint-31f111ce/attempt-result.json`。跳过清单保留；这不是未执行的真人金融复核或所有 opt-in 场景全部通过。
+
+新 v9 海天首次任务 `annual-job-332a8aaac537411499c838772b9f4a42` / `annual-analysis-e068bef4-bd7b-4877-b934-02df8206f2c3` 实际运行 363.495 秒、排队 1.372 秒，准入 12 次；18 批计划中完整成功 1、失败 6、未尝试 11，保存 3 条发现和 3 个问题。归并仍部分、最终评审已准入后超时，没有请求字符超限；终态 `completed_with_issues` 不算完整主流程通过。共同累计 135 次、开放 gate 零。证据 `real-main-haitian-v9/`；实际桌面 1440px / 窄屏 390px、PNG 原文、三格式浏览器下载逐字节匹配 API 和断网离线 HTML 均通过，见 `haitian-v9-real-browser-exports/`。新 live budget 明确显示共享累计无限，历史 null 仍显示未记录；没有把可读部分报告判作完整覆盖。
+
+### 2026-10-14 OMP 回退策略调整与 v9 补跑
+
+用户要求关闭所有 OMP 模型回退并开启额度重置等待，随后选择保存到全局。已更新会话、全局配置及项目配置；项目与用户目录分别执行 `omp config list --json`，模型回退关闭、回退链为空、额度感知回退关闭、等待额度重置开启，Anthropic 服务端回退仍关闭。证据 `omp-fallback-disabled-20261014.json`；当前约定维护于[开发说明](development.md#omp-配置与入口)。未特意耗尽额度来触发等待，未改变 FINTRACE 的供应方/型号/凭据；其他项目自己的显式覆盖不在本次核对范围。
+
+在同一 `f33133f8` 加载/磁盘源码一致、无活动任务及无开放 gate 的条件下，通过正式 `/resume` 启动海天子任务 `annual-job-26fc4c1e10d6456f8ab8e868bcdd5e98`。父运行 6 个正式文件 SHA 已留存；仍有 17 个发现批待处理，单次补跑最多 20 次，完整剩余规划与失败预留不省略、不更换来源或模型。证据 `haitian-v9-resume-one-plan.json`、`haitian-v9-resume-one-response.json`；本段仅记录已接受，不预报扫描闭合、金融语义或评审成功。
+
+该子运行封存为 `annual-analysis-f50b3d5f-17aa-46f4-b910-782f0e93a637`，扫描完整成功 2、部分 1、失败 4、未尝试 11，保存 8 条发现及 8 个问题；仅当前已知事项通过单分片闭合，全文仍不完整，评审仍在准入后失败。累计账本为 144 次、开放 gate 零，父运行 6 个正式文件 SHA 不变。状态观察器在原 20 秒 HTTP 期限内再次超时，保留 `haitian-v9-real-resume-one.stderr.txt`；单次无应用初始化、无联网的严格读取剖析约 19.20 秒，其中补证重建约 9.51 秒、主体/期间正则重复解析约三十万次，见 `haitian-v9-resume-strict-before.*`。未以扩大 HTTP 等待或跳过来源重建掩盖故障；空闲自有 API 已核对身份后关闭，为两个局部修复准备整合。
+
+两份独立 `reviewer` 已读取当前代码、原始证据及相关 PDF，审阅来源保留于 `history://V9RecoveryReview` 与 `history://V9FinancialReview`，结论索引 `independent-v9-initial-review.json`。四处活动 v8 文档残留已修正为活动 v9 / 历史 v8，并经原 reviewer 复核。子报告新接纳的蚝油库存发现 `disc:5a97b1353443-4c03eea5007db5fa54ca` 承认公司对产品总体的春节备货披露，未将其伪写成蚝油品类的已核实成因：这是一次已接纳真实结果的正向修复证据，不是库存风险或整体质量通过。非经常性损益期间指代、现金流问题上下文、权益性工具明细、供应商分母与商誉解释仍有未闭合证据，茅台尚无 v9 新运行；真人金融复核仍未发生。
+
+两个局部修复整合后的生产身份为 **`ced98ba2c37a53c2d0d09dd468c059f600b5ba935217830fc9c0adc4b9ee175e`**，82 项源码；未换提示词、供应方、预算、并发或活动执行版本。原始真实响应在正式 parser 修复前因 limitation 的“是否存在舞弊”整批拒绝，修复后保留 2 条、仍按错误 alias 拒绝库存条，原请求/响应 SHA 不变。独审指出重叠短语变体，主控还实际复现局部疑问中的“不”豁免后段独立断言；最终仅在判定副本建立局部边界，合法疑问接受、后段确认/排除仍拒绝。证据 `parser-real-smoke-before/after.json`、`parser-question-scope-before/after-integration-correction.json`；不是将旧失败记录重新发布为成功，也不是新的在线质量通过。
+
+同一海天父/子与茅台 v8 原件，各按新旧两种补证算法重建的 **6 组完整补证与覆盖账逐字段及 SHA 完全一致**，原 PDF/报告 SHA 未变；证据 `supplement-actual-before/final.json`。真实海天 6,856 block / 204,321 字符 / 8 个问题的 retrieval-only 追踪峰值由原先 3,871,823 字节增至最终 4,999,465 字节，额外约 1.13 MB；带 tracemalloc 的耗时从约 10.205 秒降到 3.117 秒。初版缓存峰值较高的记录另存，未覆盖；最终不留存空期间/主体集合。该内存范围不含解析 PDF，不能外推任意压缩大 PDF 的资源保证。
+
+该身份受影响检查 **353 passed / 1 skipped**（Windows 符号链接能力），耗时 196.24 秒；原始命令及输出在 `guard-retrieval-affected-tests.*`。实际重启应用确认加载/磁盘身份一致；原 20 秒 HTTP 状态 GET 约 **11.854 秒**返回封存子报告可读、可续跑，父 6 个正式文件 SHA 不变，模型外发零次；证据 `guard-retrieval-api-ready.json`、`guard-retrieval-actual-status-get-proof.json`。同一新源码的单次严格读取剖析约 12.560 秒，见 `haitian-v9-resume-strict-final.*`。这些证据只证明局部修复及原时限查询，不把上一源码的 1017 项全套或尚在执行的恢复矩阵、下一代真实补跑写成此身份全部验收完成。
+
+### v9 请求内原件解析复用与按需历史读取
+
+上一身份在空闲状态 GET 通过后，真实页面并发读取仍失败：历史折叠时已请求列表，状态/报告请求与严格读取相互争用，HTML 导出超过原 20 秒观察期限。保留 `guard-retrieval-child-browser-exports.*`、`guard-retrieval-browser-failure-scope.json`，不以空闲 GET 或已下载的 JSON/Markdown 代替完整页面通过。
+
+按需历史前端与请求内 `SourceReadContext` 独立审阅后整合，最终 82 项生产源码身份为 **`ddc92e5400a5fbeaaf4eab023f3590d701b28c40162719d6f67f6966174d89e4`**。每份逻辑归档仍读取并核验原件 SHA，仅匹配的 PDF 解析对象在同次读取/父链/分页列表内复用；不缓存审计或资格，不绕过父环及 32 层限制。历史纯读取完整输出与改造前逐字段相同：127 项、返回 20 项且 20 项可读；带 cProfile 耗时 75.658→46.808 秒，PDF 解析由 30 次降至 7 次。该计时不是 HTTP 时限达标，wire 编码等严格读取成本仍保留。证据 `history-original-before.*`、`history-source-context-final.*`。
+
+第一次完整后端实际 **1140 passed / 2 failed / 28 skipped**：新增父环/深度夹具将有复用成功批次、零本次调用的部分覆盖误标为 `not_called`，严格读取提前拒绝。这不是生产来源校验失效；修正共享夹具按已处理覆盖派生状态，不放宽 reader 或接受错误错码。两项边界、共享夹具模块和 PDF 解析专项 **64 passed**；32 层明确核对 run、父 ID 和继承发现，33 层及循环仍拒绝，路径入口直接核对原字节不变及来源元数据。修正后最终完整后端 **1142 passed / 28 skipped**，原始耗时 656.26 秒，证据 `source-context-fixture-regression.*`、`source-context-corrected-backend-suite.*`；失败首轮仍保留。跳过原因保存于 `-ra` 输出，不把专属 opt-in 或 Windows 符号链接缺口写成自动通过。
+
+最终身份实际 API/CLI 九案全部通过：59 次 loopback HTTP / 59 次独立 SQLite 准入，外部请求零次，生产与冻结副本前后 SHA 均为上述身份。证据 `source-context-final-runtime.*` 及 `runtime-acceptance-v9-source-context-final-4ee717ed/attempt-result.json`。前端 typecheck/build 通过，新浏览器实际加载 `index-DcAcbrN5.js`，既有大 chunk 警告保留。
+
+原封存海天子运行 `f50b3d5f` 在实际桌面 1440px / 窄屏 390px 浏览器通过来源 PNG、JSON/Markdown/HTML 三格式实际下载与 API 逐字节一致、断网离线 HTML 无脚本/外图，三格式 API 仍使用原 20 秒期限；无新增模型调用。证据 `source-context-child-browser-exports/`。原生浏览器另验证默认首页与高级编号入口不请求历史；展开读取 20/127、翻页 21–40，浏览器注入 503 显示明确错误而非空归档，重试真实服务恢复列表，390px 无横向溢出，见 `history-demand-*.json` 和 `history-demand-narrow.png`。显式展开历史首屏实际 **29.549 秒**、第二页约 **7.544 秒**；不宣称所有列表低于 20 秒，客户端撤销也不终止后端已经开始的同步核验。现有折叠记录发生在请求完成后，尚不作为在途撤销/迟到响应的独立运行证明。
+
+加载/磁盘身份一致、活动 job 与开放 gate 为零、原共享账本累计 144 次且原父 6 个正式文件 SHA 不变后，通过实际页面“补跑失败部分”接受新任务 **`annual-job-dfd06dc348a94f1fb3d89b16abadbb91`**，父运行仍为 `f50b3d5f`。硬截止 375 秒、续跑准入 20 次、发现阶段最多 14 次，16 个剩余发现批及完整剩余调用规划/失败预留均保留；未换模型、来源、提示词或执行绑定。证据 `haitian-v9-resume-two-source-context-plan.json`、`haitian-v9-resume-two-source-context-response.json`；本次接受不预报全文、评审或语义通过。
+
+随后补齐原生浏览器在途故障证据：持有历史请求时列表打开且显示 loading；折叠产生真实 `net::ERR_ABORTED`，再展开的新请求返回 503。旧请求合法保存页响应随后到达，界面保持新错误、不插入旧 20 行、不显示空态。证据 `history-demand-inflight-abort-late-response.json`，经独立 reviewer 只读核对；该受控历史请求未转发后端，不声称终止服务端同步核验，也不混作新的模型调用或原文事实验证。
+
+真实子运行封存为 **`annual-analysis-3c33551c-7674-4f52-85e7-6f7816bf76ac`**：运行 345.701 秒、排队 1.358 秒，准入 11 次，共同账本累计 155、开放 gate 零。18 批为完整成功 4、部分 1、失败 5、未尝试 8，保存 16 条发现、10 项临时问题；已知事项全局闭合仍 false，归并公共阶段在 90.154 秒耗尽，最终评审失败。观察器原 20 秒 GET/严格报告/三格式 API 全部成功；实际 1440/390px 浏览器、PNG 原文、三格式下载逐字节匹配 API、离线 HTML 通过，见 `real-main-haitian-v9-resume-two-source-context/`、`haitian-v9-resume-two-source-context-browser/`。父 6 文件原字节不变，证据 `haitian-v9-resume-two-parent-bytes-proof.json`。这完成实际路径演练，不改判为完整覆盖、全局归并或金融质量通过。
+
+独立原文审查 `history://V9FinancialReview` 核对新发现与原 PDF：新接纳商誉发现明确引用公司对收购宏斌商誉减值的披露，蚝油新增发现区分期末库存与期间产销量，母公司/合并利润及现金流方向有据；这些不是减值充分性或库存风险已证实。供应商分母在原 PDF 有明确年度采购总额口径，但新结果没有相关发现，不能据未出现认定纠错已证实。新发现 `disc:5a97b1353443-3bc13c2db63b13eb62a2` 把母公司科目总额定性为集团内往来，所引 PDF 79–80 页没有交易对手及性质证据；旧非经常性损益 2023/2022 期间指代与现金流成因缺口仍保留。当前原文审查是 agent 只读复核，不是模型自评或真人金融复核；完整语义质量未通过。
+
+第一家新版完整路径及恢复/导出观测后，按既定顺序启动用户提供的茅台 2025 新 v9 任务 **`annual-job-9a6c5b1d7f7146b2baf20f5caf99b182`**。原 SHA `474905deeaf0f875fc0a1b097a626c0c7852c427faadc5d7fc7816cbf45ea288` 实际核对，计划 13 批扫描及其他阶段合计 25 次、另留 3 次失败预留，首次任务上限 30，沿用共享无限策略和同一累计账本；旧茅台 v8 不跨执行绑定复用。来源、供应方/型号、提示词、时限及并发未改。证据 `moutai-v9-source-context-create-plan.json`、`moutai-v9-source-context-create-response.json`、`moutai-v9-native-progress.json` 和实际进行中截图；接受任务不预报终态或资产转移错误已修复。
+
+该茅台任务封存为 **`annual-analysis-9fc0b0c7-2b51-425b-ab2d-65f5a821c957`**，运行 307.586 秒、排队 1.298 秒，准入 10 次；13 批中成功 4、部分 1、失败 3、未尝试 5，保存 14 条发现、尚未形成公司问题。归并阶段 90.191 秒、最终评审失败，共同账本 165、开放 gate 零。原 20 秒状态/严格报告/三格式 API 及实际 1440/390px 浏览器、原文 PNG、三下载逐字节一致和断网离线 HTML 均通过，见 `real-main-moutai-v9-source-context/`、`moutai-v9-source-context-browser/`。该输入仍为用户上传的未核实年报，来源性质/公司年度不据 PDF 标题或 SHA 自动核实。
+
+独立原文复核确认这份 14 条已接纳发现没有重演 v8“财务公司从某一资产转向同业存单及一年内到期债权”的特定转移链条：第 13–14 页分别保留公司对投资支出和一年内到期债权的披露，第 56–57 页余额变化仍是并存/条件式核查，不把两者认作同一资金来源—去向。原文复核按 actual text/quotes 比较，不凭 finding ID 不同或旧标题未出现推定修复；不宣称所有未来语义通过。审阅入口 `history://V9FinancialReview-2`，真人金融复核未做。
+
+原绑定实际页面有限补跑 **`annual-job-df6b388b3f9a4cd691fa489c369fcc43`** 封存为 **`annual-analysis-0fb5a335-c33e-461e-b8e6-6aa51f60d0bb`**：运行 310.366 秒、排队 1.297 秒、10 次新准入，累计账本 175、开放 gate 零。成功 7、部分 1、失败 4、未尝试 1，保存 23 条发现、公司问题仍 0、全局关系未闭合、最终评审失败。完整剩余规划、原父 6 文件 SHA 和不足以一次执行两个 local shard 加 global 的续跑阶段预算显式保留，见 `moutai-v9-resume-one-source-context-plan.json`、`moutai-v9-resume-one-source-context-response.json` 和 `moutai-v9-resume-one-parent-bytes-proof.json`。观察器原 20 秒 GET/严格报告/三格式 API、恢复后实际桌面/窄屏/PNG/三下载/离线 HTML通过，见 `real-main-moutai-v9-resume-one-source-context/`、`moutai-v9-resume-one-source-context-browser/`；这些不是可用公司问题主报告或完整财务质量通过。
+
+两次茅台局部归并均为 12 成员：消息内容（不含 Chat JSON 外层）分别 17,989 / 18,029 字符，准入后约 89.512 / 89.256 秒超时，response 均为 0。首轮第二片 2 成员、续轮第二片 11 成员尚未调用，均无可复用成功分片或已生成 global 输入。只读定位 `history://GroupResumeCauseMap` 对照真实 request/failure/checkpoint；不改称字符超限、结构拒绝或软件保存失败，也不外推所有请求均不可用。
+
+后续独审指出明确新期间误报：续跑 finding **`disc:474905deeaf0-4e8ef294b834d9ebf5d9`** 将 PDF 71 页“2024 年度”权益表期末股本 1,256,197,800 误作 2025 本期，拿来与 72 页期末总股本比较。PDF 70 页 2025 权益表为 1,252,270,215，47 页披露回购注销后的相同数，72 页 125,227.02 万股为对应披露精度，不支持发现的当前期末不一致。证据 `moutai-v9-equity-period-mismatch-review.json`；旧报告/原响应保留，已知误报不计质量通过，缩小归并分片本身不会修复来源期间绑定。
+
+另作最终正式 parser 的原 paid 新 v9 全批输入重放，供应商 finding 被接纳：两处均以年度采购总额为分母，明确关联关系本身不构成异常，两个 quote 与 PDF 19 页一致，错误 alias 库存项仍拒绝。证据 `supplier-denominator-current-parser-replay.json`，模型外发零；独立原文 reviewer 已核对。该证据证明当前 parser 能接纳这份正确口径响应，不是新在线报告已发布供应商 finding，也不补记旧 failed archive 成功。
+
+用户在两轮无响应后选择“改为更小归并分片”。主控确定局部每片至多 3 个原始成员、完整候选/原文/引用与全部剩余 pending 保留，预算时限、并发、供应方及提示词不增加。另立 `execution_v10` 和显式 `member_bounded_v2` 计划身份，旧 v9 的 12 成员计划冻结；先完成软件/旧归档/恢复关卡再做新真实入口，不强制跨身份复用。决定 `small-shards-v10-decision.json`；主控已验证自有旧 API `16120` idle、累计 175/gate 零后停止，起点 65 路径留存，两个独占 backend/frontend 切片实施中，尚不称 v10 软件或在线通过。
+
+v9 源码候选补丁 **`task-increment-candidate-r6-v9-source-context.patch`** 保留，SHA **`115e7687e4e6780653104a9bc8d5ddb3688f3a1f04662786d24821ff4790f51d`**，65 个授权路径、5,578,893 字节。主控在自有 tmp 副本实际 `git apply --check`、apply 和 65/65 原字节 SHA 比对成功；原始用户 dirty 快照作为父基线、未归属路径不并入增量，脚本未使用 index/commit/ref/push 操作。独立 reviewer 已复核 ownership 和该实际证据。这是 v9 候选，不是正在修改的 v10 或最终文档副本，完整 R6 仍未通过。
+
+### v10 小分片首轮专项与有限预算运行修正
+
+backend 切片因实际 `usage_limit_reached` 退出，未交最终通过证据；主控接管已留存增量，没有启用模型 fallback 或更换型号。frontend 四文件切片完成严格 v10 字段读取和三人成员提示，缺发现 v4 对应事项绑定的兼容旁路经独立审查指出后修正；实际 typecheck/build 通过，生成 `index-DFA3Bewh.js`，既有大 bundle 警告保留，尚不称浏览器验收通过。
+
+首次五模块专项 **377 passed / 11 failed** 保留于 `small-shards-v10-core-integration-one.*`：十项来自新 fixture 引用没有对应 PDF 来源块，生产来源校验正确拒绝；另一项为预算耗尽误记 failed。主控修正 fixture 为真实匹配来源块，未放松原引用校验；任务/调用额度耗尽仍停止准入和保留余账，只将结果记录 partial。另补每次 local checkpoint 的 provisional issue、排除成员与全局 pending ID 同步。修正后同五模块实际 **389 passed**，见 `small-shards-v10-core-corrected.*`；独立 reviewer 复查三项均关闭，入口 `history://V9RecoveryReview-2`。这不是完整后端或在线财务质量通过。
+
+正式 planner 对原茅台 23 条实际候选离线运行：历史 v9 仍为 12/11 人两片，v10 为七片三人及一片两人；23 成员唯一完整，全部原候选字段和引文相同，原记录未改。官方 Chat JSON 字符数由旧 19553/17174 改为新各片 5815–8299，见 `small-shards-v10-real-m23-plan-smoke.json`。模型外发零，不是新在线任务或供应方时延证明。
+
+生产源码冻结 **`c2b67e9efddef4356417e4379481db5c8c52ec9a09047bbf5753e20134e8fb8f`**，82 文件，见 `small-shards-v10-corrected-production-source-manifest.json`。实际 loopback API/CLI 矩阵初尝试失败，`runtime-acceptance-v10-small-shards-v10-corrected-68ac3d01/attempt-result.json` 保留：原创 17 页、67891 字全扫描及 18 发现完成，但六个三人成员分片各模拟 429/500 后成功，初次归并 gate 八次准入只能接纳两片、再尝试第三片两次；剩余 pending、global 未闭合。旧 fixture 要求一轮完成所有阶段不符合小分片和原有限额度。主控派修矩阵按标准 API 的合法多代续跑完成相同输入，不能减原页数/成员、删除瞬时错误、增加阶段预算或把 partial 改称 completed；修正及新运行尚未通过。
+
+期间误报的原页图 `moutai-v9-equity-source-surface/page-70.png`、`page-71.png` 已由主控实际生成与观察：p71 原页表头为 2024 年度，和期末股本同页；真实 batch 7 只有该页表尾，表头被放进前批，见 `history://EquityPeriodContextMap`。后续通用输入修复须消除这一上下文缺口，另立计划身份并保留原文及旧误报；原页看见表头、页内分组或模型复述都不等同于独立期间/列口径核验。目前未实施，不借小分片专项通过声称已解决。
+

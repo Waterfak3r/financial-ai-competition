@@ -54,7 +54,20 @@ export interface AnnualDiscoveryExecutionBindingV4 extends AnnualDiscoveryExecut
   execution_version: "execution_v4";
 }
 
-export interface AnnualDiscoveryPhaseBudget {
+export interface AnnualDiscoveryExecutionBindingV8 extends AnnualDiscoveryExecutionBindingV4 {
+  prompt_version: "annual_discovery_v4";
+  prompt_sha256: string;
+}
+
+export interface AnnualDiscoveryExecutionBindingV5 extends AnnualDiscoveryExecutionBindingV3 {
+  parser_version: "annual-discovery-parser-v3-execution-v5";
+  plan_version: "annual_discovery_plan_v4";
+  execution_version: "execution_v5";
+  prompt_version: "annual_discovery_v5";
+  prompt_sha256: string;
+}
+
+export interface AnnualDiscoveryPhaseBudgetV1 {
   schema_version: "annual_analysis_budget_v1";
   scope: "new_run" | "resume";
   main_report_limit_seconds: 300;
@@ -78,6 +91,70 @@ export interface AnnualDiscoveryPhaseBudget {
   stage_provider_attempt_limits_status: "configured";
 }
 
+export interface AnnualDiscoveryPhaseBudgetV2 {
+  schema_version: "annual_analysis_budget_v2";
+  scope: "new_run" | "resume";
+  main_report_limit_seconds: 345;
+  work_deadline_seconds: 330;
+  finalization_reserve_seconds: 15;
+  shared_goal_limit: number | null;
+  shared_goal_remaining_at_start: number | null;
+  task_provider_attempt_limit: 30 | 20;
+  stage_time_limits_seconds: {
+    annual_discovery: 150;
+    annual_investigation: 60;
+    annual_issue_grouping: 60;
+    annual_review: 45;
+  };
+  stage_provider_attempt_limits: {
+    annual_discovery: 18 | 14;
+    annual_investigation: 2;
+    annual_issue_grouping: 8 | 2;
+    annual_review: 2;
+  };
+  stage_provider_attempt_limits_status: "configured";
+  review_request_limit_chars: 40000;
+  model_call_timeout_seconds: 60;
+}
+
+export interface AnnualDiscoveryPhaseBudgetV3 {
+  schema_version: "annual_analysis_budget_v3";
+  scope: "new_run" | "resume";
+  main_report_limit_seconds: 375;
+  work_deadline_seconds: 360;
+  finalization_reserve_seconds: 15;
+  shared_goal_limit: number | null;
+  shared_goal_remaining_at_start: number | null;
+  task_provider_attempt_limit: 30 | 20;
+  stage_time_limits_seconds: {
+    annual_discovery: 150;
+    annual_investigation: 60;
+    annual_issue_grouping: 90;
+    annual_review: 45;
+  };
+  stage_provider_attempt_limits: {
+    annual_discovery: 18 | 14;
+    annual_investigation: 2;
+    annual_issue_grouping: 8 | 2;
+    annual_review: 2;
+  };
+  stage_provider_attempt_limits_status: "configured";
+  review_request_limit_chars: 40000;
+  model_call_timeout_seconds: 90;
+}
+
+export interface AnnualDiscoveryPhaseBudgetV4 extends Omit<AnnualDiscoveryPhaseBudgetV3, "schema_version" | "review_request_limit_chars"> {
+  schema_version: "annual_analysis_budget_v4";
+  global_request_limit_chars: 96000;
+  review_request_limit_chars: 128000;
+}
+
+export type AnnualDiscoveryPhaseBudget =
+  | AnnualDiscoveryPhaseBudgetV1
+  | AnnualDiscoveryPhaseBudgetV2
+  | AnnualDiscoveryPhaseBudgetV3
+  | AnnualDiscoveryPhaseBudgetV4;
+
 export interface AnnualDiscoveryExecutionContractV3 {
   kind: "fintrace_annual_discovery_execution_v3";
   plan_sha256: string;
@@ -97,7 +174,7 @@ export interface AnnualDiscoveryExecutionContractV4 {
   plan_sha256: string;
   identity_sha256: string;
   binding: AnnualDiscoveryExecutionBindingV4;
-  phase_budget: AnnualDiscoveryPhaseBudget;
+  phase_budget: AnnualDiscoveryPhaseBudgetV1;
   parent_run_id: string | null;
   provider_admission_count: number;
   parent_provider_admission_count: number;
@@ -107,6 +184,59 @@ export interface AnnualDiscoveryExecutionContractV4 {
   batches: AnnualDiscoveryExecutionBatch[];
   scheduler: AnnualDiscoveryExecutionScheduler;
   timing: AnnualDiscoveryExecutionTiming;
+}
+
+export interface AnnualDiscoveryExecutionContractV6 {
+  kind: "fintrace_annual_discovery_execution_v6";
+  plan_sha256: string;
+  identity_sha256: string;
+  binding: AnnualDiscoveryExecutionBindingV4;
+  phase_budget: AnnualDiscoveryPhaseBudgetV2;
+  parent_run_id: string | null;
+  provider_admission_count: number;
+  parent_provider_admission_count: number;
+  cumulative_provider_admission_count: number;
+  response_count: number;
+  reused_batches: number[];
+  batches: AnnualDiscoveryExecutionBatch[];
+  scheduler: AnnualDiscoveryExecutionScheduler;
+  timing: AnnualDiscoveryExecutionTiming;
+}
+
+export interface AnnualDiscoveryExecutionContractV7 {
+  kind: "fintrace_annual_discovery_execution_v7";
+  plan_sha256: string;
+  identity_sha256: string;
+  binding: AnnualDiscoveryExecutionBindingV4;
+  phase_budget: AnnualDiscoveryPhaseBudgetV3;
+  parent_run_id: string | null;
+  provider_admission_count: number;
+  parent_provider_admission_count: number;
+  cumulative_provider_admission_count: number;
+  response_count: number;
+  reused_batches: number[];
+  batches: AnnualDiscoveryExecutionBatch[];
+  scheduler: AnnualDiscoveryExecutionScheduler;
+  timing: AnnualDiscoveryExecutionTiming;
+}
+
+export interface AnnualDiscoveryExecutionContractV8 extends Omit<AnnualDiscoveryExecutionContractV7, "kind" | "binding"> {
+  kind: "fintrace_annual_discovery_execution_v8";
+  binding: AnnualDiscoveryExecutionBindingV8;
+}
+
+export interface AnnualDiscoveryExecutionContractV9 extends Omit<AnnualDiscoveryExecutionContractV8, "kind" | "phase_budget"> {
+  kind: "fintrace_annual_discovery_execution_v9";
+  phase_budget: AnnualDiscoveryPhaseBudgetV4;
+}
+
+export interface AnnualDiscoveryExecutionContractV10 extends Omit<AnnualDiscoveryExecutionContractV9, "kind"> {
+  kind: "fintrace_annual_discovery_execution_v10";
+}
+
+export interface AnnualDiscoveryExecutionContractV11 extends Omit<AnnualDiscoveryExecutionContractV10, "kind" | "binding"> {
+  kind: "fintrace_annual_discovery_execution_v11";
+  binding: AnnualDiscoveryExecutionBindingV5;
 }
 
 export interface AnnualDiscoveryExecutionScheduler {
@@ -131,7 +261,13 @@ export interface AnnualDiscoveryExecutionTiming {
 
 export type AnnualDiscoveryExecutionContract =
   | AnnualDiscoveryExecutionContractV3
-  | AnnualDiscoveryExecutionContractV4;
+  | AnnualDiscoveryExecutionContractV4
+  | AnnualDiscoveryExecutionContractV6
+  | AnnualDiscoveryExecutionContractV7
+  | AnnualDiscoveryExecutionContractV8
+  | AnnualDiscoveryExecutionContractV9
+  | AnnualDiscoveryExecutionContractV10
+  | AnnualDiscoveryExecutionContractV11;
 
 export interface AnnualDiscoveryCoverage {
   total_pages: number;
@@ -217,7 +353,7 @@ export interface AnnualModelDiscovery {
   source_document_id: string;
   source_sha256: string;
   status: AnnualDiscoveryStatus;
-  prompt_version: "annual_discovery_v1" | "annual_discovery_v2" | "annual_discovery_v3";
+  prompt_version: "annual_discovery_v1" | "annual_discovery_v2" | "annual_discovery_v3" | "annual_discovery_v4" | "annual_discovery_v5";
   model_called: boolean;
   model_call_count: number;
   model_call_attempt_count: number;
@@ -238,5 +374,5 @@ export interface AnnualDiscoveryAuditArtifact {
   response_path: string | null;
   failure_path: string | null;
   status: "started" | "succeeded" | "failed" | "incomplete";
-  prompt_version: "annual_discovery_v1" | "annual_discovery_v2" | "annual_discovery_v3";
+  prompt_version: "annual_discovery_v1" | "annual_discovery_v2" | "annual_discovery_v3" | "annual_discovery_v4" | "annual_discovery_v5";
 }

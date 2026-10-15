@@ -144,8 +144,9 @@ def extract_v2_key_financial_data_facts(
     if values is None:
         return _failed(
             "amount_alignment",
-            "无法按 2024、2023、2022 年金额列分别定位金额；百分比列或缺失值不作为金额补位。",
+            f"无法按 {report_year}、{report_year - 1}、{report_year - 2} 年金额列分别定位金额；百分比列或缺失值不作为金额补位。",
         )
+
 
     if not context.currency_confirmed:
         currency = "未披露"
@@ -236,23 +237,34 @@ def _context(lines: list[_Line], report_year: int) -> tuple[_Context | None, tup
         code = "year_header_not_found" if not headers else "ambiguous_year_header"
         return None, (code, "未能唯一确认按报告年、上一年及再上一年排列的三列年度表头。")
     header, centers = headers[0]
-    percent_lines = [
-        line
-        for line in section_lines
-        if abs(line.y0 - header.y0) <= 24
-        and ("本期比上年同期" in _compact(line.text) or ("增减" in _compact(line.text) and "%" in _compact(line.text)))
-    ]
-    percent_text = _compact("".join(line.text for line in percent_lines))
-    if "本期比上年同期" not in percent_text or "增减" not in percent_text or "%" not in percent_text or not percent_lines:
-        return None, ("percentage_column_not_found", "表头未能独立确认夹在年度金额列之间的同比百分比列。")
-    percentage_words = tuple(word for line in percent_lines for word in line.words)
     header_words = _header_year_words(header)
+    if report_year - 1 not in header_words or report_year - 2 not in header_words:
+        return None, ("year_header_not_found", "未能唯一确认按报告年、上一年及再上一年排列的三列年度表头。")
     percentage_left = header_words[report_year - 1][2]
     percentage_right = header_words[report_year - 2][0]
-    visible_percent_left = min(word[0] for word in percentage_words)
-    visible_percent_right = max(word[2] for word in percentage_words)
+    gap_words = []
+    for line in section_lines:
+        if line.page != header.page or abs(line.y0 - header.y0) > 24:
+            continue
+        for word in line.words:
+            center_x = (word[0] + word[2]) / 2
+            if percentage_left - _PERCENT_COLUMN_MARGIN <= center_x <= percentage_right + _PERCENT_COLUMN_MARGIN:
+                gap_words.append(word)
+    percent_text = _compact("".join(str(word[4]) for word in gap_words))
+    if (
+        not gap_words
+        or "本期比上年同期" not in percent_text
+        or "增减" not in percent_text
+        or "%" not in percent_text
+    ):
+        return None, ("percentage_column_not_found", "表头未能独立确认夹在年度金额列之间的同比百分比列。")
+    visible_percent_left = min(word[0] for word in gap_words)
+    visible_percent_right = max(word[2] for word in gap_words)
     if visible_percent_left < percentage_left or visible_percent_right > percentage_right:
-        return None, ("percentage_column_alignment", "同比百分比表头未落在 2023 年与 2022 年金额列之间。")
+        return None, (
+            "percentage_column_alignment",
+            f"同比百分比表头未落在 {report_year - 1} 年与 {report_year - 2} 年金额列之间。",
+        )
 
     unit_lines = [line for line in section_lines if _compact(line.text).startswith("单位：")]
     parsed_units = [_parse_unit(line.text) for line in unit_lines]

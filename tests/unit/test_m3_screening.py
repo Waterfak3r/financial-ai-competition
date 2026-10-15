@@ -48,8 +48,10 @@ def _fact(
     unit: str = "元",
     currency: str = "人民币",
     multiplier: str = "1",
+    company_id: str = "603288",
+    report_year: int = _REPORT_YEAR,
 ) -> FinancialFactV2:
-    resolved_role = role or ("current" if year == _REPORT_YEAR else "comparative")
+    resolved_role = role or ("current" if year == report_year else "comparative")
     resolved_label = label or {
         "net_profit_parent": _PARENT_LABEL,
         "net_profit_parent_ex_nonrecurring": _KEY_LABEL,
@@ -57,14 +59,14 @@ def _fact(
     return FinancialFactV2(
         fact_id=fact_id or f"{metric}-{year}",
         metric_id=metric,
-        company_id="603288",
+        company_id=company_id,
         label_raw=resolved_label,
         raw_value=value,
         normalized_value=value,
         currency=currency,
         unit_multiplier=multiplier,
         unit=unit,
-        report_year=_REPORT_YEAR,
+        report_year=report_year,
         period_start=date(year, 1, 1) if period_type == "duration" else None,
         period_end=date(year, 12, 31),
         period_type=period_type,  # type: ignore[arg-type]
@@ -78,6 +80,7 @@ def _fact(
         evidence_ids=(f"extract-{fact_id or metric + '-' + str(year)}",),
         extraction_method="constructed_test_fact",
     )
+
 
 
 def _verified(fact: FinancialFactV2, *, status: str = "verified") -> VerificationResult:
@@ -158,6 +161,116 @@ def _write_context_pdf(path: Path, *, direct_profit_current: str = "200.00", dir
 
 def _text(page, x: int, y: int, content: str, *, fontsize: int = 10) -> None:
     page.insert_text((x, y), content, fontname="china-s", fontsize=fontsize)
+
+
+def _write_key_data_table(
+    page,
+    *,
+    report_year: int,
+    direct_current: str,
+    direct_prior: str,
+    unit_line: str = "单位：元  币种：人民币",
+    omit_direct_prior: bool = False,
+) -> None:
+    _text(page, 70, 177, "近三年主要会计数据和财务指标")
+    _text(page, 70, 200, "(一) 主要会计数据")
+    _text(page, 390, 230, unit_line)
+    _text(page, 66, 249, "主要会计数据")
+    _text(page, 199, 249, f"{report_year}年")
+    _text(page, 301, 249, f"{report_year - 1}年")
+    _text(page, 487, 249, f"{report_year - 2}年")
+    _text(page, 40, 296, "归属于上市公司股东的净")
+    _text(page, 40, 314, "利润")
+    _text(page, 178, 305, direct_current)
+    if not omit_direct_prior:
+        _text(page, 278, 305, direct_prior)
+    _text(page, 422, 305, "100.00")
+    _text(page, 464, 305, "80.00")
+    _text(page, 40, 332, "归属于上市公司股东的扣")
+    _text(page, 40, 350, "除非经常性损益的净利润")
+    _text(page, 178, 341, "140.00")
+    _text(page, 278, 341, "70.00")
+    _text(page, 422, 341, "100.00")
+    _text(page, 464, 341, "60.00")
+    _text(page, 70, 430, "(二) 主要财务指标")
+
+
+def _write_mapping_pdf(
+    path: Path,
+    *,
+    report_year: int = 2025,
+    leading_blank_pages: int = 2,
+    direct_current: str = "200.00",
+    direct_prior: str = "100.00",
+    unit_line: str = "单位：元  币种：人民币",
+    duplicate_table: bool = False,
+    incomplete_second_section: bool = False,
+) -> str:
+    document = pymupdf.open()
+    for _ in range(leading_blank_pages):
+        document.new_page()
+    page = document.new_page()
+    _write_key_data_table(
+        page,
+        report_year=report_year,
+        direct_current=direct_current,
+        direct_prior=direct_prior,
+        unit_line=unit_line,
+    )
+    if duplicate_table or incomplete_second_section:
+        extra = document.new_page()
+        _write_key_data_table(
+            extra,
+            report_year=report_year,
+            direct_current=direct_current,
+            direct_prior=direct_prior,
+            unit_line=unit_line,
+            omit_direct_prior=incomplete_second_section,
+        )
+    document.save(path)
+    document.close()
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _mapping_facts(sha256: str, *, company_id: str, report_year: int) -> list[FinancialFactV2]:
+    return [
+        _fact(
+            "net_profit_parent",
+            report_year,
+            "200",
+            source_sha256=sha256,
+            company_id=company_id,
+            report_year=report_year,
+        ),
+        _fact(
+            "net_profit_parent",
+            report_year - 1,
+            "100",
+            source_sha256=sha256,
+            company_id=company_id,
+            report_year=report_year,
+        ),
+        _fact(
+            "net_profit_parent_ex_nonrecurring",
+            report_year,
+            "140",
+            scope="unknown",
+            statement="key_financial_data",
+            source_sha256=sha256,
+            company_id=company_id,
+            report_year=report_year,
+        ),
+        _fact(
+            "net_profit_parent_ex_nonrecurring",
+            report_year - 1,
+            "70",
+            scope="unknown",
+            statement="key_financial_data",
+            source_sha256=sha256,
+            company_id=company_id,
+            report_year=report_year,
+        ),
+    ]
 
 
 @pytest.fixture
@@ -548,7 +661,9 @@ def test_unknown_scope_key_fact_needs_signed_exact_semantic_mapping(screening_co
     assert any("标签必须完整且精确" in issue for issue in proof_check.issues)
 
 
-def test_rule_two_semantic_mapping_is_limited_to_haitian_2024_page_seven_layout(screening_context) -> None:
+def test_rule_two_mapping_discovers_unique_table_for_other_company_year_and_page(
+    tmp_path: Path, screening_context
+) -> None:
     pdf_path, facts, verifications, comparability, mapping = screening_context
     other_company = [replace(fact, company_id="000001") for fact in facts]
     check = verify_parent_profit_semantic_mapping(
@@ -558,8 +673,9 @@ def test_rule_two_semantic_mapping_is_limited_to_haitian_2024_page_seven_layout(
         verifications=[_verified(fact) for fact in other_company],
         report_year=_REPORT_YEAR,
     )
-    assert check.proof is None
-    assert any("仅支持海天味业 603288 的 2024 年报第 7 页版式" in issue for issue in check.issues)
+    assert check.proof is not None, check.issues
+    assert check.proof.company_id == "000001"
+    assert all(item.page == 7 for item in check.proof.evidence)
 
     result = screen_m3_annual_rules(
         facts,
@@ -568,23 +684,108 @@ def test_rule_two_semantic_mapping_is_limited_to_haitian_2024_page_seven_layout(
         comparability=comparability,
         parent_profit_mapping=mapping,
     )
-    assert "其他公司或期间必须弃权" in result.limitations[1]
+    assert "第 7 页" not in "".join(result.limitations)
+    assert "603288" not in result.limitations[1]
+
+    path = tmp_path / "mapping-page3-2025.pdf"
+    sha = _write_mapping_pdf(path, report_year=2025, leading_blank_pages=2)
+    facts_2025 = _mapping_facts(sha, company_id="600519", report_year=2025)
+    check_2025 = verify_parent_profit_semantic_mapping(
+        path,
+        key_facts=[fact for fact in facts_2025 if fact.metric_id == "net_profit_parent_ex_nonrecurring"],
+        parent_facts=[fact for fact in facts_2025 if fact.metric_id == "net_profit_parent"],
+        verifications=[_verified(fact) for fact in facts_2025],
+        report_year=2025,
+    )
+    assert check_2025.proof is not None, check_2025.issues
+    assert check_2025.proof.company_id == "600519"
+    assert check_2025.proof.report_year == 2025
+    assert all(item.page == 3 for item in check_2025.proof.evidence)
+    assert is_verified_parent_profit_semantic_mapping(check_2025.proof)
 
 
-def test_page_seven_crosscheck_must_equal_both_parent_profit_years(tmp_path: Path, screening_context) -> None:
-    _old_path, facts, verifications, _comparability, _mapping = screening_context
+def test_rule_two_mapping_rejects_ambiguous_wrong_amount_missing_currency_and_bad_source(
+    tmp_path: Path, screening_context
+) -> None:
+    dup_path = tmp_path / "mapping-duplicate.pdf"
+    dup_sha = _write_mapping_pdf(dup_path, report_year=2025, duplicate_table=True)
+    dup_facts = _mapping_facts(dup_sha, company_id="600519", report_year=2025)
+    dup_check = verify_parent_profit_semantic_mapping(
+        dup_path,
+        key_facts=[fact for fact in dup_facts if fact.metric_id == "net_profit_parent_ex_nonrecurring"],
+        parent_facts=[fact for fact in dup_facts if fact.metric_id == "net_profit_parent"],
+        verifications=[_verified(fact) for fact in dup_facts],
+        report_year=2025,
+    )
+    assert dup_check.proof is None
+    assert any("不唯一" in issue for issue in dup_check.issues)
+
+    incomplete_path = tmp_path / "mapping-second-missing-amount.pdf"
+    incomplete_sha = _write_mapping_pdf(incomplete_path, report_year=2025, incomplete_second_section=True)
+    incomplete_facts = _mapping_facts(incomplete_sha, company_id="600519", report_year=2025)
+    incomplete_check = verify_parent_profit_semantic_mapping(
+        incomplete_path,
+        key_facts=[fact for fact in incomplete_facts if fact.metric_id == "net_profit_parent_ex_nonrecurring"],
+        parent_facts=[fact for fact in incomplete_facts if fact.metric_id == "net_profit_parent"],
+        verifications=[_verified(fact) for fact in incomplete_facts],
+        report_year=2025,
+    )
+    assert incomplete_check.proof is None
+    assert any("不唯一" in issue for issue in incomplete_check.issues)
+
+    _old_path, facts, _verifications, _comparability, _mapping = screening_context
     bad_path = tmp_path / "m3-wrong-direct-profit.pdf"
     new_hash = _write_context_pdf(bad_path, direct_profit_current="201.00")
     changed_facts = [replace(fact, source_sha256=new_hash) for fact in facts]
-    check = verify_parent_profit_semantic_mapping(
+    amount_check = verify_parent_profit_semantic_mapping(
         bad_path,
         key_facts=[fact for fact in changed_facts if fact.metric_id == "net_profit_parent_ex_nonrecurring"],
         parent_facts=[fact for fact in changed_facts if fact.metric_id == "net_profit_parent"],
         verifications=[_verified(fact) for fact in changed_facts],
         report_year=_REPORT_YEAR,
     )
-    assert check.proof is None
-    assert any("至少一年金额不一致" in issue for issue in check.issues)
+    assert amount_check.proof is None
+    assert any("至少一年金额不一致" in issue for issue in amount_check.issues)
+
+    no_currency_path = tmp_path / "mapping-no-currency.pdf"
+    no_currency_sha = _write_mapping_pdf(no_currency_path, report_year=2025, unit_line="单位：元")
+    no_currency_facts = _mapping_facts(no_currency_sha, company_id="600519", report_year=2025)
+    currency_check = verify_parent_profit_semantic_mapping(
+        no_currency_path,
+        key_facts=[fact for fact in no_currency_facts if fact.metric_id == "net_profit_parent_ex_nonrecurring"],
+        parent_facts=[fact for fact in no_currency_facts if fact.metric_id == "net_profit_parent"],
+        verifications=[_verified(fact) for fact in no_currency_facts],
+        report_year=2025,
+    )
+    assert currency_check.proof is None
+    assert any("币种" in issue for issue in currency_check.issues)
+
+    good_path = tmp_path / "mapping-good.pdf"
+    good_sha = _write_mapping_pdf(good_path, report_year=2025)
+    other_path = tmp_path / "mapping-other.pdf"
+    _write_mapping_pdf(other_path, report_year=2025, direct_current="201.00")
+    sha_facts = _mapping_facts(good_sha, company_id="600519", report_year=2025)
+    sha_check = verify_parent_profit_semantic_mapping(
+        other_path,
+        key_facts=[fact for fact in sha_facts if fact.metric_id == "net_profit_parent_ex_nonrecurring"],
+        parent_facts=[fact for fact in sha_facts if fact.metric_id == "net_profit_parent"],
+        verifications=[_verified(fact) for fact in sha_facts],
+        report_year=2025,
+    )
+    assert sha_check.proof is None
+    assert any("SHA256" in issue for issue in sha_check.issues)
+
+    unverified_facts = _mapping_facts(good_sha, company_id="600519", report_year=2025)
+    unverified_check = verify_parent_profit_semantic_mapping(
+        good_path,
+        key_facts=[fact for fact in unverified_facts if fact.metric_id == "net_profit_parent_ex_nonrecurring"],
+        parent_facts=[fact for fact in unverified_facts if fact.metric_id == "net_profit_parent"],
+        verifications=[_verified(fact, status="insufficient_evidence") for fact in unverified_facts],
+        report_year=2025,
+    )
+    assert unverified_check.proof is None
+    assert any("未由独立原文核验" in issue for issue in unverified_check.issues)
+
 
 
 def test_serialized_semantic_mapping_does_not_authorize_new_proof(screening_context) -> None:

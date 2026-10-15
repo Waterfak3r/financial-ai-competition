@@ -20,6 +20,7 @@ from finagent.core.model_call_ledger import (
     open_admission_gate,
     provider_model_fingerprint,
     read_gate_admission_count,
+    read_shared_goal_budget,
     reserve_provider_attempt,
 )
 
@@ -42,7 +43,7 @@ def _enable_ledger(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
-    limit: int = 8,
+    limit: int | None = 8,
     gate_key: str = "annual-job-test",
 ) -> tuple[Path, Path]:
     database = tmp_path / "isolated-ledger.sqlite3"
@@ -56,7 +57,7 @@ def _enable_ledger(
     return database, config_path
 
 
-def _write_config(config_path: Path, database: Path, *, limit: int) -> None:
+def _write_config(config_path: Path, database: Path, *, limit: int | None) -> None:
     config_path.write_text(
         json.dumps(
             {
@@ -91,6 +92,92 @@ def test_pinned_policy_rejects_limit_change_and_keeps_persisted_attempts(
         _reserve()
     assert rejected.value.code == "ledger_policy_mismatch"
     assert ledger_attempt_count(database) == 1
+
+
+def test_unlimited_policy_preserves_existing_attempts_and_cancellation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database, config_path = _enable_ledger(tmp_path, monkeypatch, limit=2)
+    original = {_reserve(batch_index=1), _reserve(batch_index=2)}
+    _write_config(config_path, database, limit=None)
+    with pytest.raises(ModelCallAdmissionError, match="ledger_policy_mismatch"):
+        _reserve(batch_index=3)
+    assert ledger_attempt_count(database) == 2
+
+    # Operator authorization changes only policy, never the attempt history.
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE provider_policy SET quota_limit = 0 WHERE singleton = 1")
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        admitted = list(pool.map(lambda index: _reserve(batch_index=index), range(3, 7)))
+    assert len(set(admitted)) == 4
+    assert ledger_attempt_count(database) == 6
+    with sqlite3.connect(database) as connection:
+        persisted = {
+            row[0] for row in connection.execute("SELECT admission_id FROM provider_attempts")
+        }
+    assert persisted == original | set(admitted)
+
+    close_admission_gate(database, "annual-job-test")
+    with pytest.raises(ModelCallAdmissionError, match="call_gate_closed"):
+        _reserve(batch_index=7)
+    assert ledger_attempt_count(database) == 6
+
+
+def test_shared_budget_counts_goal_attempts_only_without_mutating_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database, config_path = _enable_ledger(tmp_path, monkeypatch, limit=4)
+    _reserve(batch_index=1)
+    _reserve(batch_index=2)
+    monkeypatch.delenv("FINTRACE_MODEL_CALL_LEDGER_CONFIG")
+    monkeypatch.setenv("FINTRACE_CALL_GATE_KEY", "local-only")
+    open_admission_gate(database, "local-only")
+    _reserve("local-only")
+    monkeypatch.setenv("FINTRACE_MODEL_CALL_LEDGER_CONFIG", str(config_path))
+    before = database.read_bytes()
+
+    assert read_shared_goal_budget() == (4, 2)
+    assert database.read_bytes() == before
+    assert ledger_attempt_count(database) == 2
+    assert read_gate_admission_count(database, "local-only") == 1
+
+
+def test_shared_budget_does_not_treat_unpinned_null_as_authorized_unlimited(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database, config_path = _enable_ledger(tmp_path, monkeypatch, limit=2)
+    original = {_reserve(batch_index=1), _reserve(batch_index=2)}
+    assert read_shared_goal_budget() == (2, 0)
+    _write_config(config_path, database, limit=None)
+    before = database.read_bytes()
+    with pytest.raises(ModelCallAdmissionError, match="ledger_policy_mismatch"):
+        read_shared_goal_budget()
+    assert database.read_bytes() == before
+
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE provider_policy SET quota_limit = 0 WHERE singleton = 1")
+    assert read_shared_goal_budget() == (None, None)
+    with sqlite3.connect(database) as connection:
+        assert {row[0] for row in connection.execute("SELECT admission_id FROM provider_attempts")} == original
+
+
+@pytest.mark.parametrize("damage", ["missing_database", "missing_table", "missing_used_policy"])
+def test_shared_budget_rejects_damaged_used_ledger_without_repair(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, damage: str,
+) -> None:
+    database, _ = _enable_ledger(tmp_path, monkeypatch)
+    _reserve()
+    if damage == "missing_database":
+        database.unlink()
+    else:
+        with sqlite3.connect(database) as connection:
+            connection.execute(
+                "DROP TABLE provider_attempts" if damage == "missing_table" else "DELETE FROM provider_policy"
+            )
+    before = database.read_bytes() if database.exists() else None
+    with pytest.raises(ModelCallLedgerReadError):
+        read_shared_goal_budget()
+    assert (database.read_bytes() if database.exists() else None) == before
 
 
 def test_missing_call_context_fails_closed_without_admission(

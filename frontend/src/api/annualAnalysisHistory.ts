@@ -19,9 +19,11 @@ export class AnnualAnalysisHistoryApiError extends Error {
   }
 }
 
+/** Cancels only the client fetch; it does not cancel server-side archive validation. */
 export async function loadAnnualAnalysisHistory(
   limit = 20,
   offset = 0,
+  signal?: AbortSignal,
 ): Promise<AnnualAnalysisHistoryResponse> {
   if (!Number.isInteger(limit) || limit < 1 || limit > 50 || !Number.isInteger(offset) || offset < 0) {
     throw new AnnualAnalysisHistoryApiError("历史列表分页参数无效。");
@@ -31,7 +33,9 @@ export async function loadAnnualAnalysisHistory(
     headers: { Accept: "application/json" },
     cache: "no-store",
     credentials: "omit",
-  }).catch(() => {
+    signal,
+  }).catch((error: unknown) => {
+    if (signal?.aborted) throw error;
     throw new AnnualAnalysisHistoryApiError("无法连接本机历史列表服务。请确认后端已启动。");
   });
   const payload = await readJson(response);
