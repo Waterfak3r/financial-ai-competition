@@ -119,6 +119,8 @@ def selected_source_file(relative: Path) -> bool:
         return relative.suffix.lower() in {".py", ".json", ".md"}
     if parts[:1] == ("scripts",):
         return relative.suffix.lower() in {".py", ".ps1", ".bat"} or relative.name == ".gitkeep"
+    if parts[:1] == ("submission",):
+        return relative.suffix.lower() in {".pdf", ".md", ".json", ".svg", ".png", ".txt", ".docx"}
     return False
 
 
@@ -417,16 +419,29 @@ def copy_frontend_runtime_licenses(root: Path, package: Path) -> list[dict[str, 
 
 def write_package_notes(package: Path, root: Path, dependency_rows: list[dict[str, str]]) -> None:
     (package / "先看这里.txt").write_text(
-        "先把本 ZIP 完整解压到可写文件夹，再双击“启动 FINTRACE.bat”，浏览器会自动打开。\n\n"
-        "FINTRACE 年报分析便携包\n\n"
-        "1. 建议放在自己的文档、桌面等可写位置；不要从压缩包预览窗口里直接运行。\n"
-        "2. 双击“启动 FINTRACE.bat”，浏览器会打开已完成的 AI 年报分析。关闭黑色窗口即可停止本次本机服务。\n"
-        "3. 页面中的“分析年报”可使用随包海天 2024 年报开始一次新的确定性分析；M3 试行筛查也可在页面选择。\n"
-        "4. AI 分析需要你们自行选择服务、型号并填写自己的 API 地址和密钥。设置保存在本机便携包目录的 .env.model，不随压缩包提供。\n"
-        "5. 本包只监听本机 127.0.0.1。若默认端口被占用，会尝试 18765–18785；不会结束其他程序。\n"
-        "6. 请勿将此内部演示包或其中的真实年报、原文片段和历史报告公开上传。\n\n"
-        "问题排查：若提示文件缺失，请确认压缩包已完整解压；若目录不可写，请移到自己的文档或桌面再运行；\n"
-        "若提示端口范围均被占用，请关闭对应应用后重试。启动窗口会保留错误信息。\n",
+        "先把本 ZIP 完整解压到可写文件夹，双击“启动 FINTRACE.bat”即可开箱即用！\n\n"
+        "====================================================================\n"
+        "        FINTRACE 决赛完整交付与便携运行包（队友使用指南）\n"
+        "====================================================================\n\n"
+        "一、关于运行环境（零依赖，已内嵌完整运行时）\n"
+        "1. 本包已完整内嵌 Python 3.14.3 独立运行环境与全量依赖（FastAPI, PyMuPDF, ReportLab等）；\n"
+        "2. 前端已完成离线编译，使用者电脑上【完全不需要】安装 Python、Node.js、npm 或任何开发工具；\n"
+        "3. 建议解压到自己的文档或桌面等有写权限的目录，不要在压缩包预览窗口中直接双击；\n"
+        "4. 双击根目录下的“启动 FINTRACE.bat”，系统会自动在浏览器打开交互界面。\n\n"
+        "二、决赛交付与答辩材料清单（均在包内）\n"
+        "1. 决赛技术报告正式版（PDF 格式，可直接提交/打印）：\n"
+        "   文件路径：submission/final/FINTRACE-决赛技术报告.pdf\n"
+        "2. 决赛答辩核心提纲与专家问答（PPT 制作与现场应答宝典）：\n"
+        "   文件路径：submission/final/FINTRACE-决赛答辩提纲与专家问答.md\n"
+        "   （包含 3~5 分钟演练台本、8 大财务专家拷问应对、8 大计算机专家技术拷问应对）\n"
+        "3. 架构图与核心证据图表：\n"
+        "   文件路径：submission/final/evidence/architecture.svg 等\n\n"
+        "三、现场演示推荐动线\n"
+        "1. 打开主页：直观呈现“重点核查卡片 + AI 综合评审意见 + 核心指标表”；\n"
+        "2. 穿透证据：点击“查看原版 PDF 第 9 页原文”，展示毫米级坐标高亮对齐；\n"
+        "3. 季度工作台：点击左侧“季度与多期间对比”，演示单季差分算法与负基数严谨弃权标签；\n"
+        "4. 报告导出：点击“下载 PDF”，展示秒级生成的专业排版报告。\n\n"
+        "关闭黑色启动窗口即可随时停止本机服务。\n",
         encoding="utf-8",
     )
     (package / "许可与来源.txt").write_text(
