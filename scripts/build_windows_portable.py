@@ -250,7 +250,7 @@ def verify_vc_redist_source(executable: Path) -> None:
 
 
 def runtime_closure() -> list[metadata.Distribution]:
-    roots = {"fastapi", "python-multipart", "uvicorn", "pymupdf", "langgraph"}
+    roots = {"fastapi", "python-multipart", "uvicorn", "pymupdf", "langgraph", "reportlab"}
     from packaging.utils import canonicalize_name
 
     distributions = {
