@@ -304,7 +304,7 @@ def validate_sample_manifests(
     candidate_pdfs = {
         path
         for path in by_path
-        if path.startswith("data/samples/") and PurePosixPath(path).suffix.lower() == ".pdf"
+        if (path.startswith("data/samples/annual/") or path.startswith("data/samples/quarterly/")) and PurePosixPath(path).suffix.lower() == ".pdf"
     }
     sample_roots = ("data/samples/annual", "data/samples/quarterly")
     manifested: dict[str, str] = {}
@@ -981,7 +981,7 @@ def _verify_internal_inventory(members: dict[str, bytes], package_metadata: dict
     actual_sample_paths = {
         path
         for path in actual_paths
-        if path.startswith("data/samples/") and PurePosixPath(path).suffix.lower() == ".pdf"
+        if (path.startswith("data/samples/annual/") or path.startswith("data/samples/quarterly/")) and PurePosixPath(path).suffix.lower() == ".pdf"
     }
     declared_samples: dict[str, dict[str, Any]] = {}
     for row in sample_rows:
@@ -1253,7 +1253,7 @@ def build_source_package(
 def _sample_input_records(files: dict[str, SnapshotFile]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for path, source in sorted(files.items()):
-        if not path.startswith("data/samples/") or PurePosixPath(path).suffix.lower() != ".pdf":
+        if not (path.startswith("data/samples/annual/") or path.startswith("data/samples/quarterly/")) or PurePosixPath(path).suffix.lower() != ".pdf":
             continue
         rows.append({"path": path, "bytes": len(source.data), "sha256": sha256_bytes(source.data), "nature": "original_synthetic; see committed source_manifest.json"})
     return rows
