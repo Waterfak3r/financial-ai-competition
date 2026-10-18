@@ -34,6 +34,7 @@ import type { NarrativeEvidence, NarrativeEvidenceResponse } from "../types/narr
 import type { AnnualAnalysisBudget, AnnualAnalysisJob, AnnualAnalysisJobMode, AnnualAnalysisJobRequest } from "../types/annualAnalysisJob";
 import type { TextPdfUploadReceipt } from "../types/precheck";
 import { AnnualReportOverview } from "../components/AnnualReportOverview";
+import { ReportCopilotDrawer } from "../components/ReportCopilotDrawer";
 
 const SAMPLE_RUN_ID = "annual-analysis-21d8da07-097b-4cdf-97ce-6e109c8cc1b8";
 const RUN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
@@ -3327,6 +3328,12 @@ function AnnualReportView({
           <ModelInvestigationBlock investigation={reportModelInvestigation} />
         </details>
       ) : null}
+
+      <ReportCopilotDrawer
+        runId={report.run_id}
+        companyId={report.company_id}
+        reportYear={report.report_year}
+      />
     </div>
   );
 }

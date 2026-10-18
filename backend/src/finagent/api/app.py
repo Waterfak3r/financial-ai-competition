@@ -39,6 +39,7 @@ from finagent.api.annual_report_read import (
     render_narrative_evidence_preview,
 )
 from finagent.api.annual_report_export import AnnualReportExportError, export_annual_report
+from finagent.api.annual_copilot import AnnualCopilotError, answer_copilot_question
 from finagent.api.quarterly_analysis import (
     QuarterlyAnalysisError,
     execute_quarterly_analysis,
@@ -95,6 +96,11 @@ class QuarterlyRunRequest(BaseModel):
     quarter: Literal["Q1", "Q2", "Q3", "Q4"] = Field(default="Q2")
     company_id: str | None = None
     manifest_rel: str = Field(default="data/samples/quarterly/source_manifest.json")
+
+
+class AnnualCopilotRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=500)
+    history: list[dict[str, str]] = Field(default_factory=list)
 
 def create_app(project_root: Path | None = None) -> FastAPI:
     root = Path(project_root).resolve() if project_root is not None else Path(__file__).resolve().parents[4]
@@ -555,6 +561,21 @@ def create_app(project_root: Path | None = None) -> FastAPI:
                 "X-Fintrace-Snapshot-Parent-Run-Id": str(exported.snapshot.get("parent_run_id") or ""),
             })
         return Response(content=exported.content, media_type=exported.media_type, headers=headers)
+
+    @app.post("/v1/annual-analyses/{run_id}/copilot")
+    def post_annual_copilot(run_id: str, body: AnnualCopilotRequest) -> dict:
+        try:
+            return answer_copilot_question(
+                app.state.project_root,
+                run_id=run_id,
+                question=body.question,
+                history=body.history,
+            )
+        except AnnualCopilotError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": exc.message},
+            ) from None
 
     @app.get("/v1/annual-analyses/{run_id:path}")
     def get_annual_analysis_report(run_id: str) -> dict:
