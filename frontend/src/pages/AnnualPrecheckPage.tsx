@@ -298,20 +298,6 @@ export function AnnualPrecheckPage() {
               <NavButton view="settings" current={view} onSelect={setView} icon={<SettingsIcon />} label="设置" />
             </li>
           </ul>
-          <details className="legacy-navigation" open={view === "home" || view === "create" || view === "result"}>
-            <summary>基础预检（旧流程）</summary>
-            <ul className="nav-list legacy-nav-list">
-              <li>
-                <NavButton view="home" current={view} onSelect={setView} icon={<HomeIcon />} label="预检说明" />
-              </li>
-              <li>
-                <NavButton view="create" current={view} onSelect={setView} icon={<FormIcon />} label="新建基础预检" />
-              </li>
-              <li>
-                <NavButton view="result" current={view} onSelect={setView} icon={<TableIcon />} label="查看预检结果" />
-              </li>
-            </ul>
-          </details>
         </nav>
       </aside>
       <div className="workspace">
@@ -1654,23 +1640,6 @@ function errorMessage(error: unknown): string {
     return details.length === 0 ? error.message : `${error.message}（${details.join("，")}）`;
   }
   return "预检请求没有完成。";
-}
-
-function HomeIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
-      <path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z" />
-    </svg>
-  );
-}
-
-function FormIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
-      <rect x="5" y="3.5" width="14" height="17" rx="2" />
-      <path d="M8 8h8M8 12h8M8 16h5" />
-    </svg>
-  );
 }
 
 function TableIcon() {
