@@ -1,0 +1,337 @@
+.quarterly-container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 3rem;
+  color: var(--text-color, #1e293b);
+}
+
+.quarterly-header-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.quarterly-header-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.quarterly-title-group h2 {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 0 0 0.5rem 0;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.quarterly-badge-verified {
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: #ecfdf5;
+  color: #059669;
+  border: 1px solid #a7f3d0;
+  padding: 0.2rem 0.6rem;
+  border-radius: 9999px;
+}
+
+.quarterly-badge-sample {
+  font-size: 0.75rem;
+  font-weight: 500;
+  background: #f8fafc;
+  color: #64748b;
+  border: 1px solid #cbd5e1;
+  padding: 0.2rem 0.6rem;
+  border-radius: 9999px;
+}
+
+.quarterly-meta-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  font-size: 0.875rem;
+  color: #475569;
+  margin-top: 0.5rem;
+}
+
+.quarterly-actions {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.quarterly-btn {
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.quarterly-btn-primary {
+  background: #2563eb;
+  color: #ffffff;
+  border: 1px solid #1d4ed8;
+}
+
+.quarterly-btn-primary:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.quarterly-btn-secondary {
+  background: #f8fafc;
+  color: #334155;
+  border: 1px solid #cbd5e1;
+}
+
+.quarterly-btn-secondary:hover:not(:disabled) {
+  background: #f1f5f9;
+}
+
+.quarterly-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* 核心推导算法卡片区 */
+.quarterly-section {
+  margin-bottom: 2rem;
+}
+
+.quarterly-section-title {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #1e293b;
+  margin-bottom: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.quarterly-section-desc {
+  font-size: 0.875rem;
+  color: #64748b;
+  margin-bottom: 1rem;
+  line-height: 1.5;
+}
+
+.derivation-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1.25rem;
+}
+
+.derivation-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 1.25rem;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.derivation-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #f1f5f9;
+  padding-bottom: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.derivation-card-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.derivation-formula-badge {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.75rem;
+  background: #eff6ff;
+  color: #1d4ed8;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  border: 1px solid #bfdbfe;
+}
+
+.derivation-math-box {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 0.875rem;
+  margin-bottom: 0.75rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+.derivation-step {
+  display: flex;
+  justify-content: space-between;
+  color: #475569;
+}
+
+.derivation-step-res {
+  display: flex;
+  justify-content: space-between;
+  font-weight: 700;
+  color: #0f172a;
+  border-top: 1px dashed #cbd5e1;
+  padding-top: 0.35rem;
+  margin-top: 0.35rem;
+}
+
+.derivation-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
+.derivation-verified-tag {
+  color: #059669;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+/* 同比环比对照表 */
+.comparison-table-wrapper {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow-x: auto;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.comparison-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 0.9rem;
+}
+
+.comparison-table th {
+  background: #f8fafc;
+  color: #475569;
+  font-weight: 600;
+  padding: 0.875rem 1rem;
+  border-bottom: 1px solid #e2e8f0;
+  white-space: nowrap;
+}
+
+.comparison-table td {
+  padding: 0.875rem 1rem;
+  border-bottom: 1px solid #f1f5f9;
+  vertical-align: middle;
+}
+
+.comparison-table tr:hover td {
+  background: #fafafa;
+}
+
+.comparison-metric-name {
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.num-cell {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.diff-positive {
+  color: #dc2626;
+  font-weight: 600;
+}
+
+.diff-negative {
+  color: #059669;
+  font-weight: 600;
+}
+
+.rate-badge {
+  display: inline-block;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 0.8rem;
+  margin-left: 0.5rem;
+}
+
+.rate-badge-positive {
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+}
+
+.rate-badge-negative {
+  background: #ecfdf5;
+  color: #059669;
+  border: 1px solid #a7f3d0;
+}
+
+.rate-badge-abstained {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fde68a;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.rationale-note {
+  font-size: 0.75rem;
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #fef3c7;
+  border-radius: 4px;
+  padding: 0.4rem 0.6rem;
+  margin-top: 0.35rem;
+}
+
+/* 来源文档列表 */
+.sources-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1rem;
+}
+
+.source-doc-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 1rem;
+  font-size: 0.85rem;
+}
+
+.source-doc-title {
+  font-weight: 700;
+  color: #0f172a;
+  margin-bottom: 0.4rem;
+  display: flex;
+  justify-content: space-between;
+}
+
+.source-sha {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.75rem;
+  color: #64748b;
+  word-break: break-all;
+  background: #f8fafc;
+  padding: 0.25rem 0.4rem;
+  border-radius: 4px;
+  margin: 0.4rem 0;
+}

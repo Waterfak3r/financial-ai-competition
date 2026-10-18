@@ -39,6 +39,11 @@ from finagent.api.annual_report_read import (
     render_narrative_evidence_preview,
 )
 from finagent.api.annual_report_export import AnnualReportExportError, export_annual_report
+from finagent.api.quarterly_analysis import (
+    QuarterlyAnalysisError,
+    execute_quarterly_analysis,
+    load_latest_or_sample_quarterly_analysis,
+)
 from finagent.api.annual_analysis_jobs import (
     AnnualAnalysisJobError,
     get_annual_analysis_capabilities,
@@ -84,6 +89,12 @@ class AnnualAnalysisJobRequest(BaseModel):
 class AnnualAnalysisResumeRequest(BaseModel):
     parent_run_id: str
 
+
+class QuarterlyRunRequest(BaseModel):
+    year: int = Field(default=2024, ge=1900, le=2100)
+    quarter: Literal["Q1", "Q2", "Q3", "Q4"] = Field(default="Q2")
+    company_id: str | None = None
+    manifest_rel: str = Field(default="data/samples/quarterly/source_manifest.json")
 
 def create_app(project_root: Path | None = None) -> FastAPI:
     root = Path(project_root).resolve() if project_root is not None else Path(__file__).resolve().parents[4]
@@ -582,6 +593,32 @@ def create_app(project_root: Path | None = None) -> FastAPI:
         if isinstance(archive.snapshot, dict):
             response["snapshot"] = dict(archive.snapshot)
         return response
+    @app.get("/v1/quarterly-analyses/latest")
+    def get_latest_quarterly_analysis_route() -> dict:
+        try:
+            return load_latest_or_sample_quarterly_analysis(app.state.project_root)
+        except QuarterlyAnalysisError as exc:
+            raise HTTPException(status_code=404, detail={"message": str(exc)}) from None
+
+    @app.get("/v1/quarterly-analyses/{run_id}")
+    def get_quarterly_analysis_by_id_route(run_id: str) -> dict:
+        try:
+            return load_latest_or_sample_quarterly_analysis(app.state.project_root, run_id=run_id)
+        except QuarterlyAnalysisError as exc:
+            raise HTTPException(status_code=404, detail={"message": str(exc)}) from None
+
+    @app.post("/v1/quarterly-analyses/run")
+    def run_quarterly_analysis_route(body: QuarterlyRunRequest) -> dict:
+        try:
+            return execute_quarterly_analysis(
+                app.state.project_root,
+                year=body.year,
+                quarter=body.quarter,
+                manifest_rel=body.manifest_rel,
+                company_id=body.company_id,
+            )
+        except QuarterlyAnalysisError as exc:
+            raise HTTPException(status_code=400, detail={"message": str(exc)}) from None
 
     return app
 

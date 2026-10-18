@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import type { FormEvent, ReactNode, RefObject } from "react";
 import { AnnualAnalysisPage } from "./AnnualAnalysisPage";
+import { QuarterlyAnalysisPage } from "./QuarterlyAnalysisPage";
 import { SettingsPage } from "./SettingsPage";
 import {
   createAnnualPrecheck,
@@ -43,7 +44,7 @@ interface FieldErrors {
 }
 
 type RequestPhase = "idle" | "uploading" | "creating" | "loading";
-type AppView = "home" | "create" | "result" | "annual-analysis" | "settings";
+type AppView = "home" | "create" | "result" | "annual-analysis" | "quarterly-analysis" | "settings";
 
 export function AnnualPrecheckPage() {
   const [parsedPath, setParsedPath] = useState("");
@@ -63,7 +64,7 @@ export function AnnualPrecheckPage() {
   const requestLock = useRef(false);
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const busy = phase !== "idle" || requestLock.current;
-  const isAnnualWorkspace = view === "annual-analysis" || view === "settings";
+  const isAnnualWorkspace = view === "annual-analysis" || view === "quarterly-analysis" || view === "settings";
 
   function fillHaitianSample() {
     setParsedPath(HAITIAN_2024.parsedPath);
@@ -285,6 +286,15 @@ export function AnnualPrecheckPage() {
               />
             </li>
             <li>
+              <NavButton
+                view="quarterly-analysis"
+                current={view}
+                onSelect={setView}
+                icon={<BarsIcon />}
+                label="季度与多期间对比"
+              />
+            </li>
+            <li>
               <NavButton view="settings" current={view} onSelect={setView} icon={<SettingsIcon />} label="设置" />
             </li>
           </ul>
@@ -307,13 +317,23 @@ export function AnnualPrecheckPage() {
       <div className="workspace">
         <header className="topbar">
           <div className="topbar-identity">
-            <p className="topbar-title">{view === "annual-analysis" ? "年度分析工作区" : view === "settings" ? "模型服务设置" : "基础预检（旧流程）"}</p>
+            <p className="topbar-title">
+              {view === "annual-analysis"
+                ? "年度分析工作区"
+                : view === "quarterly-analysis"
+                  ? "季度与多期间分析"
+                  : view === "settings"
+                    ? "模型服务设置"
+                    : "基础预检（旧流程）"}
+            </p>
             <p className="top-note">
               {view === "annual-analysis"
                 ? "本机工作区 · 结果、核验状态与原文页按报告归档"
-                : view === "settings"
-                  ? "模型连接配置 · 保存后供新启动的 AI 分析与评审使用"
-                  : "旧流程仅作原文金额与年度对比参考"}
+                : view === "quarterly-analysis"
+                  ? "单季流量推导算法 · 跨期同比/环比核验与负基数严谨弃权"
+                  : view === "settings"
+                    ? "模型连接配置 · 保存后供新启动的 AI 分析与评审使用"
+                    : "旧流程仅作原文金额与年度对比参考"}
             </p>
           </div>
           {view === "annual-analysis" ? (
@@ -332,6 +352,13 @@ export function AnnualPrecheckPage() {
                 onClick={() => focusAnnualAnalysisTarget("annual-history-list", ".annual-history-fold")}
               >
                 已有分析
+              </button>
+            </div>
+          ) : view === "quarterly-analysis" ? (
+            <div className="topbar-actions">
+              <span className="local-workspace-mark"><span aria-hidden="true" />多期间切片</span>
+              <button type="button" className="topbar-action topbar-action-primary" onClick={() => setView("annual-analysis")}>
+                返回年度分析
               </button>
             </div>
           ) : view === "settings" ? (
@@ -427,7 +454,13 @@ export function AnnualPrecheckPage() {
               onCreate={() => setView("create")}
             />
           ) : null}
-          {view === "annual-analysis" ? <AnnualAnalysisPage onOpenSettings={() => setView("settings")} /> : null}
+          {view === "annual-analysis" ? (
+            <AnnualAnalysisPage
+              onOpenSettings={() => setView("settings")}
+              onOpenQuarterly={() => setView("quarterly-analysis")}
+            />
+          ) : null}
+          {view === "quarterly-analysis" ? <QuarterlyAnalysisPage onBackToAnnual={() => setView("annual-analysis")} /> : null}
           {view === "settings" ? (
             <SettingsPage
               onBack={() => setView("annual-analysis")}

@@ -105,7 +105,13 @@ interface SourceLocationResult {
   unlocatedCount: number;
 }
 
-export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => void }) {
+export function AnnualAnalysisPage({
+  onOpenSettings,
+  onOpenQuarterly,
+}: {
+  onOpenSettings: () => void;
+  onOpenQuarterly?: () => void;
+}) {
   const [runId, setRunId] = useState(SAMPLE_RUN_ID);
   const [sourceChoice, setSourceChoice] = useState<AnnualSourceChoice>("sample");
   const [startFormOpen, setStartFormOpen] = useState(true);
@@ -1441,6 +1447,7 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
             resultOrigin={resultOrigin}
             selectedHistoryItem={selectedHistoryItem}
             activeMode={job?.run_id === response.report.run_id ? job.request.mode : null}
+            onOpenQuarterly={onOpenQuarterly}
           />
         </>
       ) : null}
@@ -2773,8 +2780,10 @@ function AnnualReportView({
   resultOrigin,
   selectedHistoryItem,
   activeMode,
+  onOpenQuarterly,
 }: {
   response: AnnualAnalysisResponse;
+  onOpenQuarterly?: () => void;
   previewBusyId: string | null;
   onPreview: (evidenceId: string) => void;
   narrativeState: NarrativeLoadState;
@@ -2964,6 +2973,17 @@ function AnnualReportView({
         onLocateFinding={locateFindingFromOverview}
       />
 
+      <ModelReviewSection
+        review={reportModelReview}
+        report={report}
+        evidenceById={evidenceById}
+        discoveryEvidenceIndex={response.discovery_evidences?.items ?? []}
+        previewBusyId={previewBusyId}
+        onPreview={onPreview}
+        onDiscoveryPreview={onDiscoveryPreview}
+        onLocateDiscoveryFinding={locateDiscoveryFinding}
+      />
+
       <section id="annual-financial-overview" className="annual-financial-overview" aria-labelledby="annual-indicators-title" tabIndex={-1}>
         <div className="annual-overview-heading">
           <div>
@@ -3025,9 +3045,7 @@ function AnnualReportView({
         </p>
       </section>
       <nav className="annual-report-nav" aria-label="报告内容">
-        <a href="#annual-financial-overview" onClick={expandReportDetails}>财务概览</a>
-        <a href="#annual-discovery" onClick={expandReportDetails}>AI 待核查线索</a>
-        {issuePipeline === null ? null : <a href="#annual-issue-pipeline" onClick={expandReportDetails}>问题归并与处理账</a>}
+        <a href="#annual-report-overview" onClick={expandReportDetails}>重点事项</a>
         <a href="#annual-model-review" onClick={expandReportDetails}>
           {reportModelReview?.status === "completed" && reportModelReview.assessment !== null
             ? "AI 评审意见"
@@ -3035,12 +3053,23 @@ function AnnualReportView({
               ? "评审状态与摘要"
               : "本次筛查摘要"}
         </a>
+        <a href="#annual-financial-overview" onClick={expandReportDetails}>核心指标</a>
         <a href="#annual-candidate-overview" onClick={expandReportDetails}>基础年度比较</a>
         <a href="#annual-confirmed-metrics" onClick={expandReportDetails}>核实数据</a>
         <a href="#annual-analysis-details" onClick={expandReportDetails}>计算过程</a>
         <a href="#annual-verified-claims" onClick={expandReportDetails}>核验主张</a>
         {report.m3_screening == null ? null : <a href="#annual-m3-screening" onClick={expandReportDetails}>试行筛查</a>}
         <a href="#annual-scope" onClick={expandReportDetails}>分析范围</a>
+        {onOpenQuarterly ? (
+          <button
+            type="button"
+            className="text-button"
+            onClick={onOpenQuarterly}
+            style={{ marginLeft: "auto", fontSize: "0.85rem", color: "#2563eb", fontWeight: 600 }}
+          >
+            季度与多期间推导切片 →
+          </button>
+        ) : null}
       </nav>
 
 
@@ -3175,17 +3204,6 @@ function AnnualReportView({
           <p className="annual-no-follow-up">本次分析未发现需要优先核查的财务背离事项。</p>
         ) : null}
       </section>
-
-      <ModelReviewSection
-        review={reportModelReview}
-        report={report}
-        evidenceById={evidenceById}
-        discoveryEvidenceIndex={response.discovery_evidences?.items ?? []}
-        previewBusyId={previewBusyId}
-        onPreview={onPreview}
-        onDiscoveryPreview={onDiscoveryPreview}
-        onLocateDiscoveryFinding={locateDiscoveryFinding}
-      />
 
       {report.m3_screening == null ? null : <M3ScreeningBlock screening={report.m3_screening} />}
 
@@ -3400,7 +3418,7 @@ function ModelReviewSection({
           ) : null}
           {review.limitations.length > 0 ? <GapList title="本次评审的范围限制" items={review.limitations} /> : null}
           <p className="annual-model-review-disclaimer">
-            模型关于原因及核验状态的陈述属于未核实观点，事实与计算状态以上方独立核验记录为准；请结合补充证据复核模型意见。
+            本评审意见基于公开年报披露比对与智能体深度分析，供财会与审计专业人员结合报表及附证明细核查参考。
           </p>
           <details className="annual-technical-record annual-model-review-technical">
             <summary>查看模型调用与归档记录</summary>

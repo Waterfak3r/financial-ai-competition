@@ -689,7 +689,7 @@ class FinalReportDocument(BaseDocTemplate):
         canvas.line(19 * mm, 12 * mm, page_width - 19 * mm, 12 * mm)
         canvas.setFont("YaHei", 7.2)
         canvas.setFillColor(MUTED)
-        canvas.drawString(19 * mm, 7.5 * mm, "2026 年 10 月 5 日  ·  FINTRACE 决赛技术报告")
+        canvas.drawString(19 * mm, 7.5 * mm, "2026 年 10 月 18 日  ·  FINTRACE 决赛技术报告")
         canvas.drawRightString(page_width - 19 * mm, 7.5 * mm, str(doc.page))
         canvas.restoreState()
 

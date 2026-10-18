@@ -46,7 +46,7 @@ _AMOUNT_RE = re.compile(
 _REVENUE_MAIN = "一、营业收入"
 _REVENUE_DETAIL_LIMIT = "合并利润表没有“一、营业收入”主行，改用“其中：营业收入”。"
 _YEAR_RE = re.compile(r"(\d{4})年(?:度|金额)")
-_NOTE_RE = re.compile(r"^[一二三四五六七八九十]+、\d+[（(]?\d*[）)]?$")
+_NOTE_RE = re.compile(r"^[一二三四五六七八九十]+[、.]?\d*[（(]?\d*[）)]?$")
 _REFERENCE_RE = re.compile(r"^\d+(?:[（(]\d+[）)])?$")
 _DASH_FILL_RE = re.compile(r"^[\-－−–—]+$")
 _SECTION_RE = re.compile(r"^\s*[一二三四五六七八九十百千]+、\s*\S")
@@ -190,8 +190,8 @@ def _table_context(
 ) -> tuple[_Context | None, ExtractionIssue | None]:
     meta = [line.text for line in body if _is_meta_line(line.text) and not _is_furniture(line.text)]
     meta_text = "\n".join(meta)
-    units = re.findall(r"单位[:：]\s*(亿元|万元|元)", meta_text)
-    currencies = re.findall(r"币种[:：]\s*(人民币|美元|港元|港币|欧元|日元)", meta_text)
+    units = re.findall(r"单位[:：]\s*(?:人民币|美元|港元|港币|欧元|日元)?\s*(亿元|万元|元)", meta_text)
+    currencies = re.findall(r"(?:币种[:：]|单位[:：])\s*(人民币|美元|港元|港币|欧元|日元)", meta_text)
     years: list[int] = []
     styles: dict[int, str] = {}
     for text in meta:
