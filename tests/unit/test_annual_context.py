@@ -359,3 +359,63 @@ def _analysis_from(report: dict[str, Any], source_record: dict[str, Any]) -> dic
             ]
         },
     }
+
+
+def test_retrieval_supports_m3_screening_signals(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "m3_source.pdf"
+    document = pymupdf.open()
+    page = document.new_page()
+    lines = [
+        "第三节 管理层讨论与分析",
+        "报告期内应收账款增幅较大，坏账准备计提充分，主要由于主要客户信用账期调整所致。",
+        "期末存货余额较上年同期增加，存货跌价准备根据市场行情计提，主要由于备货增加所致。",
+        "本期扣除非经常性损益后净利润占归属于上市公司股东净利润比例变动，主要由于政府补助增加所致。",
+        "第四节 公司治理",
+    ]
+    for index, line in enumerate(lines):
+        page.insert_text((50, 70 + index * 28), line, fontsize=10, fontname="china-s")
+    note_page = document.new_page()
+    note_lines = [
+        "第十节 财务报告",
+        "七、合并财务报表项目注释",
+        "应收账款账龄结构与信用减值损失披露。",
+    ]
+    for index, line in enumerate(note_lines):
+        note_page.insert_text((50, 70 + index * 30), line, fontsize=10, fontname="china-s")
+    document.save(pdf_path)
+    document.close()
+
+    sha256 = hashlib.sha256(pdf_path.read_bytes()).hexdigest()
+    report = {
+        "kind": "fintrace_annual_analysis_report",
+        "company_id": COMPANY_ID,
+        "report_year": 2024,
+        "source_document_id": DOC_ID,
+        "source_sha256": sha256,
+        "m3_screening": {
+            "status": "completed",
+            "rules": [
+                {"rule_id": "receivables_growth_gap", "triggered": True},
+                {"rule_id": "inventory_growth_gap", "triggered": True},
+                {"rule_id": "deducted_parent_profit_share", "triggered": True},
+            ],
+        },
+    }
+    source_record = {
+        "document_id": DOC_ID,
+        "company_id": COMPANY_ID,
+        "report_period": "2024-12-31",
+        "sha256": sha256,
+    }
+
+    result = retrieve_annual_context(report, pdf_path, source_record)
+
+    assert result.status == "retrieved"
+    assert len(result.snippets) > 0
+    retrieved_signals = {
+        res.signal_id for res in result.signal_results if res.status == "retrieved"
+    }
+    assert "receivables_growth_gap" in retrieved_signals
+    assert "inventory_growth_gap" in retrieved_signals
+    assert "deducted_parent_profit_share" in retrieved_signals
+    assert all("不表示因果解释" in item.selection_reason for item in result.snippets)

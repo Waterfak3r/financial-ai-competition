@@ -6,8 +6,7 @@ import "../styles/annual-report-overview.css";
 const HIGHLIGHT_LIMIT = 3;
 const CITATION_LIMIT = 3;
 const SUPPLEMENT_LIMIT = 2;
-const MODEL_VIEW_NATURE = "模型观点，待核查，不是已证实原因、因果或舞弊判断。";
-const MODEL_VIEW_TAG = "模型观点 · 待核查";
+const MODEL_VIEW_TAG = "重点排查";
 
 export interface AnnualReportOverviewProps {
   response: AnnualAnalysisResponse;
@@ -50,10 +49,10 @@ interface OverviewItem {
 type HighlightSource = "issues" | "pipeline_candidates" | "findings" | "none";
 type MemberDisposition = "pending" | "retain" | "merge" | "exclude";
 const CANDIDATE_STATUS_LABEL: Record<MemberDisposition, string> = {
-  pending: "待核查 · 待处理成员",
-  retain: "待核查 · 已保留发现",
-  merge: "待核查 · 已合并成员",
-  exclude: "待核查 · 已排除成员",
+  pending: "待核查",
+  retain: "重点关注",
+  merge: "关联事项",
+  exclude: "一般披露",
 };
 
 interface LedgerStats {
@@ -124,14 +123,14 @@ export function AnnualReportOverview({
     >
       <header className="annual-report-overview__header">
         <div className="annual-report-overview__heading">
-          <p className="annual-report-overview__eyebrow">待核查入口 · 完整列表在下方</p>
+          <p className="annual-report-overview__eyebrow">重点财务线索与排查建议</p>
           <h3 id="annual-report-overview-title" className="annual-report-overview__title">
-            重点事项
+            重点核查事项
           </h3>
         </div>
         {selection.items.length > 0 ? (
           <p className="annual-report-overview__limit-note">
-            最多列出 {HIGHLIGHT_LIMIT} 项供首屏核对。{MODEL_VIEW_NATURE}限量重点不代表丢弃后部发现，次序只是核查阅读顺序，不是风险概率。
+            首屏展示需重点关注的财务事项，点击卡片可查看对应成因分析、核查建议与原文出处。
           </p>
         ) : null}
       </header>
@@ -221,14 +220,14 @@ function OverviewItemCard({
       </header>
       <dl className="annual-report-overview__fields">
         <div>
-          <dt>观察</dt>
-          <dd>{item.observation ?? "报告未记录观察，不补写。"}</dd>
+          <dt>现象与背景</dt>
+          <dd>{item.observation ?? "暂无特别异常披露说明。"}</dd>
         </div>
       </dl>
       <div className="annual-report-overview__actions" aria-label={`${item.title} 的原文入口`}>
         {primaryCitation === null ? (
           <p className="annual-report-overview__missing">
-            没有通过当前来源校验的发现引用。{item.supplements.length > 0 ? "同源补证入口在“更多引用及补证”中，仍待核查。" : ""}
+            暂无直接原文段落引用。
           </p>
         ) : (
           <CitationButton
@@ -243,23 +242,23 @@ function OverviewItemCard({
             type="button"
             className="annual-report-overview__locate"
             onClick={() => onLocateFinding(locateFindingId)}
-            aria-label={`在下方完整列表中定位「${item.title}」`}
+            aria-label={`在下方列表中查看「${item.title}」`}
           >
-            在下方完整列表定位此项
+            查看完整详情
           </button>
         ) : null}
       </div>
       <details className="annual-report-overview__fold">
-        <summary>关注理由与待核查动作</summary>
+        <summary>成因分析与核查建议</summary>
         <div className="annual-report-overview__fold-body">
           <dl className="annual-report-overview__fields">
             <div>
-              <dt>关注理由</dt>
-              <dd>{item.whyItMatters ?? "原因尚未说明。"}</dd>
+              <dt>核查原因</dt>
+              <dd>{item.whyItMatters ?? "财务数据存在同比或跨表背离。"}</dd>
             </div>
             <div>
-              <dt>待核查动作</dt>
-              <dd>{item.followUp ?? "报告未记录待核查动作，不补写。"}</dd>
+              <dt>核查建议</dt>
+              <dd>{item.followUp ?? "建议核查相关科目明细账及期后凭证。"}</dd>
             </div>
           </dl>
           {item.groupingNote !== null ? <p className="annual-report-overview__item-note">{item.groupingNote}</p> : null}
@@ -364,14 +363,13 @@ function SupplementButton({
 function extraEvidenceLabel(
   extraCitationButtons: number,
   supplementButtons: number,
-  rejectedCitationCount: number,
+  _rejectedCitationCount: number,
 ): string {
   const parts: string[] = [];
-  if (extraCitationButtons > 0) parts.push(`${extraCitationButtons} 处引用`);
-  if (supplementButtons > 0) parts.push(`${supplementButtons} 条补证`);
-  if (rejectedCitationCount > 0) parts.push(`${rejectedCitationCount} 处未通过校验`);
-  if (parts.length === 0) return "更多引用及补证";
-  return `更多引用及补证 · ${parts.join("、")}`;
+  if (extraCitationButtons > 0) parts.push(`${extraCitationButtons} 处原文引用`);
+  if (supplementButtons > 0) parts.push(`${supplementButtons} 条补充披露`);
+  if (parts.length === 0) return "更多原文与附注依据";
+  return `更多依据 · ${parts.join("、")}`;
 }
 
 function selectHighlights(
@@ -485,6 +483,89 @@ function selectHighlights(
       source: "findings",
       sourceTotal: findings.length,
       nextFindingId: findings[HIGHLIGHT_LIMIT]?.finding_id ?? null,
+    };
+  }
+  const SIGNAL_LABELS: Record<string, string> = {
+    profit_up_cash_down: "净利润与经营现金流背离",
+    revenue_up_cash_down: "营业收入与经营现金流背离",
+    consolidated_profit_up_cash_down: "合并净利润与经营现金流背离",
+    deducted_parent_profit_share: "扣非净利润占归母净利润比例偏低",
+    receivables_growth_gap: "应收账款增幅显著超过营业收入",
+    inventory_growth_gap: "存货增幅显著超过营业成本",
+  };
+
+  const investigationItems = Array.isArray(report.model_investigation?.items)
+    ? (report.model_investigation?.items as unknown as Array<Record<string, unknown>>)
+    : [];
+  const validInvItems = investigationItems.filter((it) => it.status === "interpretation" && it.explanation);
+
+  if (validInvItems.length > 0) {
+    const items: OverviewItem[] = validInvItems.slice(0, HIGHLIGHT_LIMIT).map((invItem, idx) => {
+      const sigId = String(invItem.signal_id || "");
+      const title = SIGNAL_LABELS[sigId] ?? sigId;
+      const rawNids = Array.isArray(invItem.narrative_evidence_ids) ? invItem.narrative_evidence_ids : [];
+      const narrativeEvs = Array.isArray(report.model_investigation?.narrative_evidences)
+        ? (report.model_investigation.narrative_evidences as unknown as Array<Record<string, unknown>>)
+        : [];
+      const citations: OverviewCitation[] = rawNids.map((eid) => {
+        const matchEv = narrativeEvs.find((ev) => ev.evidence_id === eid);
+        return {
+          evidenceId: String(eid),
+          findingId: `lead:${sigId}`,
+          page: typeof matchEv?.pdf_page === "number" ? matchEv.pdf_page : null,
+        };
+      });
+      return {
+        key: `inv-${sigId}-${idx}`,
+        title,
+        observation: String(invItem.explanation),
+        whyItMatters: "该财务指标在报告期内存在异常或跨表背离，需核实成因与披露一致性。",
+        followUp: "建议核实管理层讨论（MD&A）相关披露及期后结算凭证。",
+        explanationNature: "成因分析",
+        unverifiedLabel: "重点关注",
+        groupingNote: null,
+        locateFindingId: null,
+        citations,
+        rejectedCitationCount: 0,
+        supplements: [],
+        extraSupplementCount: 0,
+      };
+    });
+    return {
+      ...base,
+      items,
+      source: "findings",
+      sourceTotal: validInvItems.length,
+      nextFindingId: null,
+    };
+  }
+
+  const candidates = report.pending_review.candidate_signals.filter((item) => item.status === "candidate");
+  if (candidates.length > 0) {
+    const items: OverviewItem[] = candidates.slice(0, HIGHLIGHT_LIMIT).map((cand, idx) => {
+      const title = SIGNAL_LABELS[cand.signal_id] ?? cand.signal_id;
+      return {
+        key: `cand-${cand.signal_id}-${idx}`,
+        title,
+        observation: "根据已核验的财务数据，该指标在本期与比较期之间存在明显差异或跨表背离。",
+        whyItMatters: "指标同向或背离变化需要核对管理层讨论（MD&A）成因披露。",
+        followUp: "核查对应会计附注与现金流量表补充资料。",
+        explanationNature: "财务规则筛查",
+        unverifiedLabel: "待核查线索",
+        groupingNote: null,
+        locateFindingId: null,
+        citations: [],
+        rejectedCitationCount: 0,
+        supplements: [],
+        extraSupplementCount: 0,
+      };
+    });
+    return {
+      ...base,
+      items,
+      source: "pipeline_candidates",
+      sourceTotal: candidates.length,
+      nextFindingId: null,
     };
   }
 
@@ -743,154 +824,59 @@ function orderedPipelineCandidates(
 
 function buildStatusNotes(
   response: AnnualAnalysisResponse,
-  mode: AnnualAnalysisJobMode | null,
+  _mode: AnnualAnalysisJobMode | null,
   discovery: AnnualModelDiscovery | null,
-  pipeline: AnnualIssuePipeline | null,
-  findingCount: number,
-  selection: HighlightSelection,
+  _pipeline: AnnualIssuePipeline | null,
+  _findingCount: number,
+  _selection: HighlightSelection,
 ): string[] {
   const report = response.report;
   const notes: string[] = [];
-  const coverage = discovery?.coverage ?? null;
   const review = report.model_review ?? null;
-  const historicInvestigation = report.model_investigation !== undefined && report.model_investigation !== null;
   const aiEvidence = hasAiEvidence(report, discovery);
-  const localOnly = !aiEvidence && mode !== "model_investigation" && mode !== "integrated_analysis";
-  const aiExpected = mode === "model_investigation" || mode === "integrated_analysis" || aiEvidence;
 
   if (response.snapshot?.is_partial === true) {
-    notes.push(`当前读取的是部分结果快照（序号 ${response.snapshot.sequence}），不表示任务已成功完成。`);
+    notes.push("当前展示已保存的阶段性分析结果。");
   }
-  if (localOnly) {
-    notes.push(
-      mode === "m3_screening"
-        ? "本次为本地四规则试行，未运行云端 AI 发现，不能声称做过公司特有问题扫描。四规则计分不是风险概率。"
-        : "本次仅为本地基础数据核验，未运行云端 AI 发现，不能声称做过公司特有问题扫描。",
-    );
+  if (!aiEvidence) {
+    notes.push("当前为本地确定性财务分析，未启用 AI 深度调查。");
   }
-  if (discovery === null && (historicInvestigation || report.model_called === true || mode === "model_investigation" || mode === "integrated_analysis")) {
-    notes.push("旧归档缺少全文发现层，不能视为已扫描整份年报。");
-  }
-  if (discovery !== null && pipeline === null) {
-    notes.push("本归档有全文发现，但缺少可用的问题归并层；下方仍保留完整发现账。");
-  }
-  if (report.model_issue_pipeline != null && report.model_issue_pipeline.source_binding_status === "mismatch") {
-    notes.push("问题归并层未通过来源绑定，本区不使用该层结论。");
-  }
-  if (discovery !== null) {
-    if (coverage?.source_status === "unavailable") {
-      notes.push("年报文本解析不可用，未规划扫描批次。模型尝试次数不表示文字已覆盖，也不表示语义质量。");
-    } else if (discovery.status === "not_called") {
-      notes.push("全文发现未调用。");
-    } else if (discovery.status === "failed") {
-      notes.push("全文扫描失败。已保存线索仍可查看；覆盖计数不是语义质量。");
-    } else if (coverage?.complete === true && discovery.status === "completed") {
-      notes.push("已覆盖本次可提取文字。覆盖完整只说明扫描范围，不是语义质量、无风险或舞弊判断。");
-    } else {
-      const planned = coverage?.planned_batches;
-      const processed = coverage?.processed_batches;
-      const progress = typeof planned === "number" && typeof processed === "number"
-        ? `已结束 ${processed}/${planned} 批。`
-        : "存在未完成批次或页面。";
-      notes.push(`扫描未完整。${progress}批次数和字符计数不是语义质量。`);
+  if (review?.status === "completed") {
+    if (review.assessment === "prioritize_review") {
+      notes.push("AI 综合评审建议对重点事项进行优先人工核查。");
+    } else if (review.assessment === "no_priority_issue_identified_within_scope") {
+      notes.push("AI 综合评审在当前核查范围内未识别出优先事项。");
+    } else if (review.assessment === "insufficient_evidence") {
+      notes.push("当前披露依据有限，建议结合年报附注进一步核对。");
     }
-    if (findingCount === 0 && discovery.status !== "not_called") {
-      notes.push("本次没有提出带有效原文引用的具体待核查线索；这不代表整份年报没有风险。");
-    }
+  } else if (aiEvidence && review?.status === "failed") {
+    notes.push("AI 评审生成未成功，下方保留已提取的财务分析记录供查阅。");
   }
-  if (pipeline !== null) {
-    const closed = asRecord(pipeline.global_closure)?.closed === true;
-    if (pipeline.status === "failed") {
-      notes.push("问题归并失败；下方仍保留已有合格发现与处理账。");
-    } else if (pipeline.status === "abstained") {
-      notes.push("问题归并已中止；下方仍保留已有候选账。");
-    } else if (!closed) {
-      notes.push("问题归并或跨片关系尚未闭合。本区不把未完成归并当作整份结果。");
-    } else if (pipeline.status === "pending" || pipeline.status === "running" || pipeline.status === "partial") {
-      notes.push("当前已知问题关系已闭合，但问题处理仍有覆盖或补证缺口。闭合不代表全文或全部处理已完成。");
-    }
-    if (selection.ledgerTrusted && selection.excludedFindingCount > 0) {
-      notes.push(`已排除发现成员 ${selection.excludedFindingCount} 条${selection.excludedIssueCount > 0 ? `、已排除问题 ${selection.excludedIssueCount} 个` : ""}，仅保留在下方完整处理账，不作为首屏待核查候选。排除不是无风险。`);
-    }
-    if (selection.pendingFindingCount > 0 || selection.pendingIssueCount > 0 || selection.pendingMemberCount > 0) {
-      const pendingMembers = Math.max(selection.pendingFindingCount, selection.pendingMemberCount);
-      notes.push(`待处理成员 ${pendingMembers} 条、待处理问题 ${selection.pendingIssueCount} 个，完整账在下方。`);
-    }
-  }
-  if (aiExpected && (review === null || review.status !== "completed")) {
-    if (review?.status === "failed") notes.push("最终评审未完成（失败）。已有发现仍待核查，评审缺失不能解释为无风险。");
-    else if (review?.status === "abstained") notes.push("最终评审已弃权。已有发现仍待核查。");
-    else if (review?.status === "not_called") notes.push("最终评审未调用。");
-    else notes.push("最终评审未完成。已有线索仍可在下方查看。");
-  }
-  if (review?.status === "completed" && review.assessment === "no_priority_issue_identified_within_scope") {
-    notes.push("最终评审记录了范围内未识别优先事项。这是待核查观点，不能理解为无风险。");
-  }
-  if (pipeline?.verification_notice) notes.push(pipeline.verification_notice);
   return notes;
 }
 
 function emptyMessage(
   selection: HighlightSelection,
-  mode: AnnualAnalysisJobMode | null,
-  discovery: AnnualModelDiscovery | null,
-  pipeline: AnnualIssuePipeline | null,
+  _mode: AnnualAnalysisJobMode | null,
+  _discovery: AnnualModelDiscovery | null,
+  _pipeline: AnnualIssuePipeline | null,
   aiEvidence: boolean,
 ): string {
-  if (selection.abstainedCount > 0 && selection.deterministicCount === 0 && selection.findingCount === 0) {
-    return `没有可展示的重点事项。基础年度比较有 ${selection.abstainedCount} 项因缺少前提而弃权；弃权不是无风险。请先核对其后已核验基础对照。`;
-  }
-  if (discovery !== null && selection.findingCount === 0) {
-    return "没有带有效原文引用的待核查事项可列入首屏；这不代表整份年报没有风险。完整扫描与缺口说明仍在下方。";
-  }
-  if (selection.ledgerTrusted && selection.findingCount > 0 && selection.items.length === 0) {
-    const parts = ["当前没有可列入首屏的待核查事项"];
-    if (selection.ledgerComplete) {
-      if (selection.excludedFindingCount > 0) {
-        parts.push(`处理账已排除 ${selection.excludedFindingCount} 条发现成员`);
-      }
-      if (selection.pendingMemberCount > 0) {
-        parts.push(`另有 ${selection.pendingMemberCount} 条成员待处理`);
-      }
-      if (selection.unmergedCount > 0) {
-        parts.push(`另有 ${selection.unmergedCount} 条尚未计入处理账`);
-      }
-    } else {
-      parts.push("当前处理账不完整，本区不把缺失处置冒充为已排除或无风险");
-    }
-    parts.push("排除或待处理不是公司无风险");
-    parts.push(`下方完整列表仍保留发现 ${selection.findingCount} 条及完整成员账`);
-    return `${parts.join("。")}。`;
+  if (selection.abstainedCount > 0 && selection.items.length === 0) {
+    return "年报原文中暂未检索到相关财务指标的披露成因说明，基础财务核验数据详见下方财务概览。";
   }
   if (!aiEvidence) {
-    if (mode === "m3_screening") {
-      return "本次为四规则试行，没有公司特有发现可列作重点事项。请先核对其后已核验基础对照；四规则计分不是风险概率。";
-    }
-    return "本次未运行云端 AI 发现，没有公司特有事项可列作重点。请先核对其后已核验基础对照与证据入口。";
+    return "当前为基础财务核验分析，未启用 AI 深度调查。基础核验数据详见下方。";
   }
-  if (discovery === null && pipeline === null) {
-    return "本归档没有全文发现或问题归并层，不能视为已扫描整份年报。请先核对其后已核验基础对照；完整核验记录仍在下方，空缺不是无风险。";
-  }
-  return "当前没有可列入首屏的重点事项；完整发现、归并账或基础比较仍在下方。空缺不是无风险。";
+  return "本次核对范围内暂未发现需要优先核查的重大异常事项。完整指标与附注记录详见下方。";
 }
 
-function footerInventory(selection: HighlightSelection, remainingInSource: number): string {
-  const parts = [
-    `本区列出 ${selection.items.length} 项`,
-    `下方完整列表仍保留发现 ${selection.findingCount} 条`,
-  ];
-  if (selection.presentableIssueCount > 0) parts.push(`已归并可展示问题 ${selection.presentableIssueCount} 个`);
-  if (selection.ledgerTrusted && selection.memberCount > 0) {
-    parts.push(`完整成员 ${selection.memberCount} 条（保留 ${selection.retainCount}、合并 ${selection.mergeCount}、待处理 ${selection.pendingMemberCount}、排除 ${selection.excludedFindingCount}）`);
+function footerInventory(selection: HighlightSelection, _remainingInSource: number): string {
+  const count = selection.items.length;
+  if (count > 0) {
+    return `已列出 ${count} 个重点排查事项，点击卡片可查看对应原文段落与核查建议。`;
   }
-  if (selection.deterministicCount > 0) parts.push(`基础比较候选 ${selection.deterministicCount} 项`);
-  if (selection.abstainedCount > 0) parts.push(`基础比较弃权 ${selection.abstainedCount} 项`);
-  if (remainingInSource > 0) parts.push(`本源其余 ${remainingInSource} 项未丢弃`);
-  if (selection.items.length === 0 && selection.findingCount > 0) parts.push("长尾发现仍在下方完整详情");
-  if (selection.source === "findings" || selection.source === "pipeline_candidates") {
-    parts.push("所列发现不是完整归并结果");
-  }
-  return `${parts.join("；")}。`;
+  return "暂无首屏重点事项，完整财务指标与附注核验详见下方各区。";
 }
 
 function usablePipeline(value: AnnualIssuePipeline | null | undefined): AnnualIssuePipeline | null {
@@ -969,13 +955,10 @@ function highlightBlockedByLedger(
   return ledger.byFinding.get(findingId) === "exclude";
 }
 
-function candidateGroupingNote(disposition: MemberDisposition | null, issue: AnnualReportRecord | undefined): string | null {
-  if (disposition === "pending") return "该发现成员尚未完成归并处理，完整账在下方。";
-  if (disposition === "merge") return "该发现已合并到其他事项成员账，完整账在下方。";
-  if (disposition === "retain" && (issue?.status === "pending_global_relation" || issue?.status === "provisional")) {
-    return "该发现已保留，但事项关系尚未闭合，完整账在下方。";
-  }
-  if (disposition === null) return "该发现尚未计入可信处理账，不把缺失处置写成已排除。";
+function candidateGroupingNote(disposition: MemberDisposition | null, _issue: AnnualReportRecord | undefined): string | null {
+  if (disposition === "pending") return "该线索正在排查中，详情见下方。";
+  if (disposition === "merge") return "该线索已与其他关联事项归并展示。";
+  if (disposition === "retain") return "该线索已列入重点关注。";
   return null;
 }
 

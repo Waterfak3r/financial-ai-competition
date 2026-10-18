@@ -162,7 +162,7 @@ def _write_strict_v3_recovery_fixture(
     contract = contract_builder(report["model_discovery"])
     report["model_discovery"]["execution_contract"] = contract
     binding = (
-        build_annual_recovery_binding(project_root, request, settings=settings, report=report)
+        _build_annual_recovery_binding(project_root, request, settings=settings, report=report, parsed_pdf=None, prompt_version="annual_discovery_v4")
         if current else _build_annual_recovery_binding(
             project_root, request, settings=settings, report=report, parsed_pdf=None,
             prompt_version="annual_discovery_v4" if old_version in {8, 9} else "annual_discovery_v3",

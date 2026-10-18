@@ -574,8 +574,8 @@ function readAnnualAnalysisResponse(value: unknown, expectedRunId: string): Annu
     if (
       snapshot.is_partial && !partialManifestMatches ||
       !snapshot.is_partial && (snapshot.state !== "completed" && snapshot.state !== "completed_with_issues" || manifest.status !== snapshot.state) ||
-      report.model_discovery?.execution_contract === undefined ||
-      report.model_discovery.execution_contract.parent_run_id !== snapshot.parent_run_id
+      (report.model_discovery?.execution_contract !== undefined &&
+        report.model_discovery.execution_contract.parent_run_id !== snapshot.parent_run_id)
     ) throw invalidResponse("snapshot 未与部分执行契约和父运行绑定");
   }
   return {
@@ -641,7 +641,7 @@ function readModelDiscovery(
   const hasExecutionContract = Object.prototype.hasOwnProperty.call(value, "execution_contract");
   if (
     hasExecutionContract && promptVersion !== "annual_discovery_v2" && promptVersion !== "annual_discovery_v3" && promptVersion !== "annual_discovery_v4" && promptVersion !== "annual_discovery_v5" ||
-    !hasExecutionContract && (promptVersion === "annual_discovery_v3" || promptVersion === "annual_discovery_v4" || promptVersion === "annual_discovery_v5")
+    !hasExecutionContract && status !== "not_called" && (promptVersion === "annual_discovery_v3" || promptVersion === "annual_discovery_v4" || promptVersion === "annual_discovery_v5")
   ) {
     throw invalidResponse(`${path}.execution_contract 与发现提示词版本不匹配`);
   }
@@ -1015,7 +1015,7 @@ function readExecutionContract(
     return {
       kind: "fintrace_annual_discovery_execution_v11",
       ...common,
-      binding,
+      binding: binding as AnnualDiscoveryExecutionBindingV5,
       phase_budget: phaseBudget,
       scheduler,
       timing,
@@ -2020,6 +2020,7 @@ function readReport(value: Record<string, unknown>, path: string): AnnualAnalysi
   ) throw invalidResponse(path + ".model_issue_pipeline 缺少匹配的执行绑定");
   if (
     modelDiscovery?.prompt_version === "annual_discovery_v5" &&
+    modelDiscovery.status !== "not_called" &&
     (modelIssuePipeline === undefined || modelIssuePipeline === null ||
       modelIssuePipeline.execution_binding?.execution_version !== "execution_v11" ||
       modelIssuePipeline.input.discovery_prompt_version !== "annual_discovery_v5")

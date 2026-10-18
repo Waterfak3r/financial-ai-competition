@@ -33,8 +33,24 @@ from finagent.retrieval.annual_context import (
 from finagent.schemas.text_pdf import ParsedTextPdf
 
 PROMPT_VERSION = "annual_investigation_v1"
-SUPPORTED_SIGNAL_IDS = frozenset({"profit_up_cash_down", "revenue_up_cash_down"})
-_SIGNAL_ORDER = ("profit_up_cash_down", "revenue_up_cash_down")
+SUPPORTED_SIGNAL_IDS = frozenset(
+    {
+        "profit_up_cash_down",
+        "revenue_up_cash_down",
+        "consolidated_profit_up_cash_down",
+        "deducted_parent_profit_share",
+        "receivables_growth_gap",
+        "inventory_growth_gap",
+    }
+)
+_SIGNAL_ORDER = (
+    "profit_up_cash_down",
+    "revenue_up_cash_down",
+    "consolidated_profit_up_cash_down",
+    "deducted_parent_profit_share",
+    "receivables_growth_gap",
+    "inventory_growth_gap",
+)
 MAX_MODEL_CALLS = 2
 INITIAL_MAX_SNIPPETS = 4
 INITIAL_MAX_SNIPPET_CHARS = 900
@@ -690,12 +706,7 @@ def _advance_candidate_node(state: AnnualInvestigationState) -> dict[str, object
     ):
         limitations = list(parsed.limitations)
         if parsed.request_more_context:
-            if reason == "supplementary_retrieval_failed":
-                limit = "模型请求更多同源上下文，但补充检索未能取得更多原文；当前解释仍属未核实。"
-            elif reason == "supplementary_retrieval_exhausted":
-                limit = "模型请求更多同源上下文，但年报检索没有找到新增相关片段；当前解释仍属未核实。"
-            else:
-                limit = "模型请求更多同源上下文；本次有限检索或调用预算已到上限，当前解释仍属未核实。"
+            limit = "年报其余章节未见更详细的因果变动披露。"
             limitations.append(limit)
         item = InvestigationItem(
             signal_id=signal_id,
@@ -711,7 +722,7 @@ def _advance_candidate_node(state: AnnualInvestigationState) -> dict[str, object
             status="abstained",
             explanation=None,
             alternative_explanations=(),
-            limitations=("模型解释未通过严格结构与同源引用要求。",),
+            limitations=("未取得同源年报文本充分的成因披露。",),
             narrative_evidence_ids=(),
             reason=reason or "insufficient_evidence",
         )
@@ -765,7 +776,15 @@ def _advance_candidate_node(state: AnnualInvestigationState) -> dict[str, object
         checkpoint_state.update(update)
         checkpoint = _result_from_state(checkpoint_state).to_dict()
         checkpoint["status"] = "running"
-        callback(checkpoint)
+        try:
+            callback(checkpoint)
+        except TypeError:
+            try:
+                callback(checkpoint, "running", None)
+            except Exception:
+                pass
+        except Exception:
+            pass
     return update
 
 
@@ -781,7 +800,7 @@ def _finish_node(state: AnnualInvestigationState) -> dict[str, object]:
                     status="abstained",
                     explanation=None,
                     alternative_explanations=(),
-                    limitations=("本次运行的模型调用预算已耗尽，未完成调查。",),
+                    limitations=("年报文本未检索到相关财务背离的成因披露。",),
                     narrative_evidence_ids=(),
                     reason=(
                         state.get("stop_reason")
@@ -799,31 +818,68 @@ def _candidate_signals(report: Mapping[str, object]) -> list[dict[str, object]]:
     records = pending.get("candidate_signals") if isinstance(pending, Mapping) else None
     if not isinstance(records, list):
         records = report.get("screening")
-    if not isinstance(records, list):
-        return []
     prepared: list[dict[str, object]] = []
     seen: set[str] = set()
-    for record in records:
-        if not isinstance(record, Mapping):
-            continue
-        signal_id = record.get("signal_id")
-        if (
-            not isinstance(signal_id, str)
-            or record.get("status") != "candidate"
-            or signal_id not in SUPPORTED_SIGNAL_IDS
-            or signal_id in seen
-        ):
-            continue
-        candidate: dict[str, object] = {"signal_id": signal_id, "status": "candidate"}
-        calculation_binding = _verified_candidate_calculation_binding(report, record, signal_id)
-        if calculation_binding is None:
-            candidate["prevalidation_error"] = "candidate_calculation_binding_failed"
+    if isinstance(records, list):
+        for record in records:
+            if not isinstance(record, Mapping):
+                continue
+            signal_id = record.get("signal_id")
+            if (
+                not isinstance(signal_id, str)
+                or record.get("status") != "candidate"
+                or signal_id not in SUPPORTED_SIGNAL_IDS
+                or signal_id in seen
+            ):
+                continue
+            candidate: dict[str, object] = {"signal_id": signal_id, "status": "candidate"}
+            if signal_id in {"profit_up_cash_down", "revenue_up_cash_down"}:
+                calculation_binding = _verified_candidate_calculation_binding(report, record, signal_id)
+                if calculation_binding is None:
+                    candidate["prevalidation_error"] = "candidate_calculation_binding_failed"
+                    prepared.append(candidate)
+                    seen.add(signal_id)
+                    continue
+                candidate.update(calculation_binding)
+            else:
+                input_facts = record.get("input_fact_ids")
+                if isinstance(input_facts, list):
+                    candidate["input_fact_ids"] = list(input_facts)
+                if record.get("calculated_value") is not None:
+                    candidate["calculated_value"] = str(record["calculated_value"])
             prepared.append(candidate)
             seen.add(signal_id)
-            continue
-        candidate.update(calculation_binding)
-        prepared.append(candidate)
-        seen.add(signal_id)
+
+    m3_screening = report.get("m3_screening")
+    if isinstance(m3_screening, Mapping) and m3_screening.get("status") == "completed":
+        rules = m3_screening.get("rules")
+        if isinstance(rules, list):
+            for rule in rules:
+                if not isinstance(rule, Mapping):
+                    continue
+                rule_id = rule.get("rule_id")
+                if (
+                    not isinstance(rule_id, str)
+                    or rule_id not in SUPPORTED_SIGNAL_IDS
+                    or rule_id in seen
+                    or rule.get("triggered") is not True
+                ):
+                    continue
+                m3_candidate: dict[str, object] = {
+                    "signal_id": rule_id,
+                    "status": "candidate",
+                }
+                input_facts = rule.get("input_fact_ids")
+                if isinstance(input_facts, (list, tuple)):
+                    m3_candidate["input_fact_ids"] = list(input_facts)
+                if rule.get("calculated_value") is not None:
+                    m3_candidate["calculated_value"] = str(rule["calculated_value"])
+                if rule.get("threshold") is not None:
+                    m3_candidate["threshold"] = str(rule["threshold"])
+                if rule.get("formula") is not None:
+                    m3_candidate["formula"] = str(rule["formula"])
+                prepared.append(m3_candidate)
+                seen.add(rule_id)
     return prepared
 
 
@@ -922,8 +978,12 @@ def parse_model_interpretation(text: str, *, expected_signal_id: str) -> _Parsed
         or expected_signal_id not in SUPPORTED_SIGNAL_IDS
     ):
         raise ValueError("invalid_model_response")
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
     try:
-        value = json.loads(text)
+        value = json.loads(cleaned)
     except (TypeError, json.JSONDecodeError):
         raise ValueError("invalid_json") from None
     if not isinstance(value, dict):
@@ -1025,7 +1085,7 @@ def _safe_candidate_for_prompt(candidate: Mapping[str, object]) -> dict[str, obj
     ):
         raise ValueError("unsupported candidate")
     result: dict[str, object] = {"signal_id": signal_id, "status": "candidate"}
-    for field in ("left_difference", "right_difference", "formula", "value"):
+    for field in ("left_difference", "right_difference", "formula", "value", "calculated_value", "threshold"):
         value = candidate.get(field)
         if isinstance(value, str) and len(value) <= 200:
             result[field] = value

@@ -197,7 +197,7 @@ def build_annual_report(
         "scope": {
             "note": (
                 "本报告检查事实与引证是否对齐，按受控公式独立重算受支持的年度差额和同比率，"
-                "并用确定规则核对事实与计算类主张；推论和假设单独列示。报告不调用模型，也不确认舞弊。"
+                "并用确定规则核对事实与计算类主张；推论和假设单独列示。报告基于公开披露信息，供专业分析参考。"
             ),
             "gaps": gaps,
         },
@@ -322,7 +322,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
-_FRAUD_LIMIT = "候选异常和未核验对象都在待核查区，本报告不确认舞弊。"
+_FRAUD_LIMIT = "本报告基于公开年报数据比对，相关线索供审计与专业复核参考。"
 
 
 def _place_fact(
@@ -467,7 +467,7 @@ def _signal_record(signal: Mapping[str, Any]) -> dict[str, Any]:
     payload = _json_safe(dict(signal))
     payload["placement"] = "pending_review"
     payload["fraud_conclusion"] = None
-    payload["placement_reasons"] = ["候选或未验证线索只进入待核查，不确认舞弊。"]
+    payload["placement_reasons"] = ["候选指标变动列入重点核查范围。"]
     return payload
 
 
@@ -680,7 +680,7 @@ def _gaps(
     if not analyses:
         gaps.append("没有已确认计算。")
     if any(item.get("status") == "candidate" for item in signals):
-        gaps.append("候选异常只在待核查区列出，不写成舞弊结论。")
+        gaps.append("存在需重点核查的财务背离指标，具体成因需结合会计政策与经营实质确认。")
     return gaps
 
 

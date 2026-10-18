@@ -46,7 +46,7 @@ _MAX_DISCOVERY_EVIDENCE_CHARS = 4_000_000
 _MAX_DISCOVERY_OPINION_CHARS = 1_200_000
 _MAX_DISCOVERY_LIMITATIONS = 1_100
 _MAX_DISCOVERY_QUOTE_CHARS = 300
-_DISCOVERY_PROMPT_VERSIONS = frozenset({"annual_discovery_v1", "annual_discovery_v2", "annual_discovery_v3", "annual_discovery_v4"})
+_DISCOVERY_PROMPT_VERSIONS = frozenset({"annual_discovery_v1", "annual_discovery_v2", "annual_discovery_v3", "annual_discovery_v4", "annual_discovery_v5"})
 _V2_SAFE_BATCH_FAILURES = frozenset(
     {
         "all_findings_rejected",
@@ -3583,7 +3583,7 @@ def _validate_discovery_coverage(
         else:
             _validate_discovery_coverage_v3(coverage, status, execution_contract)
         return
-    is_v2 = prompt_version in {"annual_discovery_v2", "annual_discovery_v3", "annual_discovery_v4"}
+    is_v2 = prompt_version in {"annual_discovery_v2", "annual_discovery_v3", "annual_discovery_v4", "annual_discovery_v5"}
     fields = {
         "total_pages", "text_pages", "total_blocks", "total_chars", "planned_batches",
         "processed_batches", "successful_batches", "failed_batches", "batch_results",

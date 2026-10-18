@@ -19,7 +19,16 @@ from typing import Literal
 from finagent.ingestion.parse_text_pdf import parse_text_pdf
 from finagent.schemas.text_pdf import ParsedTextPdf
 
-SUPPORTED_SIGNAL_IDS = frozenset({"profit_up_cash_down", "revenue_up_cash_down"})
+SUPPORTED_SIGNAL_IDS = frozenset(
+    {
+        "profit_up_cash_down",
+        "revenue_up_cash_down",
+        "consolidated_profit_up_cash_down",
+        "deducted_parent_profit_share",
+        "receivables_growth_gap",
+        "inventory_growth_gap",
+    }
+)
 REPORT_KIND = "fintrace_annual_analysis_report"
 
 DEFAULT_MAX_SNIPPETS = 4
@@ -88,6 +97,10 @@ _CASH_DETAIL_TERMS = (
     "经营性应收",
     "经营性应付",
 )
+_RECEIVABLES_TERMS = ("应收账款", "坏账准备", "应收款项", "信用减值损失", "账龄")
+_INVENTORY_TERMS = ("存货", "存货跌价准备", "存货减值", "原材料", "库存商品", "发出商品")
+_NON_RECURRING_TERMS = ("非经常性损益", "扣除非经常性损益", "主要会计数据", "投资收益", "政府补助")
+_INVENTORY_COUNTERPART_TERMS = ("营业收入", "营业成本", "跌价", "减值", "毛利率")
 
 
 @dataclass(frozen=True, slots=True)
@@ -379,17 +392,26 @@ def _candidate_signal_ids(report: Mapping[str, object]) -> tuple[str, ...]:
         if isinstance(pending_review, Mapping)
         else report.get("screening")
     )
-    if not isinstance(signals, list):
-        return ()
     accepted: list[str] = []
-    for signal in signals:
-        if not isinstance(signal, Mapping):
-            continue
-        signal_id = signal.get("signal_id")
-        if not isinstance(signal_id, str):
-            continue
-        if signal.get("status") == "candidate" and signal_id in SUPPORTED_SIGNAL_IDS and signal_id not in accepted:
-            accepted.append(signal_id)
+    if isinstance(signals, list):
+        for signal in signals:
+            if not isinstance(signal, Mapping):
+                continue
+            signal_id = signal.get("signal_id")
+            if not isinstance(signal_id, str):
+                continue
+            if signal.get("status") == "candidate" and signal_id in SUPPORTED_SIGNAL_IDS and signal_id not in accepted:
+                accepted.append(signal_id)
+
+    m3_screening = report.get("m3_screening")
+    if isinstance(m3_screening, Mapping) and m3_screening.get("status") == "completed":
+        rules = m3_screening.get("rules")
+        if isinstance(rules, list):
+            for rule in rules:
+                if isinstance(rule, Mapping) and rule.get("triggered") is True:
+                    rule_id = rule.get("rule_id")
+                    if isinstance(rule_id, str) and rule_id in SUPPORTED_SIGNAL_IDS and rule_id not in accepted:
+                        accepted.append(rule_id)
     return tuple(accepted)
 
 
@@ -570,49 +592,78 @@ def _score_blocks(
             has_cash = _contains_any(normalized, _CASH_TERMS)
             has_operating_cash = _contains_any(normalized, _OPERATING_CASH_TERMS)
             has_nonoperating_cash = _contains_any(normalized, _NON_OPERATING_CASH_TERMS)
-            if has_cash and has_nonoperating_cash and not has_operating_cash:
-                # Candidate signals concern operating cash. Do not let the
-                # separate investing/financing explanations stand in for it.
-                continue
             cash_is_relevant = has_cash and (has_operating_cash or not has_nonoperating_cash)
+            has_cash_detail = _contains_any(normalized, _CASH_DETAIL_TERMS)
+
             has_context = _contains_any(normalized, context_terms)
             has_explicit_explanation = _contains_any(normalized, _EXPLICIT_EXPLANATION_TERMS)
             has_explanation = _contains_any(normalized, _EXPLANATION_TERMS) or has_explicit_explanation
-            has_cash_detail = _contains_any(normalized, _CASH_DETAIL_TERMS)
-            has_any_target = any(
-                _contains_any(
-                    normalized,
-                    _PROFIT_TERMS if signal_id == "profit_up_cash_down" else _REVENUE_TERMS,
-                )
-                for signal_id in signal_ids
-            )
-            if has_cash and not (has_any_target or has_context or has_explanation or has_cash_detail):
-                # A standalone cash-flow heading has no useful context for
-                # interpretation and should not displace disclosure text.
-                continue
+
+            has_profit = _contains_any(normalized, _PROFIT_TERMS)
+            has_revenue = _contains_any(normalized, _REVENUE_TERMS)
+            has_receivables = _contains_any(normalized, _RECEIVABLES_TERMS)
+            has_inventory = _contains_any(normalized, _INVENTORY_TERMS)
+            has_non_recurring = _contains_any(normalized, _NON_RECURRING_TERMS)
+            has_inventory_counterpart = _contains_any(normalized, _INVENTORY_COUNTERPART_TERMS)
 
             matched_signals: list[str] = []
             score = 0
             for signal_id in signal_ids:
-                target_terms = _PROFIT_TERMS if signal_id == "profit_up_cash_down" else _REVENUE_TERMS
-                has_target = _contains_any(normalized, target_terms)
-                if not cash_is_relevant and not (has_target and (has_context or has_explanation)):
-                    continue
-                matched_signals.append(signal_id)
-                score = max(score, 3 * int(cash_is_relevant) + 3 * int(has_target))
+                if signal_id in {"profit_up_cash_down", "revenue_up_cash_down", "consolidated_profit_up_cash_down"}:
+                    target_terms = _REVENUE_TERMS if signal_id == "revenue_up_cash_down" else _PROFIT_TERMS
+                    has_target = _contains_any(normalized, target_terms)
+                    if has_cash and has_nonoperating_cash and not has_operating_cash:
+                        continue
+                    if not cash_is_relevant and not (has_target and (has_context or has_explanation)):
+                        continue
+                    if has_cash and not (has_target or has_context or has_explanation or has_cash_detail):
+                        continue
+                    matched_signals.append(signal_id)
+                    sig_score = (
+                        3 * int(cash_is_relevant)
+                        + 3 * int(has_target)
+                        + 2 * int(cash_is_relevant and has_operating_cash)
+                        + int(has_cash_detail)
+                    )
+                    score = max(score, sig_score)
+                elif signal_id == "deducted_parent_profit_share":
+                    if not (has_non_recurring and (has_profit or has_context or has_explanation)):
+                        continue
+                    matched_signals.append(signal_id)
+                    sig_score = 4 * int(has_non_recurring) + 2 * int(has_profit)
+                    score = max(score, sig_score)
+                elif signal_id == "receivables_growth_gap":
+                    if not (has_receivables and (has_revenue or has_context or has_explanation)):
+                        continue
+                    matched_signals.append(signal_id)
+                    sig_score = 4 * int(has_receivables) + 2 * int(has_revenue)
+                    score = max(score, sig_score)
+                elif signal_id == "inventory_growth_gap":
+                    if not (has_inventory and (has_inventory_counterpart or has_context or has_explanation)):
+                        continue
+                    matched_signals.append(signal_id)
+                    sig_score = 4 * int(has_inventory) + 2 * int(has_inventory_counterpart)
+                    score = max(score, sig_score)
 
             if not matched_signals:
                 continue
-            score += 2 * int(cash_is_relevant and _contains_any(normalized, _OPERATING_CASH_TERMS))
-            score += int(has_context) + int(has_explanation) + int(has_cash_detail)
+            score += int(has_context) + int(has_explanation)
             score += 6 * int(has_explicit_explanation)
             if section.label == "mda":
                 score += 1
             score -= _table_noise_penalty(block.text, has_explicit_explanation)
-            reason = _selection_reason(cash_is_relevant, has_target_any=any(
-                _contains_any(normalized, _PROFIT_TERMS if signal_id == "profit_up_cash_down" else _REVENUE_TERMS)
-                for signal_id in matched_signals
-            ), has_explanation=has_explanation or has_explicit_explanation)
+            reason = _selection_reason(
+                cash_is_relevant and any(s in {"profit_up_cash_down", "revenue_up_cash_down", "consolidated_profit_up_cash_down"} for s in matched_signals),
+                has_target_any=any(
+                    (s in {"profit_up_cash_down", "consolidated_profit_up_cash_down"} and has_profit)
+                    or (s == "revenue_up_cash_down" and has_revenue)
+                    for s in matched_signals
+                ),
+                has_explanation=has_explanation or has_explicit_explanation,
+                has_receivables=has_receivables and any(s == "receivables_growth_gap" for s in matched_signals),
+                has_inventory=has_inventory and any(s == "inventory_growth_gap" for s in matched_signals),
+                has_non_recurring=has_non_recurring and any(s == "deducted_parent_profit_share" for s in matched_signals),
+            )
             evidence_id = _evidence_id(document_id, source_sha256, section.label, block)
             scored.append(
                 _ScoredBlock(
@@ -639,14 +690,30 @@ def _score_blocks(
     )
 
 
-def _selection_reason(cash_relevant: bool, *, has_target_any: bool, has_explanation: bool) -> str:
+def _selection_reason(
+    cash_relevant: bool,
+    *,
+    has_target_any: bool,
+    has_explanation: bool,
+    has_receivables: bool = False,
+    has_inventory: bool = False,
+    has_non_recurring: bool = False,
+) -> str:
     matched: list[str] = []
     if cash_relevant:
         matched.append("经营现金流词项")
     if has_target_any:
         matched.append("利润或营业收入词项")
+    if has_receivables:
+        matched.append("应收账款词项")
+    if has_inventory:
+        matched.append("存货词项")
+    if has_non_recurring:
+        matched.append("非经常性损益词项")
     if has_explanation:
         matched.append("披露说明词项")
+    if not matched:
+        matched.append("财务披露词项")
     joined = "、".join(matched)
     return f"本地确定性词项匹配：{joined}；仅保留原文上下文，不表示因果解释或核验结论。"
 

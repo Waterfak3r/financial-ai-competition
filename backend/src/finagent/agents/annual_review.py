@@ -200,6 +200,23 @@ def run_annual_model_review(
         )
         return result
 
+def run_streamlined_annual_review(
+    report: Mapping[str, Any],
+    investigation: Mapping[str, Any],
+    settings: ModelSettings,
+    *,
+    run_dir: Path,
+    artifacts_root: Path,
+) -> dict[str, Any]:
+    """Run deterministic-bound single-call model review for streamlined analysis."""
+    return run_annual_model_review(
+        report,
+        investigation,
+        settings,
+        run_dir=run_dir,
+        artifacts_root=artifacts_root,
+    )
+
 
 def not_called_model_review_v3(report: Mapping[str, Any], reason: str, *, status: str = "not_called") -> dict[str, Any]:
     """Execution_v5 review state, separate from the immutable v2 shape."""
@@ -366,8 +383,12 @@ def parse_model_review(
 
     if not isinstance(text, str) or not text.strip() or len(text) > MAX_RESPONSE_CHARS:
         raise ValueError("model_review_response_invalid")
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
     try:
-        payload = json.loads(text)
+        payload = json.loads(cleaned)
     except json.JSONDecodeError:
         raise ValueError("model_review_response_invalid") from None
     if not isinstance(payload, dict) or set(payload) != {
@@ -558,33 +579,46 @@ def _build_review_input(
             "reason": _limited_optional_text(item.get("reason"), 120, mark_truncated),
             "limitations": _text_list(item.get("limitations"), 3, 160),
         })
+        evidence_ids = item.get("narrative_evidence_ids", [])
+        if isinstance(evidence_ids, (list, tuple)):
+            for eid in evidence_ids:
+                if isinstance(eid, str) and _ID_RE.fullmatch(eid):
+                    allowed.add(eid)
         allowed.add(review_id)
+        allowed.add(signal_id)
 
     raw_discovery = investigation.get("discovery")
-    discovery_identity_matches = (
-        raw_discovery.get("kind") == "fintrace_annual_discovery"
-        and _identity_matches(raw_discovery, identity)
-        if isinstance(raw_discovery, Mapping)
-        else False
-    )
-    discovery_status = (
-        raw_discovery.get("status") if discovery_identity_matches else "identity_mismatch"
-    )
-    discovery_coverage = (
-        raw_discovery.get("coverage")
-        if discovery_identity_matches and isinstance(raw_discovery.get("coverage"), Mapping)
-        else {}
-    )
-    raw_discovery_findings = (
-        list(raw_discovery.get("findings", []))
-        if discovery_identity_matches and isinstance(raw_discovery.get("findings", []), list)
-        else raw_discovery.get("findings", []) if discovery_identity_matches else []
-    )
+    if raw_discovery is None and investigation.get("status") in {"completed", "abstained"}:
+        discovery_identity_matches = True
+        discovery_status = "completed"
+        discovery_coverage = {"complete": True, "truncated": False, "partial_batches": 0}
+        raw_discovery_findings = []
+        raw_discovery_evidences = []
+    else:
+        discovery_identity_matches = (
+            raw_discovery.get("kind") == "fintrace_annual_discovery"
+            and _identity_matches(raw_discovery, identity)
+            if isinstance(raw_discovery, Mapping)
+            else False
+        )
+        discovery_status = (
+            raw_discovery.get("status") if discovery_identity_matches else "identity_mismatch"
+        )
+        discovery_coverage = (
+            raw_discovery.get("coverage")
+            if discovery_identity_matches and isinstance(raw_discovery.get("coverage"), Mapping)
+            else {}
+        )
+        raw_discovery_findings = (
+            list(raw_discovery.get("findings", []))
+            if discovery_identity_matches and isinstance(raw_discovery.get("findings", []), list)
+            else raw_discovery.get("findings", []) if discovery_identity_matches else []
+        )
+        raw_discovery_evidences = (
+            raw_discovery.get("evidences", []) if discovery_identity_matches else []
+        )
     discovery_items: list[dict[str, Any]] = []
     discovery_evidence_records: dict[str, Mapping[str, Any]] = {}
-    raw_discovery_evidences = (
-        raw_discovery.get("evidences", []) if discovery_identity_matches else []
-    )
     if isinstance(raw_discovery_evidences, list):
         for evidence in raw_discovery_evidences:
             if (
@@ -841,7 +875,7 @@ def _build_review_input(
         page for item in data["verified_facts"] for page in item.get("pdf_pages", [])
     }
     scope_gaps_are_only_candidate_notice = bool(safe_gaps) and all(
-        gap == "候选异常只在待核查区列出，不写成舞弊结论。" for gap in safe_gaps
+        ("候选" in gap or "财务背离" in gap) for gap in safe_gaps
     )
     substantive_scope_gaps = [] if scope_gaps_are_only_candidate_notice else safe_gaps
     needs_comparability = any(

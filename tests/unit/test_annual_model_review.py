@@ -16,6 +16,7 @@ import finagent.audit.audited_chat as audited_chat
 from finagent.core.model_settings import ModelSettings
 from finagent.core.annual_work_budget import (
     BUDGET_CONTRACT_VERSION,
+    GLOBAL_REQUEST_LIMIT_CHARS,
     MODEL_CALL_TIMEOUT_SECONDS,
     REVIEW_REQUEST_LIMIT_CHARS,
     archived_budget_contract_v2,
@@ -404,10 +405,10 @@ def test_activity_review_cap_rejects_historical_policy_and_amplified_limit() -> 
         })
 
     current = {
-        "kind": "fintrace_annual_execution_binding_v10",
-        "execution_version": "execution_v10",
+        "kind": "fintrace_annual_execution_binding_v11",
+        "execution_version": "execution_v11",
         "budget_contract_version": BUDGET_CONTRACT_VERSION,
-        "global_request_limit_chars": 96000,
+        "global_request_limit_chars": GLOBAL_REQUEST_LIMIT_CHARS,
         "review_request_limit_chars": REVIEW_REQUEST_LIMIT_CHARS,
         "model_call_timeout_seconds": MODEL_CALL_TIMEOUT_SECONDS,
         "grouping_shard_plan_version": "member_bounded_v2",
@@ -624,6 +625,7 @@ def _run(
     report: dict[str, Any],
     investigation: dict[str, Any],
     server: _MockServer,
+    runner: Any = annual_review.run_annual_model_review,
 ) -> tuple[dict[str, Any], Path]:
     artifacts_root = tmp_path / "artifacts"
     runs_root = artifacts_root / "runs"
@@ -632,7 +634,7 @@ def _run(
     monkeypatch.setattr(annual_review, "repository_runs_root", lambda: runs_root)
     monkeypatch.setattr(audited_chat, "repository_runs_root", lambda: runs_root)
     settings = ModelSettings(server.base_url, "mock-secret", "local-mock-model", 3)
-    result = annual_review.run_annual_model_review(
+    result = runner(
         report,
         investigation,
         settings,
@@ -1201,3 +1203,47 @@ def test_review_rejects_run_binding_mismatch_before_any_call(
     assert result["status"] == "failed"
     assert result["reason"] == expected_reason
     assert result["call_count"] == 0
+
+
+def test_streamlined_annual_review_success(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    report = _report()
+    investigation = _investigation(report, items=[{
+        "signal_id": "profit_up_cash_down",
+        "status": "interpretation",
+        "explanation": "净利润增长但经营现金流下降主要受经营性应收项目影响。",
+        "limitations": ["模型解释未经审计。"],
+        "narrative_evidence_ids": ["nctx:report:17"],
+    }])
+    investigation["narrative_evidences"] = [{
+        "evidence_id": "nctx:report:17",
+        "pdf_page": 17,
+    }]
+    with _MockServer([(200, _response(reference="investigation:profit_up_cash_down"))]) as server:
+        review, _ = _run(
+            monkeypatch,
+            tmp_path,
+            report,
+            investigation,
+            server,
+            runner=annual_review.run_streamlined_annual_review,
+        )
+    assert review["status"] == "completed"
+    assert review["assessment"] == "prioritize_review"
+    assert review["model_called"] is True
+    assert review["call_count"] == 1
+    assert len(review["reasons"]) > 0
+
+
+def test_streamlined_annual_review_allows_no_priority_when_clean(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    report = _report(candidate=False, valid_facts=True)
+    investigation = _investigation(report, items=[])
+    identity = annual_review._report_identity(report)
+    prompt = annual_review._load_prompt()
+    _data, _allowed, _pages, no_priority_allowed = annual_review._build_review_input(
+        report, investigation, identity, request_model="mock", system_prompt=prompt
+    )
+    assert no_priority_allowed is True

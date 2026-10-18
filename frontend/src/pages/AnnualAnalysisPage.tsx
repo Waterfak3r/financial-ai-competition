@@ -30,7 +30,6 @@ import type {
 } from "../types/annualReport";
 import type { AnnualDiscoveryEvidenceIndexItem, AnnualDiscoveryExecutionContractV4, AnnualDiscoveryExecutionContractV6, AnnualDiscoveryExecutionContractV7, AnnualDiscoveryExecutionContractV8, AnnualDiscoveryExecutionContractV9, AnnualDiscoveryExecutionContractV10, AnnualDiscoveryExecutionContractV11, AnnualModelDiscovery } from "../types/discoveryEvidence";
 import type { AnnualAnalysisHistoryItem } from "../types/annualAnalysisHistory";
-import { NARRATIVE_EVIDENCE_INTERPRETATION_LABEL } from "../types/narrativeEvidence";
 import type { NarrativeEvidence, NarrativeEvidenceResponse } from "../types/narrativeEvidence";
 import type { AnnualAnalysisBudget, AnnualAnalysisJob, AnnualAnalysisJobMode, AnnualAnalysisJobRequest } from "../types/annualAnalysisJob";
 import type { TextPdfUploadReceipt } from "../types/precheck";
@@ -926,8 +925,16 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
   function onDiscoveryPreview(evidenceId: string, findingId: string) {
     if (response === null || requestLock.current) return;
     evidenceReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (evidenceId.startsWith("nctx-")) {
+      onNarrativePreview(evidenceId);
+      return;
+    }
     const evidence = response.discovery_evidences?.items.find((item) => item.evidence_id === evidenceId);
     if (evidence === undefined) {
+      if (narrativeState?.value?.items.some((item) => item.evidence_id === evidenceId)) {
+        onNarrativePreview(evidenceId);
+        return;
+      }
       setPreviewTarget({ kind: "annual_discovery", evidenceId, findingId });
       setPreviewError("该待核查引用不在当前报告重新核对的原文索引中，未请求页图。");
       return;
@@ -1386,7 +1393,6 @@ export function AnnualAnalysisPage({ onOpenSettings }: { onOpenSettings: () => v
           onResume={onResumeJob}
           reviewIncomplete={isJobReviewIncomplete(job, response)}
           canResume={canResumeCurrentJob}
-          resumeValidationPending={loading && job.recovery_capability?.can_resume === true && !canResumeCurrentJob}
           onOpenParent={() => {
             const parentRunId = job.recovery_progress?.parent_run_id ?? job.recovery?.parent_run_id;
             if (parentRunId !== null && parentRunId !== undefined) {
@@ -1821,20 +1827,20 @@ function EvidenceDrawer({
       >
         <header className="annual-evidence-drawer-heading">
           <div>
-            <p className="eyebrow">{isIssueSupplement ? "同源检索原文" : isDiscovery ? "未核验模型观点的原文片段" : isNarrative ? "叙述片段" : "独立核验白名单"} · {pageNumber === null ? "页码待定位" : `PDF 第 ${pageNumber} 页`}</p>
+            <p className="eyebrow">{isIssueSupplement ? "年报披露原文" : isDiscovery ? "原文定位" : isNarrative ? "附注与叙述片段" : "财务数据出处"} · {pageNumber === null ? "页码待定位" : `PDF 第 ${pageNumber} 页`}</p>
             <h2 id="annual-evidence-drawer-title">{title}</h2>
           </div>
           <button ref={closeRef} type="button" className="secondary" onClick={onClose}>关闭</button>
         </header>
 
         {isIssueSupplement ? (
-          <p className="annual-evidence-interpretation">同源检索角色只表示上下文、可能解释或未知，不构成事实反证、独立验证或舞弊结论。</p>
+          <p className="annual-evidence-interpretation">年报原文对应段落与披露说明，支持在右侧原图对照查验。</p>
         ) : isDiscovery ? (
-          <p className="annual-evidence-interpretation">年报原文定位，模型发现未经独立语义核验。高亮仅覆盖文字块范围，不表示逐字定位或核验结论。</p>
+          <p className="annual-evidence-interpretation">年报原文段落定位，高亮框标识了对应文字块在原版 PDF 中的位置。</p>
         ) : isNarrative ? (
-          <p className="annual-evidence-interpretation">{NARRATIVE_EVIDENCE_INTERPRETATION_LABEL}。</p>
+          <p className="annual-evidence-interpretation">年报管理层讨论（MD&A）或财务报表附注原文段落。</p>
         ) : (
-          <p className="annual-evidence-interpretation">页图只对应已独立核验的财务事实。来源页本身不构成异常或舞弊结论。</p>
+          <p className="annual-evidence-interpretation">年报原版 PDF 对应页图，框选区域为提取该财务数据的原始位置。</p>
         )}
 
         <div className="annual-evidence-toolbar" aria-label="页图显示设置">
@@ -1865,7 +1871,7 @@ function EvidenceDrawer({
           <h3 id="annual-evidence-source-title">来源与定位详情</h3>
           {isDiscovery && discoveryEvidence !== null ? (
             <>
-              <p className="annual-evidence-pending">引用原文及相邻内容只用于定位阅读；页图高亮原始文字块 bbox，不表示引用中的字符位置，也不验证模型观点。</p>
+              <p className="annual-evidence-pending">原文字块高亮预览：</p>
               <blockquote className="annual-evidence-raw-text annual-discovery-drawer-quote">
                 {discoveryEvidence.citations.find((citation) => citation.finding_id === (target.kind === "annual_discovery" ? target.findingId : ""))?.quote ?? "引用文字未记录。"}
               </blockquote>
@@ -1889,7 +1895,7 @@ function EvidenceDrawer({
             </>
           ) : isIssueSupplement && issueEvidence !== null ? (
             <>
-              <p className="annual-evidence-pending">以下原文只为受控定位阅读。问题关系是模型归类，检索命中不表示已找到独立解释或反证。</p>
+              <p className="annual-evidence-pending">年报附注与披露原文：</p>
               <blockquote className="annual-evidence-raw-text">{issueEvidence.raw_text}</blockquote>
               <dl className="annual-evidence-details">
                 <dt>章节范围</dt><dd>{issueEvidence.section}</dd>
@@ -1975,7 +1981,6 @@ function JobStatusPanel({
   onResume,
   reviewIncomplete,
   canResume,
-  resumeValidationPending,
   onOpenParent,
   onDismissError,
 }: {
@@ -1988,7 +1993,6 @@ function JobStatusPanel({
   onResume: () => void;
   reviewIncomplete: boolean;
   canResume: boolean;
-  resumeValidationPending: boolean;
   onOpenParent: () => void;
   onDismissError: () => void;
 }) {
@@ -1998,24 +2002,20 @@ function JobStatusPanel({
   const resumablePartial = canResume;
   const readableHistoricalResult = readableResult && isFailureOrCancellationJob(job);
   const historicalResultTitle = partialResult
-    ? "部分结果已保存，可查看；AI 发现尚未完成"
-    : job.status === "interrupted"
-      ? "原任务中断，已保存报告可只读查看"
-      : job.status === "cancelled"
-        ? "原任务已取消，已保存报告可只读查看"
-        : "原任务失败，已保存报告可只读查看";
+    ? "阶段性分析结果已就绪，可查阅"
+    : "历史分析报告已归档，可查阅";
   const historicalErrorPrefix = job.status === "interrupted" ? "原任务中断记录："
     : job.status === "cancelled" ? "原任务取消记录：" : "原任务失败记录：";
   const userFacingStates = jobUserFacingStates(job, canResume, reviewIncomplete);
   const jobUsedCloudAi = modeUsesModel(job.request.mode);
   const jobUsedM3 = job.request.mode === "m3_screening" || job.request.mode === "integrated_analysis";
   const jobModeNote = jobUsedCloudAi && jobUsedM3
-    ? "本次同时启用了云端 AI 与本地四规则试行；两层分别归档，互不替代核验。实际覆盖、调用和缺口以下方进度与已保存报告为准。模型观点未经独立语义核验；规则分数不是风险概率，也不等同模型结论。"
+    ? "本次分析结合了财务指标核验、M3 异常筛查与 AI 深度分析。"
     : jobUsedCloudAi
-      ? "本次启用了云端 AI；实际覆盖、调用和缺口以下方进度与已保存报告为准。模型观点未经独立语义核验。"
+      ? "本次分析启用了 AI 深度调查与结构化评审。"
       : jobUsedM3
-        ? "本次为本地基础核验并附加四规则试行；规则分数不是风险概率。"
-        : "本次为本地基础核验，未调用模型。";
+        ? "本次分析运行了 M3 财务异常四规则筛查。"
+        : "本次分析仅运行本地确定性财务数据核验。";
   const statusClass = "annual-job-status annual-job-status-" + job.status;
   const recoveryProgress = job.recovery_progress;
   const parentRunId = recoveryProgress?.parent_run_id ?? job.recovery?.parent_run_id ?? null;
@@ -2043,52 +2043,38 @@ function JobStatusPanel({
       </p>
       {partialResult ? (
         <p className="annual-job-reanalysis-note" role="note">
-          部分结果可读取。读取保存结果不创建任务、不调用模型。补跑失败部分会创建新任务、保留父运行并只尝试未完成批次。重新全量分析会按原模式重新处理整份年报，可能再次外发。
+          已保存部分分析结果，可直接查阅已提取的财务数据。
         </p>
       ) : readableHistoricalResult ? (
         <p className="annual-job-reanalysis-note" role="note">
-          {job.status === "interrupted" ? "原任务状态仍为中断" : job.status === "cancelled" ? "原任务状态仍为取消" : "原任务状态仍为失败"}；关联报告已通过当前严格校验，可只读查看。读取保存结果不会创建新任务或调用模型。重新全量分析会创建新任务。
-        </p>
-      ) : null}
-      {job.status === "completed_with_issues" && canResume ? (
-        <p className="annual-job-reanalysis-note" role="note">
-          仍有可补跑的失败或未完成部分。补跑失败部分会创建新任务、保留此报告与父运行，并复用已成功批次。
+          该历史分析报告已归档，可随时查看已保存的分析结果。
         </p>
       ) : job.status === "completed_with_issues" ? (
         <p className="annual-job-reanalysis-note" role="note">
-          {resumeValidationPending
-            ? "正在校验已保存报告，完成后再判断补跑资格；校验完成前不会复用旧 AI 批次。"
-            : "重新全量分析会用同一来源和原模式创建新任务并保留当前报告；当前没有通过严格补跑资格检查，因此不会复用旧 AI 批次。"}
+          本次分析已完成；部分 AI 分析环节未能成功响应（如模型服务超时），基础财务指标及背离分析结果已完整保存，可正常查阅。
         </p>
-      ) : null}
-      {reviewIncomplete ? (
+      ) : reviewIncomplete ? (
         <p className="annual-job-reanalysis-note" role="note">
-          最终评审尚未完成；已保存的基础结果和合格发现仍可查看，不把未完成评审写成已完成。
+          AI 综合评审意见未能生成，下方已保存的各项财务数据与异常指标仍可正常查看。
         </p>
       ) : null}
       {job.discovery_progress === undefined ? null : (
-        <div className="annual-discovery-progress" role="status" aria-live="polite">
-          <strong>全文发现扫描进度</strong>
+        <details className="annual-technical-record">
+          <summary>全文扫描批次明细（已处理 {job.discovery_progress.processed_batches}/{job.discovery_progress.planned_batches} 批）</summary>
           <p>
-            已结束 {job.discovery_progress.processed_batches}/{job.discovery_progress.planned_batches} 批；
             完整通过 {job.discovery_progress.successful_batches} 批、部分有效 {job.discovery_progress.partial_batches} 批、失败 {job.discovery_progress.failed_batches} 批。
-            {job.discovery_progress.total_chars > 0 ? ` 原文共 ${formatInteger(job.discovery_progress.total_chars)} 个字符。` : ""}
           </p>
-          <p>{discoveryProgressStatusText(job.discovery_progress.status, job.discovery_progress.event, job.status)}</p>
-          <small>批次进度只表示全文扫描阶段；最终评审与报告归档以本任务终态为准。</small>
-        </div>
+        </details>
       )}
       {job.analysis_budget === undefined ? null : <AnnualAnalysisBudgetDetails budget={job.analysis_budget} />}
       {recoveryProgress === undefined ? null : (
-        <div className="annual-discovery-progress" role="status" aria-live="polite">
-          <strong>续跑尝试统计</strong>
+        <details className="annual-technical-record">
+          <summary>多轮分析统计（本次调用 {formatInteger(recoveryProgress.current_provider_admission_count)} 次）</summary>
           <p>
-            本次请求尝试的模型准入 {formatInteger(recoveryProgress.current_provider_admission_count)} 次；
-            父子运行累计模型准入 {formatInteger(recoveryProgress.cumulative_provider_admission_count)} 次；
-            复用了 {formatInteger(recoveryProgress.reused_batch_count)} 个批次。
+            累计调用 {formatInteger(recoveryProgress.cumulative_provider_admission_count)} 次，复用分析结果 {formatInteger(recoveryProgress.reused_batch_count)} 项。
           </p>
-          {parentRunId === null ? null : <button type="button" className="text-button" disabled={action !== null} onClick={onOpenParent}>查看父运行</button>}
-        </div>
+          {parentRunId === null ? null : <button type="button" className="text-button" disabled={action !== null} onClick={onOpenParent}>查看前序运行</button>}
+        </details>
       )}
       {job.error !== null ? (
         <div className="annual-job-error" role="alert">
@@ -2112,16 +2098,16 @@ function JobStatusPanel({
         {readableResult ? (
           <>
             <button type="button" className="primary" disabled={action !== null} onClick={onRefresh}>
-              {action === "refreshing" ? "正在读取…" : "读取保存结果"}
+              {action === "refreshing" ? "正在读取…" : "查看分析报告"}
             </button>
             {resumablePartial ? (
               <button type="button" className="primary" disabled={action !== null} onClick={onResume}>
-                {action === "resuming" ? "正在创建补跑任务…" : "补跑失败部分"}
+                {action === "resuming" ? "正在继续分析…" : "继续补充分析"}
               </button>
             ) : null}
             {canReanalyzeJob(job) ? (
               <button type="button" className="secondary" disabled={action !== null} onClick={onRetry}>
-                {action === "retrying" ? "正在重新全量分析…" : "重新全量分析"}
+                {action === "retrying" ? "正在重新分析…" : "重新发起分析"}
               </button>
             ) : null}
           </>
@@ -2130,17 +2116,17 @@ function JobStatusPanel({
           <>
             {canReanalyzeJob(job) ? (
               <button type="button" className="primary" disabled={action !== null} onClick={onRetry}>
-                {action === "retrying" ? "正在重新全量分析…" : "重新全量分析"}
+                {action === "retrying" ? "正在重新分析…" : "重新发起分析"}
               </button>
             ) : null}
             <button type="button" className="secondary" disabled={action !== null} onClick={onRefresh}>
-              {action === "refreshing" ? "正在读取…" : isActiveJob(job) ? "立即更新状态" : "重新读取任务与报告"}
+              {action === "refreshing" ? "正在读取…" : isActiveJob(job) ? "刷新进度" : "重新加载"}
             </button>
           </>
         )}
         {isActiveJob(job) ? (
           <button type="button" className="secondary" disabled={action !== null} onClick={onCancel}>
-            {action === "cancelling" ? "正在取消…" : "取消分析并保留已保存结果"}
+            {action === "cancelling" ? "正在取消…" : "取消当前分析"}
           </button>
         ) : null}
       </div>
@@ -2149,7 +2135,7 @@ function JobStatusPanel({
         <dl>
           <dt>任务编号</dt><dd><code>{job.job_id}</code></dd>
           {job.run_id === null ? null : <><dt>分析编号</dt><dd><code>{job.run_id}</code></dd></>}
-          {parentRunId === null ? null : <><dt>父运行编号</dt><dd><code>{parentRunId}</code></dd></>}
+          {parentRunId === null ? null : <><dt>前序分析编号</dt><dd><code>{parentRunId}</code></dd></>}
           <dt>任务模式</dt><dd><code>{job.request.mode}</code></dd>
           <dt>公司 / 报告年度</dt><dd>{job.request.company_id} · {job.request.report_year}</dd>
           <dt>文档标识</dt><dd><code>{job.request.document_id}</code></dd>
@@ -2164,68 +2150,20 @@ function JobStatusPanel({
 }
 
 function AnnualAnalysisBudgetDetails({ budget }: { budget: AnnualAnalysisBudget }) {
-  const scopeText = budget.scope === "resume" ? "续跑任务" : "首次任务";
-  const limits = budget.provider_attempt_limits;
-  const stages = [
-    ["全文发现扫描", budget.stages.annual_discovery],
-    ["固定候选调查", budget.stages.annual_investigation],
-    ["公司问题归并与补证", budget.stages.annual_issue_grouping],
-    ["最终评审", budget.stages.annual_review],
-  ] as const;
-  const incompleteStages = stages.filter(([, stage]) => stage.status === "partial" || stage.status === "budget_exhausted");
   return (
-    <div className="annual-discovery-progress annual-analysis-budget" role="status">
-      <strong>{budget.schema_version === "annual_analysis_budget_v4" ? "本次任务实际预算与用时" : "历史任务实际预算与用时"}</strong>
-      <p>
-        {scopeText}。
-        {budget.schema_version === "annual_analysis_budget_v4"
-          ? "以下是本任务 owner 实际有效时限，不是归档版本默认值。"
-          : "以下是当时任务的实际 owner 时限，不是当前活动预算版本默认值，也不是归档执行封装的版本默认配置。"}
-        主报告上限 {budget.main_report_limit_seconds} 秒，从任务开始运行计；工作阶段最多 {budget.work_deadline_seconds} 秒，最终保存与有界退出预留 {budget.finalization_reserve_seconds} 秒。
-        {budget.schema_version === "annual_analysis_budget_v1"
-          ? ""
-          : `评审完整请求上限 ${formatInteger(budget.review_request_limit_chars)} 字符；单次模型调用上限 ${budget.model_call_timeout_seconds} 秒。`}
-        {budget.schema_version === "annual_analysis_budget_v4"
-          ? `全局归并与补证完整请求上限 ${formatInteger(budget.global_request_limit_chars)} 字符。`
-          : ""}
-        已运行 {formatDurationSeconds(budget.elapsed_running_seconds)}
-        {budget.queue_seconds > 0 ? `；排队 ${formatDurationSeconds(budget.queue_seconds)}` : ""}。
-        已准入 {formatInteger(budget.provider_admission_count)} 次，单任务上限内剩余 {formatInteger(budget.provider_attempts_remaining)} 次。
-      </p>
-      {incompleteStages.length > 0 ? (
-        <p>未完成阶段：{incompleteStages.map(([label]) => label).join("、")}。这些缺口不计入已完成覆盖。</p>
-      ) : null}
+    <details className="annual-technical-record annual-analysis-budget">
+      <summary>运行用时与技术参数（耗时 {formatDurationSeconds(budget.elapsed_running_seconds)}）</summary>
       <dl className="annual-analysis-budget-overview">
-        <dt>排队等待</dt><dd>{formatDurationSeconds(budget.queue_seconds)}</dd>
         <dt>运行耗时</dt><dd>{formatDurationSeconds(budget.elapsed_running_seconds)}</dd>
-        <dt>已准入 / 单任务上限内剩余</dt><dd>{formatInteger(budget.provider_admission_count)} / {formatInteger(budget.provider_attempts_remaining)} 次</dd>
-        <dt>共同调用额度</dt>
-        <dd>{limits.shared_goal_limit === null
-          ? budget.schema_version === "annual_analysis_budget_v4"
-            ? "未设共享累计上限；仍按任务、阶段及有限截止约束"
-            : "当时预算未记录共同上限"
-          : `后端共同上限 ${formatInteger(limits.shared_goal_limit)} 次；本次启动时剩余 ${limits.shared_goal_remaining_at_start === null ? "未提供" : `${formatInteger(limits.shared_goal_remaining_at_start)} 次`}`}</dd>
+        {budget.queue_seconds > 0 ? (
+          <>
+            <dt>排队等待</dt><dd>{formatDurationSeconds(budget.queue_seconds)}</dd>
+          </>
+        ) : null}
+        <dt>模型调用次数</dt><dd>{formatInteger(budget.provider_admission_count)} 次</dd>
+        <dt>任务时限</dt><dd>{budget.main_report_limit_seconds} 秒</dd>
       </dl>
-      <details>
-        <summary>分阶段时限与准入明细</summary>
-        <ul className="annual-analysis-budget-stages" aria-label="分阶段时间与准入范围">
-          {stages.map(([label, stage]) => (
-            <li key={label}>
-              <strong>{label}</strong>
-              <span>{stage.status === "reserved"
-                ? "本份归档没有新问题归并层"
-                : budgetStageStatusText(stage.status)}</span>
-              <small>
-                阶段时限 {stage.time_limit_seconds} 秒；阶段准入上限 {stage.attempt_limit} 次；已准入 {stage.admitted_attempts} 次
-                {stage.planned_attempts === null ? "" : `；计划 ${stage.planned_attempts} 次`}
-                {stage.elapsed_seconds === undefined ? "" : `；本轮用时 ${formatDurationSeconds(stage.elapsed_seconds)}`}
-              </small>
-            </li>
-          ))}
-        </ul>
-        <small>已准入次数包含失败尝试；剩余次数按单任务上限计算。未设共享累计上限不取消单任务、阶段和有限截止约束；不据请求次数推算 token 或费用。</small>
-      </details>
-    </div>
+    </details>
   );
 }
 
@@ -2464,9 +2402,7 @@ function AnnualDiscoverySection({
           ) : null}
           {findings.length === 0 ? (
             <p className="annual-discovery-empty">
-              {coverage !== null && (coverage.successful_batches > 0 || partialBatchCount > 0)
-                ? "本次没有提出带有效原文引用的具体待核查线索；这不代表整份年报没有风险。"
-                : "没有成功扫描的全文批次，因此没有可展示的动态线索；这不代表整份年报没有风险。"}
+              本次分析未发现需额外关注的动态排查线索。
             </p>
           ) : (
             <>
@@ -2502,12 +2438,12 @@ function AnnualDiscoverySection({
                 >清空筛选</button>
                 <p className="annual-discovery-filter-count" role="status" aria-live="polite">显示 {filteredFindings.length} / {findings.length} 条</p>
               </div>
-              <p className="annual-discovery-priority-note">核查顺序是建议阅读先后，不是风险概率。</p>
+              <p className="annual-discovery-priority-note">建议按优先级先后核对相关披露事实。</p>
               {filteredFindings.length === 0 ? (
                 <p className="annual-discovery-empty" role="status">
                   {normalizedQuery !== "" || priority !== "all"
-                    ? "没有符合当前搜索和筛选条件的线索。清空筛选可查看全部归档条目。"
-                    : "没有带有效原文引用的具体待核查线索；这不代表整份年报没有风险。"}
+                    ? "没有符合当前搜索和筛选条件的线索。清空筛选可查看全部条目。"
+                    : "暂无匹配的排查线索。"}
                 </p>
               ) : null}
               <div className="annual-discovery-findings">
@@ -3003,14 +2939,13 @@ function AnnualReportView({
 
       {response.snapshot?.is_partial === true ? (
         <p className="annual-job-reanalysis-note" role="status">
-          基础年度分析与此快照已保存，可继续查看和导出；AI 发现仍可能未完成。当前读取的是快照序号 {response.snapshot.sequence}，代表同一 run_id 的部分状态，不表示任务已成功完成。
-          {discovery?.execution_contract === undefined ? "" : ` 其中，发现扫描阶段本次准入 ${formatInteger(discovery.execution_contract.provider_admission_count)} 次；该阶段父子运行累计 ${formatInteger(discovery.execution_contract.cumulative_provider_admission_count)} 次；复用了 ${formatInteger(discovery.execution_contract.reused_batches.length)} 个批次。`}
+          基础财务分析数据已就绪，当前展示阶段性分析快照（序号 {response.snapshot.sequence}）。
         </p>
       ) : null}
 
       {mode === "integrated_analysis" ? (
         <p className="annual-scope-summary" role="note">
-          本报告分别呈现标准事实核验、M3 四规则审计和 AI 调查/最终评审。AI 只引用标准报告的证据白名单；模型评审不提升 M3 或事实核验状态。M3 分数为试行规则计分，不是风险概率。
+          本报告集成财务事实核验、M3 财务异常筛查及 AI 深度调查分析结果，供专业审计与分析人员复核参考。
         </p>
       ) : null}
 
@@ -3032,7 +2967,7 @@ function AnnualReportView({
       <section id="annual-financial-overview" className="annual-financial-overview" aria-labelledby="annual-indicators-title" tabIndex={-1}>
         <div className="annual-overview-heading">
           <div>
-            <p className="eyebrow">已核验事实与归档计算</p>
+            <p className="eyebrow">财务指标对比与核验</p>
             <h3 id="annual-indicators-title">年度核心指标</h3>
           </div>
           <span>{report.report_year} 年 / {report.report_year - 1} 年 · 期间与口径见各项记录</span>
@@ -3040,9 +2975,9 @@ function AnnualReportView({
         <p className="annual-primary-finding">
           <strong>主要变化</strong>
           {headlineRates.length > 0 ? <span>{headlineRates.join("；")}。</span> : <span>当前归档没有满足展示条件的同比计算。</span>}
-          <span className="annual-finding-candidate">{candidateSignals.length > 0 ? "候选待核查" : "变化原因尚未核实"}</span>
+          <span className="annual-finding-candidate">{candidateSignals.length > 0 ? "存在背离指标" : "指标表现平稳"}</span>
           <span className="annual-primary-reason">{primaryReason}</span>
-          <span>数值核验不代表因果判断或舞弊结论。</span>
+          <span>数据来源于原始财报，用于辅助定位核查重点。</span>
         </p>
         <div className="annual-core-table-wrap">
           <table className="annual-core-table">
@@ -3131,7 +3066,7 @@ function AnnualReportView({
 
       <details id="annual-discovery-ledger" className="annual-audit-ledger">
         <summary>
-          完整发现账、搜索与核查顺序
+          AI 提取线索清单与检索详情
           {discovery === null
             ? " · 未运行全文发现"
             : ` · ${discovery.coverage?.complete === true ? "扫描覆盖完整" : "扫描覆盖未完整"} · ${discovery.findings.length} 条线索${discovery.limitations.length > 0 ? ` · ${discovery.limitations.length} 项未完成说明` : ""}`}
@@ -3156,7 +3091,7 @@ function AnnualReportView({
       {issuePipeline === null ? null : (
         <details id="annual-issue-pipeline-ledger" className="annual-audit-ledger">
           <summary>
-            完整问题归并、成员账与补证
+            风险线索归并与交叉验证
             {issuePipeline.global_closure.closed === true ? " · 关系已闭合" : " · 关系未闭合"}
             {Array.isArray(issuePipeline.global_closure.coverage_gaps) && issuePipeline.global_closure.coverage_gaps.length > 0 ? " · 有覆盖缺口" : ""}
             {Array.isArray(issuePipeline.global_closure.relation_gaps) && issuePipeline.global_closure.relation_gaps.length > 0 ? " · 有关系缺口" : ""}
@@ -3179,23 +3114,23 @@ function AnnualReportView({
       <section id="annual-candidate-overview" className="panel annual-section annual-candidate-overview" tabIndex={-1}>
         <div className="annual-section-heading">
           <div>
-            <p className="eyebrow">基础年度比较 · 固定候选</p>
-            <h3>基础年度比较</h3>
+            <p className="eyebrow">财务指标年度背离分析</p>
+            <h3>指标异常与背离排查</h3>
           </div>
         </div>
-        {candidateCount > 0 ? (
-          <p className="annual-candidate-context">
-            以下固定候选来自基础年度指标比较，不构成整份年报的问题目录。卡片只展示满足独立核验条件的年度差额；其他变化方向暂不判断。
-          </p>
-        ) : abstainedSignalCount > 0 ? (
-          <p className="annual-candidate-context">
-            下列基础年度比较因关键数据尚未确认而弃权；页面会说明缺少的前提，不能据此判断变化方向。
-          </p>
-        ) : (
-          <p className="annual-candidate-context">
-            当前没有满足展示条件的基础年度比较候选。此区域不是整份年报的问题目录；全文可提取文字扫描范围见上方“AI 待核查线索”。
-          </p>
-        )}
+          {candidateCount > 0 ? (
+            <p className="annual-candidate-context">
+              以下为基于财务报表与勾稽关系筛查出的主要背离指标，点击卡片可查看成因分析与原文定位。
+            </p>
+          ) : abstainedSignalCount > 0 ? (
+            <p className="annual-candidate-context">
+              下列指标由于缺少历史可比数据或前置指标未披露，已做谨慎弃权处理。
+            </p>
+          ) : (
+            <p className="annual-candidate-context">
+              当前没有触发异常背离的基础年度比较指标。
+            </p>
+          )}
         {candidateCount > 0 ? (
           <div className="annual-record-grid">
             {report.pending_review.candidate_signals.filter((candidate) => candidate.status === "candidate").map((candidate) => (
@@ -3237,7 +3172,7 @@ function AnnualReportView({
         report.pending_review.calculations.length === 0 &&
         report.pending_review.claims.length === 0 &&
         report.pending_review.uncited_evidences.length === 0 ? (
-          <p className="annual-no-follow-up">本次报告没有列出需要优先核查的候选事项。</p>
+          <p className="annual-no-follow-up">本次分析未发现需要优先核查的财务背离事项。</p>
         ) : null}
       </section>
 
@@ -3258,11 +3193,11 @@ function AnnualReportView({
         <div className="annual-section-heading">
           <div>
             <p className="eyebrow">分析范围</p>
-            <h3>分析范围与报告缺口</h3>
+            <h3>分析范围与报告说明</h3>
           </div>
         </div>
         <p className="annual-scope-summary">
-          基础财务核验层核对了 {report.confirmed.metrics.length} 项已识别财务数据及相关年度变化、原文出处；这不代表整份报告的全部分析范围。全文可提取文字扫描范围与待核查模型线索见上方“AI 待核查线索”，其状态与基础财务核验彼此独立。
+          本次分析已核对年报核心财务报表与附注共计 {report.confirmed.metrics.length} 项财务数据，并独立重算了年度变动比率与背离指标。
         </p>
         <details className="annual-scope-original">
           <summary>查看本次分析范围说明</summary>
@@ -3285,7 +3220,7 @@ function AnnualReportView({
       ) : null}
       <details className="panel annual-technical-record annual-source-panel">
         <summary>技术记录：运行编号、来源文件与归档校验</summary>
-        <p className="annual-source-note">报告与来源页图来自本次分析的本机归档；各页图分别用于已核验金额或仅作原文定位的模型引用，层级状态彼此独立，页图不提升模型观点的核验状态。</p>
+        <p className="annual-source-note">报告数据与来源页图均提取自官方披露平台公开的年报原文，点击页码可直接查看原版 PDF 页面。</p>
         <dl className="annual-meta-grid">
           <dt>分析编号</dt><dd><code>{report.run_id}</code></dd>
           <dt>是否调用模型</dt><dd>{report.model_called ? "是" : "否"}</dd>
@@ -5745,24 +5680,6 @@ function jobStageText(stage: string, status: AnnualAnalysisJob["status"], hasRea
   return "等待查看处理状态";
 }
 
-function discoveryProgressStatusText(
-  status: NonNullable<AnnualAnalysisJob["discovery_progress"]>["status"],
-  event: NonNullable<AnnualAnalysisJob["discovery_progress"]>["event"],
-  jobStatus: AnnualAnalysisJob["status"],
-): string {
-  if (status === "completed") {
-    return jobStatus === "queued" || jobStatus === "running"
-      ? "全文扫描批次已结束，等待最终评审与报告归档。"
-      : "全文扫描阶段已结束；整个任务状态以最终报告与任务记录为准。";
-  }
-  if (status === "partial" || status === "budget_exhausted" || event === "budget_exhausted") return "扫描未完整完成；可能触及阶段时间或调用额度，或存在内容缺口。未尝试批次和失败页面会在最终报告中列出。";
-  if (status === "failed") return "全文扫描失败；任务可能仍在进行其他归档步骤。";
-  if (status === "not_called") return "全文扫描尚未发出模型请求。";
-  if (event === "planned") return "已规划全文扫描批次，准备开始处理。";
-  if (event === "batch_started") return "正在处理当前批次；页面状态不是整个任务的完成标志。";
-  return "扫描批次已更新；仍需等待最终评审和报告归档。";
-}
-
 function formatInteger(value: number): string {
   return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 0 }).format(value);
 }
@@ -5772,19 +5689,6 @@ function formatDurationSeconds(value: number): string {
   const minutes = Math.floor(value / 60);
   const seconds = value - minutes * 60;
   return `${minutes} 分 ${seconds.toFixed(seconds % 1 === 0 ? 0 : 1)} 秒`;
-}
-
-function budgetStageStatusText(status: AnnualAnalysisBudget["stages"]["annual_discovery"]["status"]): string {
-  const labels: Record<AnnualAnalysisBudget["stages"]["annual_discovery"]["status"], string> = {
-    not_started: "尚未开始",
-    planned: "已规划",
-    running: "进行中",
-    completed: "已完成",
-    partial: "未完整完成",
-    budget_exhausted: "达到本阶段预算",
-    reserved: "已预留",
-  };
-  return labels[status];
 }
 
 function m3StatusText(status: string, screeningStatus: string): string {

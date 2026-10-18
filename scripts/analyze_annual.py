@@ -535,7 +535,11 @@ def _run(args: argparse.Namespace) -> int:
                         "company_id": args.company_id,
                         "report_year": args.report_year,
                         "document_id": args.document_id,
-                        "source_pdf_path": source_pdf.relative_to(ROOT / "data" / "raw").as_posix(),
+                        "source_pdf_path": (
+                            source_pdf.relative_to(ROOT / "data" / "raw").as_posix()
+                            if source_pdf.is_relative_to(ROOT / "data" / "raw")
+                            else source_pdf.relative_to(ROOT).as_posix()
+                        ),
                         "sha256": actual_copy_sha256,
                         "mode": effective_request_mode,
                     } if recovery_enabled else None),
@@ -608,7 +612,7 @@ def _run(args: argparse.Namespace) -> int:
             )
         if m3_screening is not None:
             _add_m3_manifest(manifest, m3_screening, artifacts_root=artifacts_root, run_dir=run_dir)
-        if args.with_model and isinstance(report_payload.get("model_discovery"), dict) and "execution_contract" in report_payload["model_discovery"]:
+        if args.with_model:
             # Publish the immutable final seal before moving the mutable
             # manifest to a terminal state. If interrupted between these two
             # writes, the strict reader can recover the fully written sealed
@@ -1265,7 +1269,7 @@ def _add_investigation_manifest(
 
 def _investigation_has_issue(investigation: dict[str, object]) -> bool:
     discovery = investigation.get("discovery")
-    if isinstance(discovery, dict) and discovery.get("status") != "completed":
+    if isinstance(discovery, dict) and discovery.get("status") not in {"completed", "not_called"}:
         return True
     if investigation.get("status") == "completed":
         return False

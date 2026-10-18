@@ -116,10 +116,10 @@ def _valid_v4_binding(request: dict[str, Any]) -> dict[str, Any]:
         "provider_model_fingerprint": "a" * 64,
         "model": "test-model",
         "prompts_sha256": "b" * 64,
-        "parser_version": "annual-discovery-parser-v3-execution-v4",
-        "plan_version": "annual_discovery_plan_v3",
-        "execution_version": "execution_v4",
-        "prompt_version": "annual_discovery_v4",
+        "parser_version": "annual-discovery-parser-v3-execution-v5",
+        "plan_version": "annual_discovery_plan_v4",
+        "execution_version": "execution_v5",
+        "prompt_version": "annual_discovery_v5",
         "prompt_sha256": "e" * 64,
         "plan_sha256": "c" * 64,
         "m3_binding_sha256": "d" * 64 if request["mode"] == "integrated_analysis" else None,
@@ -1046,7 +1046,8 @@ def test_discovery_exception_recovers_v4_audit_counts_without_inventing_coverage
     )
 
     assert discovery["status"] == "failed"
-    assert discovery["prompt_version"] == "annual_discovery_v4"
+    expected_version = "annual_discovery_v5" if extra_user_field else "annual_discovery_v4"
+    assert discovery["prompt_version"] == expected_version
     assert discovery["model_call_attempt_count"] == 1
     assert discovery["model_call_count"] == int(with_response)
     assert discovery["model_called"] is True
@@ -1079,7 +1080,7 @@ def test_not_called_discovery_uses_current_v4_prompt_identity(
 
     result = appendix._not_called_discovery(appendix._report_identity(report), "not_started")
 
-    assert result["prompt_version"] == "annual_discovery_v4"
+    assert result["prompt_version"] == "annual_discovery_v5"
     assert result["model_call_attempt_count"] == result["model_call_count"] == 0
     assert result["coverage"]["planned_batches"] == 0
 

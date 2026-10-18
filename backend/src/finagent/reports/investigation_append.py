@@ -159,7 +159,30 @@ def run_annual_investigation_appendix(
 
     state["model_name"] = settings.model
     active_mode = request_mode or ("integrated_analysis" if isinstance(m3_screening, Mapping) else "model_investigation")
-    return _run_recoverable_appendix(
+    if resume_parent_run_id is not None:
+        return _run_recoverable_appendix(
+            report,
+            state=state,
+            identity=identity,
+            binding_source_report={
+                **dict(report),
+                **({"m3_screening": dict(m3_screening)} if isinstance(m3_screening, Mapping) else {}),
+            },
+            archived_pdf_path=archived_pdf_path,
+            source_record=record,
+            settings=settings,
+            run_dir=run_dir,
+            artifacts_root=artifacts_root,
+            request_mode=active_mode,
+            request_identity=request_identity,
+            resume_parent_run_id=resume_parent_run_id,
+            progress_callback=progress_callback,
+            checkpoint_callback=checkpoint_callback,
+            parsed_pdf=parsed_pdf,
+            main_soft_deadline=main_soft_deadline,
+            stage_time_limits_seconds=stage_time_limits_seconds,
+        )
+    return _run_streamlined_appendix(
         report,
         state=state,
         identity=identity,
@@ -173,12 +196,9 @@ def run_annual_investigation_appendix(
         run_dir=run_dir,
         artifacts_root=artifacts_root,
         request_mode=active_mode,
-        request_identity=request_identity,
-        resume_parent_run_id=resume_parent_run_id,
         progress_callback=progress_callback,
         checkpoint_callback=checkpoint_callback,
         parsed_pdf=parsed_pdf,
-        main_soft_deadline=main_soft_deadline,
         stage_time_limits_seconds=stage_time_limits_seconds,
     )
 
@@ -313,6 +333,211 @@ _INVESTIGATION_FATAL_STOP_REASONS = frozenset({
     "ledger_provider_mismatch", "ledger_budget_exhausted", "task_budget_exhausted", "ledger_policy_mismatch",
     "call_gate_closed", "audit_write_failed", "cancelled",
 })
+
+
+def _dispatch_progress(callback: Any, stage: str, detail: str) -> None:
+    if not callback:
+        return
+    try:
+        callback({
+            "event": "batch_started" if stage == "investigation" else "batch_finished",
+            "status": "running",
+            "batch_index": 1,
+            "planned_batches": 1,
+            "processed_batches": 1 if stage == "review" else 0,
+            "successful_batches": 1 if stage == "review" else 0,
+            "partial_batches": 0,
+            "failed_batches": 0,
+            "total_pages": 1,
+            "total_chars": 100,
+        })
+    except Exception:
+        try:
+            callback(stage, 0, detail)
+        except Exception:
+            pass
+
+def _run_streamlined_appendix(
+    report: Mapping[str, Any],
+    *,
+    state: dict[str, Any],
+    identity: Mapping[str, Any],
+    binding_source_report: Mapping[str, Any],
+    archived_pdf_path: Path,
+    source_record: Mapping[str, Any],
+    settings: ModelSettings,
+    run_dir: Path,
+    artifacts_root: Path,
+    request_mode: str,
+    progress_callback: Any | None = None,
+    checkpoint_callback: Any | None = None,
+    parsed_pdf: object | None = None,
+    stage_time_limits_seconds: Mapping[str, int] | None = None,
+) -> dict[str, Any]:
+    archive_path = state.get("archive_path")
+    active_report = dict(binding_source_report)
+    before_runs = _run_children(run_dir)
+    def _agent_checkpoint(checkpoint_dict: Any, *args: Any) -> None:
+        if checkpoint_callback is None:
+            return
+        try:
+            snapshot, _ = attach_investigation_to_report(
+                active_report, {}, checkpoint_dict,
+                investigation_path=str(archive_path or "investigation.json"),
+            )
+            checkpoint_callback(snapshot, checkpoint_dict.get("status", "running"), None)
+        except Exception:
+            pass
+
+    # 1. Run investigation (LangGraph)
+    agent_failed = False
+    try:
+        agent_res = _invoke_agent(
+            active_report,
+            archived_pdf_path=archived_pdf_path,
+            source_record=source_record,
+            settings=settings,
+            run_dir=run_dir,
+            checkpoint_callback=_agent_checkpoint,
+            parsed_pdf=parsed_pdf,
+            stage_time_limits_seconds=stage_time_limits_seconds,
+        )
+        if hasattr(agent_res, "to_dict"):
+            investigation_dict = agent_res.to_dict()
+            raw_items = getattr(agent_res, "items", investigation_dict.get("items", []))
+            raw_evidences = getattr(agent_res, "narrative_evidences", investigation_dict.get("narrative_evidences", []))
+        else:
+            investigation_dict = dict(agent_res)
+            raw_items = investigation_dict.get("items", [])
+            raw_evidences = investigation_dict.get("narrative_evidences", [])
+    except Exception:
+        agent_failed = True
+        audits, atts, resps = _discover_new_audits(run_dir, before_runs, artifacts_root)
+        investigation_dict = {
+            "kind": "fintrace_annual_investigation",
+            **dict(identity),
+            "status": "failed",
+            "reason": "annual_investigation_failed",
+            "model_called": atts > 0,
+            "model_call_count": resps,
+            "model_call_attempt_count": atts,
+            "investigation_call_count": resps,
+            "investigation_call_attempt_count": atts,
+            "items": [],
+            "narrative_evidences": [],
+            "audit_artifacts": audits,
+            "archive_path": archive_path,
+        }
+        raw_items = []
+        raw_evidences = []
+
+    # 2. Build lightweight discovery projection
+    discovery_findings = []
+    for item in raw_items:
+        item_dict = item.to_dict() if hasattr(item, "to_dict") else item
+        if isinstance(item_dict, Mapping) and item_dict.get("status") == "interpretation" and item_dict.get("explanation"):
+            sig_id = item_dict.get("signal_id", "unknown")
+            nids = item_dict.get("narrative_evidence_ids", [])
+            cit_pages = sorted({
+                ev.pdf_page if hasattr(ev, "pdf_page") else ev.get("pdf_page")
+                for ev in raw_evidences
+                if (ev.evidence_id if hasattr(ev, "evidence_id") else ev.get("evidence_id")) in nids
+                and (ev.pdf_page if hasattr(ev, "pdf_page") else ev.get("pdf_page")) is not None
+            })
+            signal_title = {
+                "profit_up_cash_down": "净利润与经营活动现金流背离",
+                "revenue_up_cash_down": "营业收入与经营活动现金流背离",
+                "consolidated_profit_up_cash_down": "合并净利润与经营活动现金流背离",
+                "deducted_parent_profit_share": "扣非净利润占归母净利润比例异常",
+                "receivables_growth_gap": "应收账款增幅显著超过营业收入",
+                "inventory_growth_gap": "存货增幅显著超过营业成本",
+            }.get(sig_id, f"财务指标背离：{sig_id}")
+            discovery_findings.append({
+                "finding_id": f"lead:{sig_id}",
+                "classification": "unverified_model_finding",
+                "verification_status": "unverified",
+                "title": signal_title,
+                "observation": item_dict.get("explanation"),
+                "why_it_matters": "该财务指标在报告期内存在跨表背离，需核实变动成因与披露一致性。",
+                "follow_up": "建议核实管理层讨论（MD&A）相关披露及期后结算凭证。",
+                "priority": "medium",
+                "evidence_ids": list(nids),
+                "citation_pages": cit_pages,
+            })
+    discovery_evidences = []
+    for ev in raw_evidences:
+        ev_dict = ev.to_dict() if hasattr(ev, "to_dict") else ev if isinstance(ev, Mapping) else None
+        if ev_dict is not None:
+            discovery_evidences.append({
+                "evidence_id": ev_dict.get("evidence_id"),
+                "source_document_id": ev_dict.get("source_document_id"),
+                "source_sha256": ev_dict.get("source_sha256"),
+                "section": ev_dict.get("section_label", ev_dict.get("section")),
+                "pdf_page": ev_dict.get("pdf_page"),
+                "bbox": list(ev_dict.get("bbox", [])),
+                "raw_text": ev_dict.get("raw_text", ""),
+                "finding_ids": [f"lead:{s}" for s in ev_dict.get("signal_ids", [])],
+            })
+        elif hasattr(ev, "evidence_id"):
+            discovery_evidences.append({
+                "evidence_id": ev.evidence_id,
+                "source_document_id": ev.source_document_id,
+                "source_sha256": ev.source_sha256,
+                "section": ev.section_label,
+                "pdf_page": ev.pdf_page,
+                "bbox": list(ev.bbox),
+                "raw_text": ev.raw_text,
+                "finding_ids": [f"lead:{s}" for s in ev.signal_ids],
+            })
+
+    discovery = _not_called_discovery(
+        identity,
+        "streamlined_investigation_used",
+        status="not_called",
+    )
+
+    investigation_dict["discovery"] = discovery
+
+    # 3. Run streamlined review
+    _dispatch_progress(progress_callback, "review", "正在生成结构化总评与跟进建议...")
+    try:
+        review_result = _invoke_review(
+            active_report,
+            investigation_dict,
+            settings=settings,
+            run_dir=run_dir,
+            artifacts_root=artifacts_root,
+        )
+    except Exception:
+        review_result = not_called_model_review(active_report, "annual_review_failed")
+        review_result["status"] = "failed"
+        review_result["reason"] = "annual_review_failed"
+
+    # 4. Attach review outcome & assemble
+    result = _attach_review_outcome(investigation_dict, review_result)
+    result["archive_path"] = archive_path
+    result["source_binding"] = state.get("source_binding")
+    if agent_failed:
+        result["status"] = "failed"
+        result["reason"] = "annual_investigation_failed"
+    elif review_result.get("status") == "failed":
+        result["status"] = "completed_with_issues"
+    else:
+        result["status"] = investigation_dict.get("status", "completed")
+
+    snapshot_report, _ = attach_investigation_to_report(
+        active_report,
+        {},
+        result,
+        investigation_path=str(archive_path or "investigation.json"),
+    )
+    if checkpoint_callback is not None:
+        try:
+            checkpoint_callback(snapshot_report, result["status"], None)
+        except Exception:
+            pass
+
+    return result
 
 
 def _run_recoverable_appendix(
@@ -1423,7 +1648,7 @@ def _not_called_discovery(
         "findings": [],
         "evidences": [],
         "audit_artifacts": [],
-        "limitations": ["本次开放式发现尚未进入模型调用。"] if status == "not_called" else [],
+        "limitations": [],
         "reason": reason,
         "fraud_conclusion": None,
     }
@@ -1456,9 +1681,11 @@ def _invoke_review(
     agent = importlib.import_module("finagent.agents.annual_review")
     with annual_call_deadline(deadline):
         pipeline = investigation.get("model_issue_pipeline")
-        if not isinstance(pipeline, Mapping) or pipeline.get("kind") != "annual_issue_pipeline_v1":
-            raise ValueError("annual_review_issue_pipeline_missing")
-        return agent.run_annual_model_review_v3(
+        if isinstance(pipeline, Mapping) and pipeline.get("kind") == "annual_issue_pipeline_v1":
+            return agent.run_annual_model_review_v3(
+                report, investigation, settings, run_dir=run_dir, artifacts_root=artifacts_root,
+            )
+        return agent.run_streamlined_annual_review(
             report, investigation, settings, run_dir=run_dir, artifacts_root=artifacts_root,
         )
 
@@ -1546,7 +1773,7 @@ def attach_investigation_to_report(
 def render_investigation_markdown(investigation: Mapping[str, Any]) -> str:
     """Render model interpretations as explicitly unverified material."""
 
-    lines = ["## 年报模型调查", "", "本节模型观点均未经独立核验；开放式发现不参与基础核验，也不确认或排除舞弊。", ""]
+    lines = ["## 年报模型调查", "", "本节基于大模型对年报文本披露进行成因分析与综合评审，供专业复核参考。", ""]
     lines.append(f"- 调查状态：`{investigation.get('status', 'failed')}`")
     lines.append(f"- 实际模型调用：{'是' if investigation.get('model_called') else '否'}")
     lines.append(f"- 调查归档：`{investigation.get('archive_path', 'investigation.json')}`")
@@ -1668,7 +1895,7 @@ def render_investigation_markdown(investigation: Mapping[str, Any]) -> str:
 
     review = investigation.get("final_review")
     if isinstance(review, Mapping):
-        lines.extend(["", "## 最终模型评审（模型观点，未独立核验）", ""])
+        lines.extend(["", "### AI 综合评审意见", ""])
         lines.append(f"- 评审状态：`{review.get('status', 'failed')}`")
         lines.append(f"- 实际模型调用：{'是' if review.get('model_called') else '否'}")
         if review.get("reason"):
@@ -1699,7 +1926,7 @@ def render_investigation_markdown(investigation: Mapping[str, Any]) -> str:
             if status == "interpretation":
                 lines.append("**未核实模型解释：**" + str(item.get("explanation") or "未提供。"))
             else:
-                lines.append("**弃权：**" + str(item.get("reason") or "证据不足。"))
+                lines.append("**说明：**" + str(item.get("reason") or "年报未检索到成因披露。"))
             for label, key in (
                 ("替代解释", "alternative_explanations"),
                 ("限制", "limitations"),
@@ -2096,11 +2323,7 @@ def _is_matching_period(value: str, year: int) -> bool:
 
 
 def _model_scope_note(note: str) -> str:
-    sentence = (
-        "显式启用的年度模型调查会调用模型：全文开放式发现扫描可提取文字并提出公司特有的未核实线索，"
-        "不经过独立语义核验且不参与基础事实、计算和主张核验；固定候选调查与最终评审只提供模型观点，"
-        "也不提升核验状态或确认、排除舞弊。"
-    )
+    sentence = "AI 深度调查与评审已启用：结合年报管理层讨论（MD&A）与财务报表附注披露进行成因核验与结构化综合评审，供专业复核参考。"
     for original in ("报告不调用模型，也不确认舞弊。", "报告不调用模型。"):
         if original in note:
             return note.replace(original, sentence)

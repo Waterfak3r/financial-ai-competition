@@ -13,5 +13,11 @@
 
 summary、reasons[].text、follow_up_items[].action、limitations[] 均须简洁、具体、无阿拉伯数字，不得输出金额或百分比。字符上限分别为：summary 800、reasons[].text 500、follow_up_items[].action 400、limitations[] 每项 400。最多六条 reasons、八条 follow_up_items、八条 limitations。若不能判断，明确说证据不足，并指出需补齐的具体对象或材料。
 
+【表达与写作要求】
+1. 语言必须客观、专业、自然，立足财务与审计逻辑，面向财会专业人员。
+2. 严禁使用生硬的机械防御套话（如“开放式发现未运行”、“不能据此认定无风险”、“模型陈述属于未核实观点”等重复免责语）。
+3. 聚焦财务分析本身：清晰陈述指标背离情况、年报披露说明是否充分、建议核对的具体报表附注与往来款项。
+4. 在 limitations（分析局限）中，只陈述客观的分析边界（例如：分析基于年报公开披露文本，未取得企业明细科目明细账及期后银行流水；部分附注未提供详细的营运资金变动明细），切勿机械复述系统免责词句。
+
 只输出一个 JSON 对象，不要 Markdown 围栏或对象外文字。字段必须严格为：
 {"assessment":"prioritize_review|no_priority_issue_identified_within_scope|insufficient_evidence","summary":"...","reasons":[{"text":"...","evidence_ids":["...ID..."]}],"follow_up_items":[{"object":"...ID...","action":"...","evidence_ids":["...ID..."]}],"limitations":["..."]}

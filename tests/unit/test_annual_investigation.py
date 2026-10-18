@@ -394,3 +394,57 @@ def test_request_persistence_failure_does_not_claim_model_was_called(
     assert update["model_call_count"] == 0
     assert result.to_dict()["model_called"] is False
     assert result.to_dict()["audit_artifacts"][0]["request_path"] is None
+
+
+def test_candidate_signals_includes_m3_triggered_rules() -> None:
+    report = {
+        "company_id": "603288",
+        "report_year": 2024,
+        "source_document_id": SOURCE_ID,
+        "source_sha256": SOURCE_SHA,
+        "pending_review": {"candidate_signals": []},
+        "m3_screening": {
+            "status": "completed",
+            "rules": [
+                {
+                    "rule_id": "receivables_growth_gap",
+                    "triggered": True,
+                    "calculated_value": "0.25",
+                    "threshold": "0.20",
+                    "formula": "receivables_growth - revenue_growth",
+                    "input_fact_ids": [f"{SOURCE_ID}:fact1", f"{SOURCE_ID}:fact2"],
+                },
+                {
+                    "rule_id": "inventory_growth_gap",
+                    "triggered": False,
+                    "calculated_value": "0.05",
+                },
+            ],
+        },
+    }
+
+    candidates = _candidate_signals(report)
+
+    assert len(candidates) == 1
+    assert candidates[0]["signal_id"] == "receivables_growth_gap"
+    assert candidates[0]["status"] == "candidate"
+    assert candidates[0]["calculated_value"] == "0.25"
+    assert candidates[0]["threshold"] == "0.20"
+    assert candidates[0]["input_fact_ids"] == [f"{SOURCE_ID}:fact1", f"{SOURCE_ID}:fact2"]
+
+
+def test_parse_model_interpretation_handles_markdown_fences() -> None:
+    payload = {
+        "signal_id": "receivables_growth_gap",
+        "explanation": "2024年度应收账款增长主要是主要客户信用期变动所致。",
+        "alternative_explanations": ["行业集中度提升导致授信增加。"],
+        "limitations": ["现有材料缺少客户详细信用评级。"],
+        "narrative_evidence_ids": ["nctx-test-p15"],
+        "request_more_context": False,
+    }
+    fenced_text = f"```json\n{json.dumps(payload, ensure_ascii=False)}\n```"
+    parsed = parse_model_interpretation(fenced_text, expected_signal_id="receivables_growth_gap")
+
+    assert parsed.signal_id == "receivables_growth_gap"
+    assert "2024年度应收账款增长" in parsed.explanation
+    assert parsed.narrative_evidence_ids == ("nctx-test-p15",)
