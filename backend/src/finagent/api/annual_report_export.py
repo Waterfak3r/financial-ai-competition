@@ -128,11 +128,7 @@ def export_annual_report(project_root: Path, run_id: str, format: str) -> Annual
             snapshot=dict(archive.snapshot) if archive.snapshot is not None else None,
         )
     if format == "pdf":
-        html_text = render_html(payload)
-        import pymupdf
-        doc = pymupdf.open(stream=html_text.encode("utf-8"), filetype="html")
-        pdf_bytes = doc.convert_to_pdf()
-        doc.close()
+        pdf_bytes = render_pdf(payload)
         return AnnualReportExport(
             pdf_bytes,
             "application/pdf",
@@ -325,6 +321,265 @@ def render_html(payload: Mapping[str, Any]) -> str:
     body.extend(_render_text_list(payload.get("export_limitations", []), "导出说明"))
     body.append("</main></body></html>")
     return "".join(body)
+
+def _register_report_fonts() -> tuple[str, str]:
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    regular_candidates = (
+        Path(r"C:\Windows\Fonts\msyh.ttc"),
+        Path(r"C:\Windows\Fonts\msyh.ttf"),
+        Path(r"C:\Windows\Fonts\simsun.ttc"),
+    )
+    bold_candidates = (
+        Path(r"C:\Windows\Fonts\msyhbd.ttc"),
+        Path(r"C:\Windows\Fonts\msyhbd.ttf"),
+    )
+    reg_path = next((p for p in regular_candidates if p.is_file()), None)
+    bold_path = next((p for p in bold_candidates if p.is_file()), None)
+    if reg_path is not None:
+        try:
+            if "FINTRACE_REG" not in pdfmetrics.getRegisteredFontNames():
+                sub_idx = 0 if reg_path.suffix.lower() == ".ttc" else None
+                kwargs = {"subfontIndex": sub_idx} if sub_idx is not None else {}
+                pdfmetrics.registerFont(TTFont("FINTRACE_REG", str(reg_path), **kwargs))
+            if bold_path is not None and "FINTRACE_BOLD" not in pdfmetrics.getRegisteredFontNames():
+                sub_idx_b = 0 if bold_path.suffix.lower() == ".ttc" else None
+                kwargs_b = {"subfontIndex": sub_idx_b} if sub_idx_b is not None else {}
+                pdfmetrics.registerFont(TTFont("FINTRACE_BOLD", str(bold_path), **kwargs_b))
+            elif "FINTRACE_BOLD" not in pdfmetrics.getRegisteredFontNames():
+                sub_idx = 0 if reg_path.suffix.lower() == ".ttc" else None
+                kwargs = {"subfontIndex": sub_idx} if sub_idx is not None else {}
+                pdfmetrics.registerFont(TTFont("FINTRACE_BOLD", str(reg_path), **kwargs))
+            return "FINTRACE_REG", "FINTRACE_BOLD"
+        except Exception:
+            pass
+    return "Helvetica", "Helvetica-Bold"
+
+
+def render_pdf(payload: Mapping[str, Any]) -> bytes:
+    import io
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    font_reg, font_bold = _register_report_fonts()
+    report = payload["report"]
+    manifest = payload["manifest"]
+    provenance = payload["source_provenance"]
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=14 * mm,
+        rightMargin=14 * mm,
+        topMargin=14 * mm,
+        bottomMargin=14 * mm,
+    )
+
+    title_style = ParagraphStyle("ReportTitle", fontName=font_bold, fontSize=16, leading=22, textColor=colors.HexColor("#0f172a"))
+    subtitle_style = ParagraphStyle("ReportSubtitle", fontName=font_reg, fontSize=8.5, leading=12, textColor=colors.HexColor("#64748b"))
+    h1_style = ParagraphStyle("H1", fontName=font_bold, fontSize=11, leading=16, textColor=colors.HexColor("#1e3a8a"), spaceBefore=6, spaceAfter=3)
+    h2_style = ParagraphStyle("H2", fontName=font_bold, fontSize=9.5, leading=13, textColor=colors.HexColor("#334155"), spaceBefore=3, spaceAfter=2)
+    body_style = ParagraphStyle("Body", fontName=font_reg, fontSize=8.5, leading=13, textColor=colors.HexColor("#1e293b"))
+    summary_style = ParagraphStyle("Summary", fontName=font_reg, fontSize=9, leading=14, textColor=colors.HexColor("#0f172a"))
+    table_cell_style = ParagraphStyle("TableCell", fontName=font_reg, fontSize=7.5, leading=10, textColor=colors.HexColor("#1e293b"))
+    table_head_style = ParagraphStyle("TableHead", fontName=font_bold, fontSize=7.5, leading=10, textColor=colors.HexColor("#0f172a"))
+
+    story = []
+
+    company_name = report.get("company_name") or report.get("company_id") or "上市公司"
+    company_id = report.get("company_id", "")
+    year = report.get("report_year", "2024")
+
+    story.append(Paragraph("FINTRACE · 财报异常核验与深度分析报告", title_style))
+    story.append(Spacer(1, 1.5 * mm))
+    story.append(Paragraph(f"标的公司：{company_name}（{company_id}） · {year} 年度报告 · 模式：{manifest.get('mode', 'model_investigation')}", subtitle_style))
+    story.append(Paragraph(f"运行编号：{manifest.get('run_id')} · 来源：{manifest.get('document_id')} · 归档状态：{manifest.get('status')}", subtitle_style))
+    story.append(Spacer(1, 3 * mm))
+
+    meta_data = [
+        [
+            Paragraph("<b>来源性质</b>", table_head_style),
+            Paragraph(str(provenance.get("label", "官方披露")), table_cell_style),
+            Paragraph("<b>文档SHA256</b>", table_head_style),
+            Paragraph(str(manifest.get("source_pdf_sha256", ""))[:32] + "...", table_cell_style),
+        ],
+        [
+            Paragraph("<b>独立核验</b>", table_head_style),
+            Paragraph(f"{len(report.get('confirmed', {}).get('metrics', []))} 项财务事实已完成独立坐标校验", table_cell_style),
+            Paragraph("<b>法律声明</b>", table_head_style),
+            Paragraph("异常线索供专业审计排查参考，不等于确认舞弊", table_cell_style),
+        ],
+    ]
+    t_meta = Table(meta_data, colWidths=[22 * mm, 69 * mm, 22 * mm, 69 * mm])
+    t_meta.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
+        ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 2.5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+    ]))
+    story.append(t_meta)
+    story.append(Spacer(1, 3 * mm))
+
+    story.append(Paragraph("一、AI 专家综合评审意见（优先阅读）", h1_style))
+    rev = report.get("model_review")
+    if rev:
+        raw_assess = rev.get("assessment")
+        assess_text = (
+            "建议优先核查"
+            if raw_assess == "prioritize_review"
+            else "证据不足，暂不能形成明确判断"
+            if raw_assess == "insufficient_evidence"
+            else "未发现需优先核查的重大背离事项"
+        )
+        assess_bg = colors.HexColor("#fef2f2") if raw_assess == "prioritize_review" else colors.HexColor("#fefce8")
+        assess_color = colors.HexColor("#b91c1c") if raw_assess == "prioritize_review" else colors.HexColor("#854d0e")
+
+        review_card = [
+            [Paragraph(f"<b>评审结论：<font color='{assess_color.hexval()}'>{assess_text}</font></b>", h2_style)],
+            [Paragraph(f"<b>【执行摘要】</b> {rev.get('summary', '')}", summary_style)],
+        ]
+        t_rev = Table(review_card, colWidths=[182 * mm])
+        t_rev.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), assess_bg),
+            ("BOX", (0, 0), (-1, -1), 0.75, assess_color),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ]))
+        story.append(t_rev)
+        story.append(Spacer(1, 2 * mm))
+
+        if rev.get("reasons"):
+            story.append(Paragraph("<b>评审依据（关键发现）：</b>", h2_style))
+            for idx, r in enumerate(rev["reasons"]):
+                story.append(Paragraph(f"{idx+1}. {r.get('text', '')}", body_style))
+                story.append(Spacer(1, 0.8 * mm))
+
+        if rev.get("follow_up_items"):
+            story.append(Paragraph("<b>查账行动指南（建议调取材料与下一步动作）：</b>", h2_style))
+            for idx, f in enumerate(rev["follow_up_items"]):
+                story.append(Paragraph(f"{idx+1}. {f.get('action', '')}", body_style))
+                story.append(Spacer(1, 0.8 * mm))
+    else:
+        story.append(Paragraph("当前归档未生成 AI 评审意见；请参考下方确定性财务核验指标。", body_style))
+
+    story.append(Spacer(1, 2.5 * mm))
+
+    story.append(Paragraph("二、年度核心财务指标与独立核验表", h1_style))
+    core_table_data = [
+        [
+            Paragraph("指标项目", table_head_style),
+            Paragraph(f"{year} 本期数", table_head_style),
+            Paragraph(f"{int(year)-1} 比较期数", table_head_style),
+            Paragraph("变动差额", table_head_style),
+            Paragraph("同比增减", table_head_style),
+            Paragraph("独立核验状态", table_head_style),
+            Paragraph("原件出处", table_head_style),
+        ]
+    ]
+
+    metrics_map = {}
+    for m in report.get("confirmed", {}).get("metrics", []):
+        key = (m.get("metric_id"), m.get("report_year"))
+        metrics_map[key] = m
+
+    yoy_map = {}
+    diff_map = {}
+    for a in report.get("confirmed", {}).get("analyses", []):
+        fid = a.get("formula_id", "")
+        if fid.startswith("calc:annual_yoy_rate:"):
+            yoy_map[fid.replace("calc:annual_yoy_rate:", "")] = a
+        elif fid.startswith("calc:annual_difference:"):
+            diff_map[fid.replace("calc:annual_difference:", "")] = a
+
+    for mid, mname in [
+        ("revenue", "营业收入"),
+        ("net_profit_parent", "归属于母公司股东净利润"),
+        ("operating_cash_flow", "经营活动现金流量净额"),
+        ("non_recurring_total", "披露非经常性损益合计"),
+    ]:
+        m_curr = metrics_map.get((mid, int(year)))
+        m_prev = metrics_map.get((mid, int(year) - 1))
+
+        val_curr = f"{float(m_curr['normalized_value'])/1e8:.2f} 亿元" if m_curr else "未核验"
+        val_prev = f"{float(m_prev['normalized_value'])/1e8:.2f} 亿元" if m_prev else "未核验"
+
+        diff_item = diff_map.get(mid)
+        diff_val = f"{float(diff_item['output_value'])/1e8:+.2f} 亿元" if diff_item and diff_item.get("output_value") else "--"
+
+        yoy_item = yoy_map.get(mid)
+        yoy_val = f"{float(yoy_item['output_value'])*100:+.2f}%" if yoy_item and yoy_item.get("output_value") else "--"
+
+        status_text = (
+            "<font color='#16a34a'><b>独立核验通过</b></font>"
+            if (m_curr and m_prev)
+            else "<font color='#eab308'><b>待核验/弃权</b></font>"
+        )
+
+        cites = []
+        if m_curr and m_curr.get("evidence_ids"):
+            cites.append(f"本期 P.{m_curr.get('pdf_page', '原页')}")
+        if m_prev and m_prev.get("evidence_ids"):
+            cites.append(f"比较期 P.{m_prev.get('pdf_page', '原页')}")
+        cite_str = "、".join(cites) if cites else "原版已核实"
+
+        core_table_data.append([
+            Paragraph(mname, table_cell_style),
+            Paragraph(val_curr, table_cell_style),
+            Paragraph(val_prev, table_cell_style),
+            Paragraph(diff_val, table_cell_style),
+            Paragraph(yoy_val, table_cell_style),
+            Paragraph(status_text, table_cell_style),
+            Paragraph(cite_str, table_cell_style),
+        ])
+
+    t_core = Table(core_table_data, colWidths=[42 * mm, 24 * mm, 24 * mm, 24 * mm, 20 * mm, 25 * mm, 23 * mm])
+    t_core.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e2e8f0")),
+        ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#94a3b8")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 2.5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+    ]))
+    story.append(t_core)
+    story.append(Spacer(1, 2.5 * mm))
+
+    story.append(Paragraph("三、重点核查事项与异常背离排查", h1_style))
+    candidates = report.get("pending_review", {}).get("candidate_signals", [])
+    triggered_candidates = [c for c in candidates if c.get("status") == "candidate"]
+    if triggered_candidates:
+        for c in triggered_candidates:
+            sig_id = c.get("signal_id", "")
+            sig_name = (
+                "净利润与经营现金流背离"
+                if sig_id == "profit_up_cash_down"
+                else "营业收入与经营现金流背离"
+                if sig_id == "revenue_up_cash_down"
+                else sig_id
+            )
+            story.append(Paragraph(f"• <b>【触发异常】{sig_name}</b>（状态：重点待核查）", h2_style))
+            story.append(Paragraph(f"  {c.get('reason') or '本期指标变动方向出现背离，年报未充分说明成因。'}", body_style))
+            story.append(Spacer(1, 0.8 * mm))
+    else:
+        story.append(Paragraph("本次核验范围内未触发核心背离红旗（现金流与净利润走向相对平稳）。", body_style))
+
+    story.append(Spacer(1, 3 * mm))
+
+    story.append(Paragraph("四、审计依据与分析局限说明", h1_style))
+    for l in report.get("limitations", []):
+        story.append(Paragraph(f"• {l}", body_style))
+
+    doc.build(story)
+    return buf.getvalue()
 
 
 def _project_report(
