@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "dataset_id": "fintrace-annual-issue-semantics-v1",
+  "nature": "原创模拟受控材料",
+  "data_nature": "original_synthetic",
+  "use_conditions": "issue.pdf 与 clean.pdf 是 FINTRACE 团队为离线软件集成测试原创构造的受控材料。公司、合同、金额、期间、披露内容及线索均为虚构；两份文件都不是现实公司的财报或财务事实，也不是舞弊、违规或“无舞弊”标签。它们用于验证流程边界，不是 golden answers、模型质量基准或人工核验结论。",
+  "distribution": {
+    "competition_submission": true,
+    "team_demonstration_bundle": true,
+    "model_training": false,
+    "fraud_label": false
+  },
+  "records": [
+    {
+      "sample_id": "r4-clean-001",
+      "file": "clean.pdf",
+      "sha256": "256edec135d12906cd862ff9c0aba972d8bf997ea422dc174724f894b5abaa68",
+      "nature": "原创模拟受控材料",
+      "use_conditions": "仅供离线软件集成测试，非真实披露，不得用作舞弊标签。"
+    },
+    {
+      "sample_id": "r4-issue-001",
+      "file": "issue.pdf",
+      "sha256": "c31b9e59ec2a31c0b9afce81be231466b6783213fda80ecf2501221365f265e9",
+      "nature": "原创模拟受控材料",
+      "use_conditions": "仅供离线软件集成测试，非真实披露，不得用作舞弊标签。"
+    }
+  ]
+}
