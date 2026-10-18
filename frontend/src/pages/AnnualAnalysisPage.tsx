@@ -2794,7 +2794,7 @@ function AnnualReportView({
   selectedHistoryItem: AnnualAnalysisHistoryItem | null;
   activeMode: AnnualAnalysisJobMode | null;
 }) {
-  const [exporting, setExporting] = useState<"json" | "markdown" | "html" | null>(null);
+  const [exporting, setExporting] = useState<"json" | "markdown" | "html" | "pdf" | null>(null);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
   const [discoveryQuery, setDiscoveryQuery] = useState("");
@@ -2888,7 +2888,7 @@ function AnnualReportView({
     });
   };
 
-  const downloadExport = async (format: "json" | "markdown" | "html") => {
+  const downloadExport = async (format: "json" | "markdown" | "html" | "pdf") => {
     if (exporting !== null) return;
     setExporting(format);
     setExportMessage(null);
@@ -2912,7 +2912,7 @@ function AnnualReportView({
         ? "此旧归档未提供快照版本元数据。"
         : `导出内容来自点击时服务器最新已保存且通过严格校验的${exportedSnapshot.is_partial ? "部分" : "封存"}快照：${snapshotStateText(exportedSnapshot.state)}，序号 ${exportedSnapshot.sequence}。`;
       setExportMessage(
-        `${format === "html" ? "HTML 已下载；可离线查看或用浏览器打印成 PDF。" : `${format.toUpperCase()} 已下载。`} ${snapshotDescription} 导出保留各层归档状态，不提升核验等级。`,
+        `${format === "pdf" ? "PDF 报告已下载。" : format === "html" ? "HTML 已下载；可离线查看或用浏览器打印成 PDF。" : `${format.toUpperCase()} 已下载。`} ${snapshotDescription} 导出保留各层归档状态，不提升核验等级。`,
       );
     } catch (error) {
       setExportError(errorMessage(error));
@@ -3079,14 +3079,17 @@ function AnnualReportView({
           <span>导出使用点击时服务器最新已保存且通过严格校验的快照；下载完成后显示该文件的状态与序号。HTML 可离线查看，也可用浏览器打印成 PDF。</span>
         </div>
         <div className="annual-export-buttons">
-          <button type="button" className="secondary" disabled={exporting !== null} onClick={() => void downloadExport("json")}>
-            {exporting === "json" ? "正在下载 JSON…" : "下载 JSON"}
+          <button type="button" className="secondary" disabled={exporting !== null} onClick={() => void downloadExport("pdf")}>
+            {exporting === "pdf" ? "正在下载 PDF…" : "下载 PDF"}
+          </button>
+          <button type="button" className="secondary" disabled={exporting !== null} onClick={() => void downloadExport("html")}>
+            {exporting === "html" ? "正在下载 HTML…" : "下载可打印 HTML"}
           </button>
           <button type="button" className="secondary" disabled={exporting !== null} onClick={() => void downloadExport("markdown")}>
             {exporting === "markdown" ? "正在下载 Markdown…" : "下载 Markdown"}
           </button>
-          <button type="button" className="secondary" disabled={exporting !== null} onClick={() => void downloadExport("html")}>
-            {exporting === "html" ? "正在下载 HTML…" : "下载可打印 HTML"}
+          <button type="button" className="secondary" disabled={exporting !== null} onClick={() => void downloadExport("json")}>
+            {exporting === "json" ? "正在下载 JSON…" : "下载 JSON"}
           </button>
         </div>
         {exportMessage !== null ? <p className="annual-export-message" role="status">{exportMessage}</p> : null}

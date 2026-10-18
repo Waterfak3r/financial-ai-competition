@@ -14,7 +14,7 @@ from finagent.api.annual_report_read import AnnualReportArchive, load_annual_rep
 from finagent.core.sample_provenance import resolve_sample_provenance
 from finagent.reports.annual_report import render_markdown
 
-_FORMATS = {"json", "markdown", "html"}
+_FORMATS = {"json", "markdown", "html", "pdf"}
 _PHASED_DISCOVERY_EXECUTION_KINDS = frozenset({
     "fintrace_annual_discovery_execution_v4",
     "fintrace_annual_discovery_execution_v6",
@@ -107,7 +107,7 @@ def export_annual_report(project_root: Path, run_id: str, format: str) -> Annual
     """Only read through the archive validator; never open arbitrary report paths."""
 
     if format not in _FORMATS:
-        raise AnnualReportExportError(422, "unsupported_export_format", "format 只支持 json、markdown 或 html。")
+        raise AnnualReportExportError(422, "unsupported_export_format", "format 只支持 json、markdown、html 或 pdf。")
     archive = load_annual_report(project_root, run_id)
     payload = project_export(archive)
     filename_id = _safe_filename_id(archive.run_id)
@@ -125,6 +125,18 @@ def export_annual_report(project_root: Path, run_id: str, format: str) -> Annual
             markdown.encode("utf-8"),
             "text/markdown; charset=utf-8",
             f"fintrace-annual-{filename_id}.md",
+            snapshot=dict(archive.snapshot) if archive.snapshot is not None else None,
+        )
+    if format == "pdf":
+        html_text = render_html(payload)
+        import pymupdf
+        doc = pymupdf.open(stream=html_text.encode("utf-8"), filetype="html")
+        pdf_bytes = doc.convert_to_pdf()
+        doc.close()
+        return AnnualReportExport(
+            pdf_bytes,
+            "application/pdf",
+            f"fintrace-annual-{filename_id}.pdf",
             snapshot=dict(archive.snapshot) if archive.snapshot is not None else None,
         )
     return AnnualReportExport(

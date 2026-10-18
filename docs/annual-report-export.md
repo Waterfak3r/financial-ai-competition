@@ -1,12 +1,12 @@
 # 年度报告下载
 
-年度分析归档可以下载为 JSON、Markdown 或离线 HTML：
+年度分析归档可以下载为 JSON、Markdown、离线 HTML 或标准 PDF 报告：
 
 ```http
-GET /v1/annual-analyses/{run_id}/export?format=json|markdown|html
+GET /v1/annual-analyses/{run_id}/export?format=json|markdown|html|pdf
 ```
 
-格式值仅支持 `json`、`markdown` 与 `html`；其他值返回 HTTP 422。下载使用已归档的 `run_id`，后端先经年度归档读取器校验固定目录、manifest、报告身份和原始 PDF SHA256，再生成内容。缺失或不完整归档、身份不匹配和来源 PDF 被替换时，下载按归档读取错误返回，不读取调用方指定路径或未经校验的 `report.md`。响应采用附件下载、`Cache-Control: no-store` 和 `X-Content-Type-Options: nosniff`；HTML 另含限制资源来源的 CSP。
+格式值支持 `json`、`markdown`、`html` 与 `pdf`；其他值返回 HTTP 422。下载使用已归档的 `run_id`，后端先经年度归档读取器校验固定目录、manifest、报告身份和原始 PDF SHA256，再生成内容。缺失或不完整归档、身份不匹配和来源 PDF 被替换时，下载按归档读取错误返回，不读取调用方指定路径或未经校验的 `report.md`。响应采用附件下载、`Cache-Control: no-store` 和 `X-Content-Type-Options: nosniff`；HTML 另含限制资源来源的 CSP；PDF 采用 PyMuPDF 原生转换可打印 HTML 渲染，无需外部打印驱动或浏览器环境。
 
 下载也支持通过严格读取的已发布部分快照。正文及 `X-Fintrace-Snapshot-State`、`X-Fintrace-Snapshot-Sequence`、`X-Fintrace-Snapshot-Is-Partial`、`X-Fintrace-Snapshot-Parent-Run-Id` 响应头来自同一次读取；三种格式均标明部分/最终状态与父运行关系。旧最终归档没有快照序号时使用兼容序号零。运行中的快照可能在点击下载前推进，下载以本次严格读取版本为准；未封存结果不能标作最终报告。取消和续跑不改写已下载版本，也不回写父报告。
 
@@ -25,5 +25,4 @@ JSON 只投影年度报告、manifest 摘要、后端来源性质登记、引用
 `model_issue_pipeline` 投影保留完整候选、成员去向、排除理由代码/证据 ID、全局闭合及待处理账、补证定位与未核验角色、分片状态及复用计数；execution_binding 仅包含该版本白名单展示字段，不是恢复凭据。quote、raw_text、reason_quote 及审计正文不导出。展示排序由校验报告派生，不回写归档；关系闭合不等于全文覆盖，检索命中不构成独立核验。旧报告没有问题层时不补记已归并。实际范围见[R4 记录](verification-history.md#annual-analysis-recovery-r4)、[R6 验收](verification-history.md#annual-analysis-recovery-r6)与[落地验收](verification-history.md#annual-analysis-recovery-r6-landing)。
 
 Markdown 复用正式年度报告 renderer，并先将归档文本按纯文本处理，避免不可信内容形成 HTML 标签或 Markdown 链接。HTML 将文本按上下文转义，使用内嵌样式、可读表格、章节和打印 CSS，不加载外网资源或脚本。事实和计算的“已核实”/“待核查”标签按其所在的 `confirmed` / `pending_review` 容器生成，不依赖可选的 `placement` 字段。下载 HTML 后可离线查看，也可用浏览器打印成 PDF。
-
-Web 年度报告页在核心指标之后提供 JSON、Markdown 和可打印 HTML 下载操作。下载期间显示状态，失败时保留明确错误；来源性质短标记保持可见，样例完整使用条件可展开查看。
+Web 年度报告页在核心指标之后提供 PDF、可打印 HTML、Markdown 和 JSON 下载操作。下载期间显示状态，失败时保留明确错误；来源性质短标记保持可见，样例完整使用条件可展开查看。

@@ -743,6 +743,7 @@ def test_api_download_headers_format_validation_and_missing_archives(tmp_path: P
         "json": "application/json",
         "markdown": "text/markdown",
         "html": "text/html",
+        "pdf": "application/pdf",
     }
     for format, content_type in expectations.items():
         response = client.get(f"/v1/annual-analyses/export-http-001/export?format={format}")
@@ -754,8 +755,10 @@ def test_api_download_headers_format_validation_and_missing_archives(tmp_path: P
         assert response.headers["content-disposition"].endswith(f".{ 'md' if format == 'markdown' else format}\"")
         if format == "html":
             assert "default-src 'none'" in response.headers["content-security-policy"]
+        if format == "pdf":
+            assert response.content.startswith(b"%PDF")
 
-    bad_format = client.get("/v1/annual-analyses/export-http-001/export?format=pdf")
+    bad_format = client.get("/v1/annual-analyses/export-http-001/export?format=unknown_fmt")
     assert bad_format.status_code == 422
     assert bad_format.json()["detail"]["code"] == "unsupported_export_format"
     missing = client.get("/v1/annual-analyses/missing-export-run/export?format=json")
@@ -783,7 +786,7 @@ def test_missing_required_archive_is_not_exported(tmp_path: Path) -> None:
 
 def test_unknown_format_is_rejected_before_archive_lookup(tmp_path: Path) -> None:
     with pytest.raises(AnnualReportExportError) as rejected:
-        export_annual_report(tmp_path, "missing", "pdf")
+        export_annual_report(tmp_path, "missing", "unknown_fmt")
     assert rejected.value.status_code == 422
 
 

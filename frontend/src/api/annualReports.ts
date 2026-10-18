@@ -103,7 +103,7 @@ export interface EvidencePreviewImage {
   region: EvidencePreviewRegion;
 }
 
-export type AnnualReportExportFormat = "json" | "markdown" | "html";
+export type AnnualReportExportFormat = "json" | "markdown" | "html" | "pdf";
 export interface AnnualReportExportDownload {
   blob: Blob;
   filename: string;
@@ -284,7 +284,7 @@ export async function downloadAnnualAnalysisExport(
     throw new AnnualReportApiError("报告导出格式与请求不一致，已停止下载。", response.status);
   }
   const disposition = response.headers.get("content-disposition") ?? "";
-  const filename = /(?:^|;)\s*filename="(fintrace-annual-[A-Za-z0-9._-]{1,121}\.(?:json|md|html))"(?:;|$)/i.exec(disposition)?.[1];
+  const filename = /(?:^|;)\s*filename="(fintrace-annual-[A-Za-z0-9._-]{1,121}\.(?:json|md|html|pdf))"(?:;|$)/i.exec(disposition)?.[1];
   const expectedExtension = format === "markdown" ? ".md" : "." + format;
   if (filename === undefined || !filename.endsWith(expectedExtension) || !filename.startsWith("fintrace-annual-" + checkedRunId)) {
     throw new AnnualReportApiError("报告文件名不符合本机安全下载约定，已停止下载。", response.status);
@@ -326,7 +326,10 @@ function readOptionalExportSnapshot(headers: Headers): AnnualAnalysisSnapshot | 
 }
 
 function exportMediaType(format: AnnualReportExportFormat): string {
-  return format === "json" ? "application/json" : format === "markdown" ? "text/markdown" : "text/html";
+  if (format === "json") return "application/json";
+  if (format === "markdown") return "text/markdown";
+  if (format === "pdf") return "application/pdf";
+  return "text/html";
 }
 
 export async function loadVerificationEvidencePreview(
