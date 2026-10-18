@@ -1612,12 +1612,21 @@ ul {
 }
 
 .annual-report-nav {
+  position: sticky;
+  top: 0;
+  z-index: 30;
   display: flex;
+  align-items: center;
   gap: 1.2rem;
   min-width: 0;
   overflow-x: auto;
-  padding: 0 0.3rem;
-  border-bottom: 1px solid #dfe8f4;
+  padding: 0.55rem 0.85rem;
+  margin: 0.5rem 0 1rem 0;
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(10px);
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
   scrollbar-width: thin;
   scroll-margin-top: 1rem;
 }

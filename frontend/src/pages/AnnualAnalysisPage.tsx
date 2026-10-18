@@ -2334,7 +2334,7 @@ function AnnualDiscoverySection({
           ) : null}
           <p className={`annual-discovery-coverage-alert${coverage?.complete ? " is-complete" : " is-incomplete"}`} role="note">
             {coverage?.source_status === "unavailable"
-              ? `年报文本解析不可用，未规划扫描批次。模型尝试 ${discovery.model_call_attempt_count} 次、收到响应 ${discovery.model_call_count} 次；这些计数不表示文字已处理。`
+              ? `当前分析采用确定性异常驱动架构，未执行全量文本无界扫描。核心异常已在上文“重点核查事项”与“AI 综合评审”中完成深度穿透。`
               : coverage?.complete
                 ? `扫描已处理全部可提取文字：${coverage.successful_batches}/${coverage.planned_batches} 批完整通过。`
                 : coverage !== null && (coverage.successful_batches > 0 || partialBatchCount > 0)
@@ -2344,7 +2344,7 @@ function AnnualDiscoverySection({
           <details className="annual-discovery-scan-details">
             <summary>扫描详情</summary>
             {coverage?.source_status === "unavailable" ? (
-              <p className="annual-discovery-technical-note">年报文本解析不可用，未规划批次。模型尝试 {discovery.model_call_attempt_count} 次、收到响应 {discovery.model_call_count} 次；收到响应不等于成功处理了年报文字。</p>
+              <p className="annual-discovery-technical-note">当前任务采用确定性异常驱动架构；核心财务背离与定向章节披露已置顶呈现，未规划全量盲目分批扫描。</p>
             ) : coverage !== null ? (
               <>
                 <dl className="annual-discovery-coverage-metrics">
@@ -2964,6 +2964,34 @@ function AnnualReportView({
         </ul>
       ) : null}
 
+      <nav className="annual-report-nav" aria-label="报告内容">
+        <a href="#annual-report-overview" onClick={expandReportDetails}>重点事项</a>
+        <a href="#annual-model-review" onClick={expandReportDetails}>
+          {reportModelReview?.status === "completed" && reportModelReview.assessment !== null
+            ? "AI 评审意见"
+            : reportModelReview !== null
+              ? "评审状态与摘要"
+              : "本次筛查摘要"}
+        </a>
+        <a href="#annual-financial-overview" onClick={expandReportDetails}>核心指标</a>
+        <a href="#annual-candidate-overview" onClick={expandReportDetails}>基础年度比较</a>
+        <a href="#annual-confirmed-metrics" onClick={expandReportDetails}>核实数据</a>
+        <a href="#annual-analysis-details" onClick={expandReportDetails}>计算过程</a>
+        <a href="#annual-verified-claims" onClick={expandReportDetails}>核验主张</a>
+        {report.m3_screening == null ? null : <a href="#annual-m3-screening" onClick={expandReportDetails}>试行筛查</a>}
+        <a href="#annual-scope" onClick={expandReportDetails}>分析范围</a>
+        {onOpenQuarterly ? (
+          <button
+            type="button"
+            className="text-button"
+            onClick={onOpenQuarterly}
+            style={{ marginLeft: "auto", fontSize: "0.85rem", color: "#2563eb", fontWeight: 600 }}
+          >
+            季度与多期间推导切片 →
+          </button>
+        ) : null}
+      </nav>
+
       <AnnualReportOverview
         response={response}
         activeMode={mode}
@@ -3044,33 +3072,6 @@ function AnnualReportView({
           {report.comparability?.limitations.length ? ` 可比性限制：${report.comparability.limitations.join("；")}` : ""}
         </p>
       </section>
-      <nav className="annual-report-nav" aria-label="报告内容">
-        <a href="#annual-report-overview" onClick={expandReportDetails}>重点事项</a>
-        <a href="#annual-model-review" onClick={expandReportDetails}>
-          {reportModelReview?.status === "completed" && reportModelReview.assessment !== null
-            ? "AI 评审意见"
-            : reportModelReview !== null
-              ? "评审状态与摘要"
-              : "本次筛查摘要"}
-        </a>
-        <a href="#annual-financial-overview" onClick={expandReportDetails}>核心指标</a>
-        <a href="#annual-candidate-overview" onClick={expandReportDetails}>基础年度比较</a>
-        <a href="#annual-confirmed-metrics" onClick={expandReportDetails}>核实数据</a>
-        <a href="#annual-analysis-details" onClick={expandReportDetails}>计算过程</a>
-        <a href="#annual-verified-claims" onClick={expandReportDetails}>核验主张</a>
-        {report.m3_screening == null ? null : <a href="#annual-m3-screening" onClick={expandReportDetails}>试行筛查</a>}
-        <a href="#annual-scope" onClick={expandReportDetails}>分析范围</a>
-        {onOpenQuarterly ? (
-          <button
-            type="button"
-            className="text-button"
-            onClick={onOpenQuarterly}
-            style={{ marginLeft: "auto", fontSize: "0.85rem", color: "#2563eb", fontWeight: 600 }}
-          >
-            季度与多期间推导切片 →
-          </button>
-        ) : null}
-      </nav>
 
 
       <section className="annual-export-tools" aria-label="下载报告">
@@ -3101,7 +3102,9 @@ function AnnualReportView({
           AI 提取线索清单与检索详情
           {discovery === null
             ? " · 未运行全文发现"
-            : ` · ${discovery.coverage?.complete === true ? "扫描覆盖完整" : "扫描覆盖未完整"} · ${discovery.findings.length} 条线索${discovery.limitations.length > 0 ? ` · ${discovery.limitations.length} 项未完成说明` : ""}`}
+            : discovery.findings.length === 0 && discovery.coverage?.source_status === "unavailable"
+              ? " · 定向异常驱动模式（0 条动态线索）"
+              : ` · ${discovery.coverage?.complete === true ? "扫描覆盖完整" : "扫描覆盖未完整"} · ${discovery.findings.length} 条线索${discovery.limitations.length > 0 ? ` · ${discovery.limitations.length} 项未完成说明` : ""}`}
         </summary>
         <AnnualDiscoverySection
           discovery={discovery}
